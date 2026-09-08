@@ -3392,3 +3392,16 @@ tbody tr:hover {
 .export-card > .field {
   margin-bottom: 12px;
 }
+.file-operation dl {
+  display: grid;
+  gap: 14px;
+}
+.file-operation dt {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.file-operation dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
