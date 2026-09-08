@@ -338,6 +338,18 @@ test("full inventory selector pins the selected allocation version, expiration n
   );
   assert.equal(expired.status, "reserved");
   assert.equal(allocationExpired(expired), true);
+  assert.deepEqual(
+    allocationChoices(
+      [
+        reserved,
+        expired,
+        { ...reserved, provenance: "legacy" },
+        { ...reserved, expiresAt: null },
+      ],
+      "replaceReservation",
+    ),
+    [reserved],
+  );
   assert.throws(
     () =>
       allocationSelection(

@@ -10,6 +10,40 @@ export const isHumanTaskOperation = (toolId: string) =>
   ) ||
   /^ops\.assets\.(issueForTask|returnForTask|bindAssetForTask)$/.test(toolId);
 
+function ReplacementResult({ value }: { value: unknown }) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const result = value as Record<string, unknown>;
+  if (
+    typeof result.sourceAssetId !== "string" ||
+    typeof result.replacementAssetId !== "string"
+  )
+    return null;
+  return (
+    <div className="verification">
+      <p>
+        Poprzednia rezerwacja została zwolniona. Nowe urządzenie zarezerwowano
+        dla tej samej osoby, współpracy i sprawy.
+      </p>
+      <p>
+        Termin pozostał bez zmiany:{" "}
+        {dateLabel(
+          typeof result.expiresAt === "string" ? result.expiresAt : undefined,
+          true,
+        )}
+        .
+      </p>
+      <button
+        className="text-button"
+        onClick={() =>
+          navigate(`module/assets/${String(result.sourceAssetId)}`)
+        }
+      >
+        Otwórz poprzednie urządzenie
+      </button>
+    </div>
+  );
+}
+
 const eventLabels: Record<string, string> = {
   plan_created: "Przygotowano plan",
   run_started: "Rozpoczęto wykonanie",
@@ -256,6 +290,12 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                       )}
                     </div>
                   )}
+                  {step.status === "succeeded" &&
+                    step.toolId === "ops.assets.replaceReservation" && (
+                      <ReplacementResult
+                        value={step.output?.data.replacement}
+                      />
+                    )}
                   {step.status === "succeeded" &&
                     typeof step.output?.data.entityId === "string" &&
                     typeof step.output?.data.module === "string" && (

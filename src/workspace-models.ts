@@ -586,6 +586,32 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         humanConfirmed: yes,
       })
       .strict(),
+    replaceReservation: z
+      .object({
+        ...base,
+        allocationId: id,
+        expectedAllocationVersion: z.number().int().min(1),
+        replacementAssetId: id,
+        expectedReplacementVersion: z.number().int().min(1),
+        reason: text,
+        personId: id.optional(),
+        employmentEpisodeId: id.optional(),
+        expectedEpisodeVersion: z.number().int().min(1).optional(),
+        caseId: id.optional(),
+        reservedUntil: date.optional(),
+        expiresAt: z.iso.datetime().optional(),
+        reservationTimezone: short.optional(),
+        expectedCaseVersion: z.number().int().min(1).optional(),
+        expectedScopeRevision: z.number().int().min(1).optional(),
+        reservationProfileVersion: z
+          .number()
+          .int()
+          .min(0)
+          .nullable()
+          .optional(),
+        profileVersion: z.number().int().min(0).optional(),
+      })
+      .strict(),
     move: z
       .object({
         ...base,
@@ -918,6 +944,7 @@ const actionLabels: Record<string, string> = {
   bindAssetForTask: "Powiąż poświadczone wydanie z wymaganiem",
   markRepaired: "Potwierdź naprawę",
   assignCustodian: "Wyznacz opiekuna ewidencji",
+  replaceReservation: "Zamień zarezerwowane urządzenie",
   move: "Poświadcz przeniesienie",
   sendToService: "Przekaż do serwisu",
   retire: "Wycofaj z użytkowania",
@@ -1000,6 +1027,7 @@ const fieldLabels: Record<string, string> = {
   receiptNote: "Protokół zwrotu",
   occurredOn: "Rzeczywisty dzień czynności",
   custodianPrincipalId: "Opiekun ewidencji",
+  replacementAssetId: "Nowe urządzenie",
   supplierReference: "Numer potwierdzenia dostawcy",
   acknowledgedOn: "Data potwierdzenia",
   quantityReceived: "Odebrana ilość",

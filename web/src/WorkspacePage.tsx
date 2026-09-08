@@ -65,6 +65,24 @@ const actionFields = (
   (action.fields ?? []).filter(
     (field) =>
       !(
+        module.id === "assets" &&
+        action.id === "replaceReservation" &&
+        [
+          "personId",
+          "employmentEpisodeId",
+          "expectedEpisodeVersion",
+          "caseId",
+          "reservedUntil",
+          "expiresAt",
+          "reservationTimezone",
+          "reservationProfileVersion",
+          "profileVersion",
+          "expectedReplacementVersion",
+          "expectedCaseVersion",
+          "expectedScopeRevision",
+        ].includes(field.key)
+      ) &&
+      !(
         module.id === "cases" &&
         action.id === "addTask" &&
         ["assigneeId", "assigneePrincipalId"].includes(field.key)
@@ -183,6 +201,14 @@ function CommandForm({
           periodInput,
           allocationSelection(allocations, spec.action, values.allocationId),
         );
+        if (spec.action === "replaceReservation") {
+          const target = refs.records.assets?.find(
+            (asset) => asset.id === values.replacementAssetId,
+          );
+          if (!target)
+            throw new Error("Wybierz dostępne urządzenie zastępcze.");
+          periodInput.expectedReplacementVersion = target.version;
+        }
         if (
           spec.action === "issue" &&
           (values.personId !== selectedAllocation?.personId ||
@@ -840,6 +866,7 @@ export function WorkspacePage({
                                 "issue",
                                 "release",
                                 "expireReservation",
+                                "replaceReservation",
                               ].includes(action.id) &&
                                 item.status === "reserved") ||
                               (action.id === "return" &&

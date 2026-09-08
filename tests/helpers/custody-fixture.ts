@@ -130,7 +130,7 @@ export function custodyFixture(
   };
   const get = (module: string, id: string, tenant = "synthetic-a") =>
     workspace.get(actor("manager", tenant), module, id);
-  const seed = async (tenant = "synthetic-a") => {
+  const seed = async (tenant = "synthetic-a", serial = `CUSTODY-${tenant}`) => {
     const manager = actor("manager", tenant),
       profile = initiatives.profile(manager);
     await complete(
@@ -202,7 +202,7 @@ export function custodyFixture(
         title: "SYNTHETIC CUSTODY LAPTOP",
         data: {
           assetType: "laptop",
-          serial: `CUSTODY-${tenant}`,
+          serial,
           location: "Synthetic stock",
           condition: "good",
         },

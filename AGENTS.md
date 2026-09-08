@@ -12,3 +12,4 @@
 - Tests must exercise restart and separate durable side-effect storage. Preserve the real child-process SIGKILL test.
 - Follow normal bot branch/PR/CI delivery. Production hosting is not configured; do not invent or reuse another application's deployment.
 - Local mode binds loopback only and is intended for synthetic data. Network operation requires authenticated mode and a private auth file; hosting, TLS, backup/restore and real connectors require their own rollout.
+- For this repository, scope GitHub bot commands with `CODEX_GITHUB_INSTALLATION_ID=146698772` (the `artur-t-96` installation). The global helper may default to a different organization. Use this environment override for `codex-gh` and `git push`; do not change global credentials or helpers.

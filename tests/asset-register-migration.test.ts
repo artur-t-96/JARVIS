@@ -16,7 +16,7 @@ test("v5 register migration rolls back and starts legacy history at the next app
     new WorkspaceStore(path).close();
     db = new DatabaseSync(path);
     db.exec(
-      "DROP TABLE ops_asset_register_events; DELETE FROM schema_versions_operations WHERE version=6",
+      "DROP TABLE ops_asset_register_events; DELETE FROM schema_versions_operations WHERE version>=6",
     );
     const id = randomUUID(),
       now = "2026-09-08T10:00:00.000Z";
