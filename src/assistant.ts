@@ -1,3 +1,4 @@
+import type { Diagnostics } from "./diagnostics.js";
 import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -102,6 +103,7 @@ export class Conversations {
     private engine: Engine,
     private tools: ToolDefinition[],
     private model?: BusinessModelOptions,
+    private diagnostics?: Diagnostics,
   ) {
     if (path !== ":memory:")
       mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -506,7 +508,7 @@ export class Conversations {
       slots: {},
     };
   }
-  private async cloud(
+  private async cloudRequest(
     p: Principal,
     text: string,
     history: ChatMessage[],
@@ -670,6 +672,13 @@ export class Conversations {
             envelope.usage.output_tokens * options.pricing.outputPerMillion) /
           1_000_000
         : null;
+      const proposal: Proposal = {
+        kind: result.kind,
+        message: result.message,
+        ...(result.kind === "ready"
+          ? { plan: planSchema.parse(JSON.parse(result.planJson)) }
+          : {}),
+      };
       this.db
         .prepare(
           "UPDATE model_usage SET input_tokens=?,output_tokens=?,duration_ms=?,estimated_cost=?,status='completed' WHERE id=?",
@@ -681,14 +690,35 @@ export class Conversations {
           cost,
           usageId,
         );
-      return {
-        kind: result.kind,
-        message: result.message,
-        ...(result.kind === "ready"
-          ? { plan: planSchema.parse(JSON.parse(result.planJson)) }
-          : {}),
-      };
+      try {
+        this.diagnostics?.recordModel({
+          provider: "anthropic",
+          model: options.model,
+          usageId,
+          status: "completed",
+          durationMs: Date.now() - started,
+          inputTokens: envelope.usage.input_tokens,
+          outputTokens: envelope.usage.output_tokens,
+          estimatedCost: cost,
+          currency: options.pricing?.currency,
+          pricingVersion: options.pricing?.version,
+        });
+      } catch {
+        /* telemetry must not change provider outcome */
+      }
+      return proposal;
     } catch {
+      try {
+        this.diagnostics?.recordModel({
+          provider: "anthropic",
+          model: options.model,
+          usageId,
+          status: "failed",
+          durationMs: Date.now() - started,
+        });
+      } catch {
+        /* telemetry must not change provider outcome */
+      }
       this.db
         .prepare(
           "UPDATE model_usage SET status='failed',duration_ms=? WHERE id=?",
@@ -699,6 +729,25 @@ export class Conversations {
         "Nie udało się przygotować odpowiedzi modelu. Dane i sekrety dostawcy nie są pokazywane.",
         502,
       );
+    }
+  }
+  private async cloud(
+    ...args: Parameters<Conversations["cloudRequest"]>
+  ): Promise<Proposal> {
+    if (!this.diagnostics) return this.cloudRequest(...args);
+    let started = false;
+    try {
+      return await this.diagnostics.withSpan(
+        "model.request",
+        () => {
+          started = true;
+          return this.cloudRequest(...args);
+        },
+        { provider: "anthropic", tenantId: args[0].tenantId },
+      );
+    } catch (error) {
+      if (!started) return this.cloudRequest(...args);
+      throw error;
     }
   }
   async message(

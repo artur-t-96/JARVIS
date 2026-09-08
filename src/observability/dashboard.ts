@@ -1,0 +1,156 @@
+import type { ObservabilityMode } from "./contracts.js";
+
+/** Versioned dashboard queries are backed by real exported measurements. */
+export function dashboard(mode: ObservabilityMode) {
+  const prometheus = { type: "prometheus", uid: "jarvis-prometheus" };
+  const panel = (
+    id: number,
+    title: string,
+    expression: string,
+    x: number,
+    y: number,
+    type = "timeseries",
+    unit = "short",
+  ) => ({
+    id,
+    title,
+    type,
+    datasource: prometheus,
+    gridPos: { x, y, w: 12, h: 8 },
+    fieldConfig: { defaults: { unit, noValue: "Brak danych" }, overrides: [] },
+    targets: [
+      {
+        refId: "A",
+        expr: expression,
+        legendFormat: "__auto",
+        range: true,
+      },
+    ],
+    options: { legend: { displayMode: "list", placement: "bottom" } },
+  });
+  return {
+    uid: `jarvis-${mode}`,
+    title: `JARVIS — ${mode === "lab" ? "laboratorium" : "operacyjny"}`,
+    description:
+      "Lokalna telemetria JARVIS. Brak danych oznacza brak pomiaru. Identyfikatory w logach i śladach służą korelacji; treść rozmów nie jest zbierana.",
+    schemaVersion: 39,
+    version: 1,
+    editable: false,
+    timezone: "browser",
+    refresh: "15s",
+    time: { from: "now-1h", to: "now" },
+    tags: ["jarvis", mode],
+    panels: [
+      panel(1, "Dostępność źródeł metryk", "up", 0, 0, "stat"),
+      panel(2, "Zadania według stanu", "jarvis_queue_jobs", 12, 0, "stat"),
+      panel(
+        3,
+        "Wiek ostatniego zakończonego ticka",
+        "jarvis_worker_age",
+        0,
+        8,
+        "timeseries",
+        "s",
+      ),
+      panel(
+        4,
+        "Stan workera (1 = zdrowy)",
+        "jarvis_worker_healthy",
+        12,
+        8,
+        "stat",
+      ),
+      panel(
+        5,
+        "Zakończone ticki / s",
+        "sum by (outcome) (rate(jarvis_worker_ticks_total[5m]))",
+        0,
+        16,
+      ),
+      panel(
+        6,
+        "Ruch HTTP / s",
+        "sum by (status) (rate(jarvis_http_requests_total[5m]))",
+        12,
+        16,
+      ),
+      panel(
+        7,
+        "Czas workera p95",
+        "histogram_quantile(0.95, sum by (le) (rate(jarvis_worker_duration_bucket[5m])))",
+        0,
+        24,
+        "timeseries",
+        "ms",
+      ),
+      panel(
+        8,
+        "Czas HTTP p95",
+        "histogram_quantile(0.95, sum by (le) (rate(jarvis_http_duration_bucket[5m])))",
+        12,
+        24,
+        "timeseries",
+        "ms",
+      ),
+      panel(
+        9,
+        "Wywołania modelu / s",
+        "sum by (provider, model, status) (rate(jarvis_model_calls_total[5m]))",
+        0,
+        32,
+      ),
+      panel(
+        10,
+        "Czas modelu p95",
+        "histogram_quantile(0.95, sum by (le, model) (rate(jarvis_model_duration_bucket[5m])))",
+        12,
+        32,
+        "timeseries",
+        "ms",
+      ),
+      panel(
+        11,
+        "Tokeny modelu / s — wejście i wyjście",
+        "sum by (model, direction) (rate(jarvis_model_tokens_total[5m]))",
+        0,
+        40,
+      ),
+      panel(
+        12,
+        "Koszt szacowany / 1h — waluta i cennik w serii",
+        "sum by (currency, pricingVersion) (increase(jarvis_model_estimated_cost_total[1h]))",
+        12,
+        40,
+      ),
+      panel(
+        13,
+        "Zdarzenia wykonania / s",
+        "sum by (event) (rate(jarvis_execution_events_total[5m]))",
+        0,
+        48,
+      ),
+      {
+        id: 14,
+        title: "Zdarzenia JARVIS — bez treści rozmów",
+        type: "logs",
+        datasource: { type: "loki", uid: "jarvis-loki" },
+        gridPos: { x: 0, y: 56, w: 24, h: 12 },
+        targets: [
+          {
+            refId: "A",
+            expr: `{service_name="jarvis",deployment_environment_name="${mode}"}`,
+            queryType: "range",
+          },
+        ],
+        options: {
+          showTime: true,
+          showLabels: false,
+          wrapLogMessage: true,
+          sortOrder: "Descending",
+          enableLogDetails: true,
+          prettifyLogMessage: false,
+        },
+      },
+    ],
+  };
+}

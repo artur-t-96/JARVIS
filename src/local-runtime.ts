@@ -295,6 +295,7 @@ export class LocalRuntime {
     port?: number;
     provider?: "anthropic";
     model?: string;
+    observability?: boolean;
   }) {
     const paths = runtimePaths(this.projectDir, input.mode);
     const lock = acquireDataLock(this.controlDir, "maintenance");
@@ -338,6 +339,7 @@ export class LocalRuntime {
         JARVIS_VOICE_DIR: join(this.projectDir, ".data", "voice"),
         JARVIS_PLANNER: "demo",
       };
+      if (input.observability) env.JARVIS_OBSERVABILITY = input.mode;
       if (input.provider) {
         if (
           input.provider !== "anthropic" ||

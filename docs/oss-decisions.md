@@ -1,6 +1,6 @@
 # Gotowe komponenty open source w JARVIS
 
-Decyzja do realizacji z 8.09.2026. Powiązanie: [roadmapa P01–P02](roadmap.md). Rozpoznano oficjalne wydania i dokumentację; stos opisany poniżej nie jest jeszcze zainstalowany ani odebrany. Dostępność binariów nie dowodzi zgodności całej konfiguracji.
+Implementacja z 8.09.2026. Powiązanie: [roadmapa P01–P02](roadmap.md). Repozytorium zawiera instalator zweryfikowanych natywnych dystrybucji, konfiguracje, panele i własny launcher. Instrukcje: [lokalna obserwowalność](observability.md). Bieżący odbiór i ograniczenia pozostają w [dzienniku realizacji](delivery-state.md); samo pobranie binariów nie jest pełnym odbiorem.
 
 ## Observability: wybrany stos lokalny
 
@@ -12,7 +12,7 @@ Decyzja do realizacji z 8.09.2026. Powiązanie: [roadmapa P01–P02](roadmap.md)
 | Jaeger + Badger                 | Trwałe ślady bez dodatkowego serwera bazy.                                    | [2.20.0](https://github.com/jaegertracing/jaeger/releases/tag/v2.20.0), `jaeger-2.20.0-darwin-arm64.tar.gz`                                        | [Apache-2.0](https://github.com/jaegertracing/jaeger/blob/v2.20.0/LICENSE)                             |
 | Grafana OSS                     | Panele technologii, procesów i modelu oraz przeglądanie metryk/logów/śladów.  | [13.2.1 OSS](https://grafana.com/grafana/download/13.2.1?edition=oss&platform=mac), `darwin_arm64.tar.gz`                                          | AGPLv3, edycja OSS wskazana w źródle pobrania.                                                         |
 
-Wersje są kandydatami do przypięcia po sprawdzeniu razem. Instalator ma używać manifestu zawierającego oficjalny URL, SHA-256, architekturę i licencję; nie pobiera `latest` podczas zwykłego startu. Rzeczywiste sumy należy pozyskać z wydania i zatwierdzić przed instalacją. Nie wpisujemy wymyślonych sum ani nie uznajemy pobranego pliku za zaufany na podstawie samej nazwy.
+Wersje są przypięte w `src/observability/manifest.ts`: oficjalny URL, SHA-256 archiwum, hash całego rozpakowanego drzewa, architektura i licencja. Sumy pozyskano z oficjalnych publikacji i sprawdzono na rzeczywiście pobranych plikach. Start sprawdza integralność całego komponentu, w tym zasobów Grafany, bez pobierania `latest`. Instalator odrzuca ścieżki wychodzące poza staging, dowiązania i pliki specjalne.
 
 Grafana jest gotowym panelem diagnostycznym. Własny panel JARVIS pozostaje miejscem spraw, decyzji i pracy ludzi. Nie budujemy kolejnej własnej bazy śladów, agregatora logów ani narzędzia do rysowania dashboardów technicznych.
 
@@ -43,7 +43,7 @@ OpenTelemetry nie zastępuje audytu biznesowego ani ledgeru skutków. Odbiór op
 
 ## Retencja i zasoby
 
-Proponowane wartości startowe do pomiaru: metryki 14 dni, logi 7 dni, ślady 48 godzin. Objętość danych i RAM/CPU trzeba zmierzyć na rzeczywistym natywnym zestawie przed odbiorem P01. Retencja czasowa nie jest twardym limitem dysku: uwzględnić WAL/kompaktowanie [Prometheusa](https://prometheus.io/docs/prometheus/latest/storage/) i czyszczenie magazynu [Loki](https://grafana.com/docs/loki/latest/configure/storage/).
+Skonfigurowano: metryki 14 dni z dodatkowym limitem TSDB, logi 7 dni, ślady 48 godzin. Retencja czasowa nie jest twardym limitem dysku: uwzględnia WAL/kompaktowanie [Prometheusa](https://prometheus.io/docs/prometheus/latest/storage/) i czyszczenie magazynu [Loki](https://grafana.com/docs/loki/latest/configure/storage/). Launcher sprawdza wolny dysk przy starcie i w trakcie działania; zapisuje wyłącznie ograniczone logi własnych procesów.
 
 Kolejki i retry są ograniczone; awaria kolektora nie może blokować Core. Dodać kontrolę wolnego miejsca, limit lokalnych plików logów, retencję Badger i procedurę czyszczenia wyłącznie własnych danych diagnostycznych. Przy presji zasobów ograniczyć telemetrię i zgłosić degradację zamiast zatrzymywać sprawy biznesowe.
 

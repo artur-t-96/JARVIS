@@ -23,10 +23,15 @@
     "voice:setup": "python3 scripts/voice-setup.py",
     "voice:smoke": "tsx scripts/voice-smoke.ts",
     "demo:workspace": "tsx scripts/workspace-demo.ts",
-    "local": "tsx scripts/local.ts"
+    "local": "tsx scripts/local.ts",
+    "observability": "tsx scripts/observability.ts"
   },
   "dependencies": {
     "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/core": "2.11.0",
+    "@opentelemetry/exporter-prometheus": "0.222.0",
+    "@opentelemetry/exporter-trace-otlp-http": "0.222.0",
+    "@opentelemetry/resources": "2.11.0",
     "@opentelemetry/sdk-metrics": "^2.11.0",
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-base": "^2.11.0",

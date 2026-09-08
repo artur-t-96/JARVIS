@@ -15,6 +15,7 @@ try {
       port: { type: "string" },
       provider: { type: "string" },
       model: { type: "string" },
+      observability: { type: "boolean" },
     },
   });
   const [command, selectedMode] = positionals;
@@ -43,6 +44,7 @@ try {
         JSON.stringify(
           await runtime.start({
             mode,
+            observability: values.observability,
             ...(values.port ? { port: Number(values.port) } : {}),
             ...(values.provider
               ? { provider: "anthropic", model: values.model }

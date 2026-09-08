@@ -5,8 +5,13 @@ import { Conversations } from "../src/assistant.js";
 import { DomainError, type Plan, type Principal } from "../src/contracts.js";
 import { Engine } from "../src/engine.js";
 import { WorkspaceStore } from "../src/workspace.js";
+import { Diagnostics } from "../src/diagnostics.js";
+import { tmpdir } from "node:os";
 
-function setup(proposal?: { kind: string; message: string; planJson: string }) {
+function setup(
+  proposal?: { kind: string; message: string; planJson: string },
+  diagnostics?: Diagnostics,
+) {
   const person: Principal = {
     id: "operator",
     tenantId: "a",
@@ -53,6 +58,7 @@ function setup(proposal?: { kind: string; message: string; planJson: string }) {
           },
         }
       : undefined,
+    diagnostics,
   );
   return {
     person,
@@ -69,6 +75,65 @@ function setup(proposal?: { kind: string; message: string; planJson: string }) {
     },
   };
 }
+
+test("model telemetry counts one result per call and never invents a price or logs prompts", async () => {
+  for (const proposal of [
+    { kind: "answer", message: "PRIVATE-RESPONSE", planJson: "" },
+    { kind: "ready", message: "PRIVATE-RESPONSE", planJson: "{}" },
+  ]) {
+    const lines: string[] = [];
+    const diagnostics = new Diagnostics({
+      dataDir: tmpdir(),
+      version: "test",
+      writeLog: (line) => lines.push(line),
+    });
+    const f = setup(proposal, diagnostics);
+    try {
+      const conversation = f.chat.create(f.person);
+      const result = f.chat.message(
+        f.person,
+        conversation.id,
+        "PRIVATE-PROMPT",
+        randomUUID(),
+      );
+      if (proposal.kind === "ready") await assert.rejects(result);
+      else await result;
+      const calls = lines
+        .map((line) => JSON.parse(line))
+        .filter((line) => line.event === "model.call");
+      assert.equal(calls.length, 1);
+      assert.equal(
+        calls[0].status,
+        proposal.kind === "ready" ? "failed" : "completed",
+      );
+      assert.match(calls[0].traceId, /^[a-f0-9]{32}$/);
+      assert.equal(calls[0].estimatedCost, undefined);
+      assert.doesNotMatch(
+        lines.join(""),
+        /PRIVATE-PROMPT|PRIVATE-RESPONSE|synthetic-only/,
+      );
+      const metrics = await diagnostics.localMetrics();
+      const instruments = metrics.resourceMetrics.scopeMetrics.flatMap(
+        (scope) => scope.metrics,
+      );
+      assert.equal(
+        instruments.find(
+          (metric) => metric.descriptor.name === "jarvis.model.calls",
+        )!.dataPoints[0]!.value,
+        1,
+      );
+      assert.equal(
+        instruments.some(
+          (metric) => metric.descriptor.name === "jarvis.model.estimated_cost",
+        ),
+        false,
+      );
+    } finally {
+      f.close();
+      await diagnostics.close();
+    }
+  }
+});
 const plan: Plan = {
   title: "Dodaj syntetyczny sprzęt",
   summary: "Plan wymaga zatwierdzenia",

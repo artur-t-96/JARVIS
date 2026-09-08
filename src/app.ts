@@ -80,6 +80,21 @@ export function createApp({
     z.object({ id: z.string().uuid() }).parse(req.params).id;
   const counts = new Map<string, { started: number; count: number }>();
   const inFlight = new Set<string>();
+  app.addHook("onRequest", (req, reply, done) => {
+    if (diagnostics)
+      reply.raw.once("close", () => {
+        if (!reply.raw.writableFinished)
+          diagnostics.finishRequest(req, {
+            method: req.method,
+            route: req.routeOptions.url ?? "unknown",
+            statusCode: 499,
+            durationMs: reply.elapsedTime,
+            requestId: req.id,
+          });
+      });
+    if (diagnostics) diagnostics.startRequest(req, done);
+    else done();
+  });
   app.addHook("onRequest", async (req, reply) => {
     reply.header("X-Content-Type-Options", "nosniff");
     reply.header("Referrer-Policy", "no-referrer");
@@ -162,7 +177,7 @@ export function createApp({
       principal(req);
   });
   app.addHook("onResponse", async (req, reply) => {
-    diagnostics?.recordRequest({
+    diagnostics?.finishRequest(req, {
       method: req.method,
       route: req.routeOptions.url ?? "unknown",
       statusCode: reply.statusCode,
