@@ -140,7 +140,7 @@ function Upload({ item, onClose }: { item: Entity; onClose: () => void }) {
         note,
         key,
       );
-      navigate(`/runs/${run.id}`);
+      navigate(`runs/${run.id}`);
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);
@@ -236,7 +236,7 @@ function Removal({
         },
         idempotencyKey: key,
       });
-      navigate(`/runs/${run.id}`);
+      navigate(`runs/${run.id}`);
     } catch (e) {
       setError(errorMessage(e));
       setBusy(false);

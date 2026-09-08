@@ -187,7 +187,7 @@ test("a corrupt file invalidates approval, case evidence and export; recovery ne
   assert.equal(f.workspace.readiness(f.actor(), caseId).ready, false);
   assert.throws(
     () => exportArtifact(f.workspace, f.actor(), "documents", documentId),
-    code("DOCUMENT_APPROVAL_STALE"),
+    code("DOCUMENT_FILE_INTEGRITY_FAILED"),
   );
   assert.throws(
     () =>
