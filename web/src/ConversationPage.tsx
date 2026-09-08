@@ -1,9 +1,24 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { post, requestKey } from "./api";
+import { useEffect, useReducer, useRef, useState, type FormEvent } from "react";
+import { ApiError, post, requestKey } from "./api";
 import { browserAudioToWav } from "./audio";
 import { errorMessage, navigate, useResource } from "./hooks";
-import { dateLabel, type Context, type Conversation } from "./types";
+import { dateLabel, type Context } from "./types";
 import { Icon, Loading, Notice } from "./ui";
+import {
+  ConversationDraft,
+  PendingConversationTurn,
+  runStateCopy,
+  type Conversation,
+  type DraftChoice,
+} from "./ConversationDraft";
+import {
+  composerReducer,
+  emptyComposer,
+  latestConversation,
+  prepareTurnRequest,
+  type TurnRequest,
+} from "./conversation-turn";
+import "./ConversationDraft.css";
 
 function VoiceButton({
   onTranscript,
@@ -153,37 +168,52 @@ export function ConversationPage({
   context: Context;
 }) {
   const [revision, setRevision] = useState(0);
-  const resource = useResource<{ conversations: Conversation[] }>(
-    "/api/conversations",
-    revision,
-  );
+  const resource = useResource<{
+    conversations: Pick<
+      Conversation,
+      "id" | "title" | "createdAt" | "updatedAt"
+    >[];
+  }>("/api/conversations", revision);
   const [localConversation, setLocalConversation] =
     useState<Conversation | null>(null);
-  const [message, setMessage] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const pending = useRef<{ id: string; text: string; key: string } | null>(
-    null,
+  const detail = useResource<{ conversation: Conversation }>(
+    selectedId ? `/api/conversations/${encodeURIComponent(selectedId)}` : null,
+    revision,
+    selectedId ? 5000 : 0,
   );
+  const [composer, dispatch] = useReducer(composerReducer, emptyComposer);
+  const { text: message, busy, error } = composer;
+  const setMessage = (text: string | ((previous: string) => string)) =>
+    dispatch({ type: "change", text });
+  const setError = (error: string) => dispatch({ type: "error", error });
+  const pending = useRef<TurnRequest | null>(null);
   const bottom = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLTextAreaElement>(null);
-  const conversation =
-    localConversation?.id === selectedId
-      ? localConversation
-      : (resource.data?.conversations.find((item) => item.id === selectedId) ??
-        null);
+  const conversation = detail.error
+    ? null
+    : latestConversation(
+        selectedId,
+        detail.data?.conversation,
+        localConversation,
+      );
+  const pendingTurn = conversation?.pendingTurn;
+  const cannotSend =
+    busy || Boolean(pendingTurn) || Boolean(selectedId && !conversation);
   useEffect(() => {
     setError("");
   }, [selectedId]);
   useEffect(() => {
     bottom.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [conversation?.messages.length, busy]);
-  async function send(event?: FormEvent) {
+  async function send(
+    event?: FormEvent,
+    choice?: DraftChoice,
+    navigationMessage?: string,
+  ) {
     event?.preventDefault();
-    const text = message.trim();
-    if (!text || busy) return;
-    setBusy(true);
-    setError("");
+    const text = choice?.label ?? navigationMessage ?? message.trim();
+    if (!text || cannotSend) return;
+    dispatch({ type: "begin" });
     try {
       let active = conversation;
       if (!active) {
@@ -194,24 +224,61 @@ export function ConversationPage({
         setLocalConversation(active);
         navigate(`conversation/${active.id}`);
       }
-      const key =
-        pending.current?.id === active.id && pending.current.text === text
-          ? pending.current.key
-          : requestKey();
-      pending.current = { id: active.id, text, key };
+      const attempt = prepareTurnRequest(
+        active,
+        text,
+        choice?.ref,
+        pending.current,
+        requestKey,
+      );
+      pending.current = attempt;
       const result = await post<{ conversation: Conversation }>(
         `/api/conversations/${active.id}/messages`,
-        { message: text, idempotencyKey: key },
+        attempt.body,
       );
       setLocalConversation(result.conversation);
-      setMessage("");
+      dispatch({
+        type: "success",
+        submittedText: choice || navigationMessage ? undefined : text,
+      });
       pending.current = null;
       setRevision((value) => value + 1);
     } catch (cause) {
-      setError(errorMessage(cause));
+      const conflict =
+        cause instanceof ApiError && cause.code === "DRAFT_VERSION_CONFLICT";
+      if (conflict) {
+        pending.current = null;
+        setLocalConversation(null);
+      }
+      dispatch({
+        type: "failure",
+        error: conflict
+          ? "Szkic zmienił się od ostatniego odczytu. Odświeżam jego stan. Twoja wiadomość pozostała w polu; sprawdź nowy zakres przed ponownym wysłaniem."
+          : errorMessage(cause),
+      });
+      setRevision((value) => value + 1);
     } finally {
-      setBusy(false);
       input.current?.focus();
+    }
+  }
+  async function resume() {
+    if (!conversation?.pendingTurn || busy) return;
+    dispatch({ type: "begin" });
+    try {
+      const result = await post<{ conversation: Conversation }>(
+        `/api/conversations/${encodeURIComponent(conversation.id)}/resume`,
+        {},
+      );
+      setLocalConversation(result.conversation);
+      pending.current = null;
+      dispatch({
+        type: "success",
+        submittedText: conversation.pendingTurn.message,
+      });
+    } catch (cause) {
+      dispatch({ type: "failure", error: errorMessage(cause) });
+    } finally {
+      setRevision((value) => value + 1);
     }
   }
   const offline = ["demo", "offline", "templates", "deterministic"].includes(
@@ -235,7 +302,7 @@ export function ConversationPage({
           onClick={() => {
             navigate("conversation");
             setLocalConversation(null);
-            setMessage("");
+            dispatch({ type: "reset" });
             pending.current = null;
           }}
         >
@@ -249,20 +316,22 @@ export function ConversationPage({
           {resource.loading && !resource.data ? (
             <Loading />
           ) : (
-            (resource.data?.conversations ?? []).map((item) => (
-              <button
-                key={item.id}
-                className={`conversation-link ${selectedId === item.id ? "selected" : ""}`}
-                disabled={busy}
-                onClick={() => navigate(`conversation/${item.id}`)}
-              >
-                <Icon name="chat" size={17} />
-                <span>
-                  <strong>{item.title || "Nowa rozmowa"}</strong>
-                  <small>{dateLabel(item.updatedAt)}</small>
-                </span>
-              </button>
-            ))
+            (resource.error ? [] : (resource.data?.conversations ?? [])).map(
+              (item) => (
+                <button
+                  key={item.id}
+                  className={`conversation-link ${selectedId === item.id ? "selected" : ""}`}
+                  disabled={busy}
+                  onClick={() => navigate(`conversation/${item.id}`)}
+                >
+                  <Icon name="chat" size={17} />
+                  <span>
+                    <strong>{item.title || "Nowa rozmowa"}</strong>
+                    <small>{dateLabel(item.updatedAt)}</small>
+                  </span>
+                </button>
+              ),
+            )
           )}
           {resource.data?.conversations.length === 0 && (
             <p className="small muted">Twoje rozmowy pojawią się tutaj.</p>
@@ -283,7 +352,16 @@ export function ConversationPage({
         </aside>
         <section className="chat-panel">
           <div className="chat-messages">
-            {!conversation?.messages.length ? (
+            {selectedId && !conversation ? (
+              detail.loading ? (
+                <Loading />
+              ) : (
+                <Notice tone="error">
+                  Nie można teraz odczytać tej rozmowy. Odśwież dane, aby
+                  sprawdzić jej dostępność.
+                </Notice>
+              )
+            ) : !conversation?.messages.length ? (
               <div className="chat-welcome">
                 <span className="assistant-mark">J</span>
                 <span className="eyebrow">
@@ -346,8 +424,24 @@ export function ConversationPage({
                           <Icon name="cases" size={21} />
                         </span>
                         <span>
-                          <strong>Plan operacji jest gotowy</strong>
-                          <small>Sprawdź zakres i przejdź do wykonania</small>
+                          <strong>
+                            {
+                              runStateCopy(
+                                conversation.draft?.linkedRuns.find(
+                                  (run) => run.runId === item.runId,
+                                )?.status,
+                              ).label
+                            }
+                          </strong>
+                          <small>
+                            {
+                              runStateCopy(
+                                conversation.draft?.linkedRuns.find(
+                                  (run) => run.runId === item.runId,
+                                )?.status,
+                              ).hint
+                            }
+                          </small>
                         </span>
                         <Icon name="arrow" size={20} />
                       </button>
@@ -355,6 +449,23 @@ export function ConversationPage({
                   </div>
                 </article>
               ))
+            )}
+            <ConversationDraft
+              draft={conversation?.draft}
+              loading={detail.loading && !conversation}
+              disabled={cannotSend}
+              onChoose={(choice) => void send(undefined, choice)}
+              onNextPage={() =>
+                void send(undefined, undefined, "Pokaż kolejne")
+              }
+              onOpenRun={(id) => navigate(`runs/${id}`)}
+            />
+            {pendingTurn && (
+              <PendingConversationTurn
+                pending={pendingTurn}
+                busy={busy}
+                onResume={() => void resume()}
+              />
             )}
             {busy && (
               <div className="assistant-thinking">
@@ -369,9 +480,11 @@ export function ConversationPage({
             )}
             <div ref={bottom} />
           </div>
-          {(error || resource.error) && (
+          {(error || detail.error || resource.error) && (
             <div className="chat-error">
-              <Notice tone="error">{error || resource.error}</Notice>
+              <Notice tone="error">
+                {error || detail.error || resource.error}
+              </Notice>
             </div>
           )}
           <form
@@ -414,7 +527,7 @@ export function ConversationPage({
                   <button
                     type="submit"
                     className="send-button"
-                    disabled={!message.trim() || busy}
+                    disabled={!message.trim() || cannotSend}
                     aria-label="Wyślij wiadomość"
                   >
                     {busy ? (

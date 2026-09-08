@@ -1,10 +1,10 @@
 # P04 — kontrolowany kontekst firmy i ciągłość rozmowy
 
-Status: **projekt następnej paczki; bez implementacji i odbioru P04**. Podstawa: [roadmapa P04](roadmap.md#p04--kontekst-firmy-i-rozmowa), [odbiór](acceptance.md), kod w worktree P03 na bazie `04bb1f048ee8befe3daa9866cb4989782fcbb620`. Odczyt uwzględnia niezacommitowaną integrację P03; końcowy SHA P03 należy wpisać przy rozpoczęciu implementacji. Nie jest to zgoda na uruchomienie integracji z innymi systemami.
+Status: **implementacja P04 w toku; bez pełnego odbioru i dostarczenia paczki**. Podstawa: [roadmapa P04](roadmap.md#p04--kontekst-firmy-i-rozmowa), [odbiór](acceptance.md), odebrane minimalne kontrakty P03 z [PR #7](https://github.com/artur-t-96/JARVIS/pull/7), squash `625d42634c919b94d864d0c8b46817400bedc6ad`. Bieżący worktree `/private/tmp/jarvis-company-context`, gałąź `codex/company-context`, wymaga przed dostarczeniem rebase na scalone P03. Poniższa diagnoza luk dotyczy bazy przed implementacją P04; postęp roboczy opisano osobno. Nie jest to zgoda na uruchomienie integracji z innymi systemami.
 
 ## 1. Konkretna luka i pierwszy rezultat
 
-`assistant.ts` ma dwa różne mechanizmy. Lokalny zbiera proste pola rezerwacji albo nowego wpisu. Chmurowy wybiera przede wszystkim rekordy, których pełną nazwę dosłownie wymieniono w wiadomości. Żaden nie jest jeszcze brokerem kontrolowanych odczytów. `planner.ts` pozostaje osobnym demonstratorem dwóch narzędzi testowych; nie należy przedstawiać go jako planera ERP ani rozbudowywać obu ścieżek równolegle.
+W bazie P03 `assistant.ts` miał dwa różne mechanizmy. Lokalny zbierał proste pola rezerwacji albo nowego wpisu. Chmurowy wybierał przede wszystkim rekordy, których pełną nazwę dosłownie wymieniono w wiadomości. Żaden nie był brokerem kontrolowanych odczytów. `planner.ts` pozostaje osobnym demonstratorem dwóch narzędzi testowych; nie należy przedstawiać go jako planera ERP ani rozbudowywać obu ścieżek równolegle.
 
 Pierwszy rezultat P04: „przygotuj laptop dla Ani” tworzy trwały szkic potrzeby. JARVIS ustala właściwą osobę, konkretną współpracę, termin gotowości, warunki i ewentualną istniejącą sprawę, pokazuje dopuszczalne wyposażenie oraz przygotowuje plan do zatwierdzenia. Nie uznaje rezerwacji za fizyczne wydanie ani ukończony onboarding. Nowy klucz Claude nie jest warunkiem implementacji tego przepływu.
 
@@ -15,7 +15,7 @@ Pierwszy rezultat P04: „przygotuj laptop dla Ani” tworzy trwały szkic potrz
 - Prywatna rozmowa związana z tenantem, aktorem i hashem uprawnień; ograniczenia rozmiaru, tempa i odpowiedzi dostawcy; osobne wyniki `answer`, `needs_input`, `ready`, `unsupported`.
 - Profil firmy z wersją, strefą czasową, zaakceptowanymi ustawieniami i obsadą ról; okres współpracy jako osobny trwały rekord.
 
-### Co trzeba zmienić
+### Luki zidentyfikowane w bazie P03
 
 1. `offline()` może wymienić całą dostępną ewidencję osób/sprzętu przy doprecyzowaniu, a odpowiedź po nazwie serializuje całe `e.data`. Potrzebne są projekcje dopasowane do celu i ograniczone wyniki.
 2. `cloudRequest()` nie przekazuje okresów współpracy, relacji, stanu szkicu ani gotowości sprawy. Przekazuje schematy licznych narzędzi, lecz pomija narzędzia P03 bez `scope`, mimo że ich rzeczywisty dostęp określa `canAccess`.
@@ -24,24 +24,32 @@ Pierwszy rezultat P04: „przygotuj laptop dla Ani” tworzy trwały szkic potrz
 5. Unikalny indeks `ops_one_open_employment`, status osoby i pola `currentEmploymentEpisodeId`, `onboardingCaseId`, `offboardingCaseId` zakładają jedną współpracę. `activate` i odejście pobierają dowolny otwarty okres przez `.get()` bez wskazania okresu w komendzie.
 6. Przydziały i blokady odejścia nadal w części operacji dotyczą całej osoby. Samo usunięcie indeksu umożliwiłoby zamknięcie niewłaściwej współpracy lub zablokowanie jej cudzym zasobem.
 
+### Postęp roboczy 8.09.2026 — jeszcze bez odbioru paczki
+
+`context-broker.ts` ma sześć ścisłych odczytów oraz serwerowy `reference()` dla jawnie wybranego istniejącego rekordu. Tokeny i kursory są trwałe, prywatne dla firmy/aktora/rozmowy, zależne od uprawnień, wersji i hasha projekcji. Obowiązuje wspólny limit 4 odczytów i 24 KiB na trwałą turę nadaną przez serwer. Wyniki osoby i okresu wymagają właściwego dostępu; ograniczony IT otrzymuje wyłącznie swoją projekcję zadania. Cloud korzysta z osobnych pseudonimów i hasha minimalnej projekcji, bez nazw, loginów, treści dokumentu czy surowych identyfikatorów źródeł. `application` oznacza obecnie metadane lokalnego rejestru licencji, bez twierdzenia o rzeczywistym dostępie zewnętrznym. Dokument ma wyłącznie metadane, a rola pochodzi z zatwierdzonego profilu.
+
+`business-model.ts` przyjmuje ścisłe pola potrzeby i opaque refs; nie przyjmuje raw tekstu użytkownika ani historii. Odświeża wybrane źródła przez ten sam broker i przekazuje tylko `broker.cloud`. Używa native Messages `tool_use` / `tool_result`, jednego terminu 20 s dla całej serii, limitu odpowiedzi 96 KiB i pomiaru faktycznie zwróconych tokenów. Nie zgaduje użycia ani ceny po błędzie lub bez taryfy. Wszystkie odpowiedzi mają status niezweryfikowanej propozycji; adapter nie wykonuje planu, nie zatwierdza go i nie materializuje UUID. Granicę planu nadal egzekwują lokalna integracja i Core.
+
+Przeszło 11 testów brokera oraz 12 testów adaptera, w tym strony 5+1 dla sześciu rzeczywistych lokalnych okresów i spraw, izolacja, restart, zmiana źródła, odebranie uprawnień, zawieszony/za duży provider i plan próbujący użyć UUID. Są to testy na danych syntetycznych i fake fetch. Integracja szkicu, migracji polityki okresów i panelu pozostaje w toku; wymagane są jeszcze wspólne scenariusze API/Chrome, CI i dostarczenie. **Te wyniki nie stanowią realnego odbioru Claude ani pełnego P04.**
+
 ## 2. Jeden broker odczytów lokalnych
 
 Dodać `ContextBroker` korzystający z istniejących magazynów, schemas i `hasToolAccess`/`canAccess`. Nie udostępnia SQL, dowolnej ścieżki pliku, URL, listy żądanych pól ani surowego `Entity.data`. Ten sam kod odczytu obsługuje lokalny przepływ deterministyczny i model. Model proponuje wywołanie; broker sprawdza konto, tenant, cel, argumenty, limit i aktualny dostęp przed odczytem. Odczyty nie przyznają zgód i nie zmieniają rekordów biznesowych.
 
 Proponowany zamknięty katalog; wszystkie obiekty `.strict()`, brak argumentów tenant/actor:
 
-| Narzędzie                 | Argumenty                                                                    | Odpowiedź dopuszczona dla celu                                                                                                                             |
-| ------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `context.company`         | `{purpose:'equipment_request'\|'employment'\|'case_followup'}`               | wersja konfiguracji, timezone, odpowiednie zatwierdzone reguły i ich pochodzenie; bez sekretów i całej konfiguracji                                        |
-| `context.findPeople`      | `{query:string(2..120),limit:int(1..5),cursor?:opaque}`                      | najwyżej 5 dopuszczonych kandydatów, lokalna etykieta do wyboru, token wyboru, niezbędny dział/rola do rozróżnienia; brak emaili, wynagrodzeń i dokumentów |
-| `context.personWork`      | `{personRef:opaque,purpose:'equipment_request'\|'employment'}`               | dopuszczone okresy: rodzaj, stan, daty, rola, bezpieczna etykieta projektu i token okresu; brak automatycznego wyboru spośród kilku                        |
-| `context.findCases`       | `{personRef?:opaque,episodeRef?:opaque,state:'open'\|'any',limit:int(1..5)}` | dostępne sprawy z rezultatem, terminem, rewizją i niespełnionymi warunkami; IT korzysta z projekcji własnych zadań, nie pełnej sprawy HR                   |
-| `context.availableAssets` | `{assetType:enum,readyOn:date,episodeRef:opaque,limit:int(1..5)}`            | aktualnie dopuszczone urządzenia, wersja i powód dostępności; brak danych poprzedniego użytkownika                                                         |
-| `context.readRecord`      | `{ref:opaque,purpose:enum}`                                                  | jedna z jawnych projekcji osoby/sprawy/sprzętu/roli/aplikacji/dokumentu; dokument domyślnie tylko metadane, rewizja i stan akceptacji                      |
+| Narzędzie                 | Argumenty                                                                                   | Odpowiedź dopuszczona dla celu                                                                                                                                        |
+| ------------------------- | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `context.company`         | `{purpose:'equipment_request'\|'employment'\|'case_followup'}`                              | wersja konfiguracji, timezone, odpowiednie zatwierdzone reguły i ich pochodzenie; bez sekretów i całej konfiguracji                                                   |
+| `context.findPeople`      | `{query:string(2..120),limit:int(1..5),cursor?:opaque}`                                     | najwyżej 5 dopuszczonych kandydatów, lokalna etykieta do wyboru, token wyboru, niezbędny dział/rola do rozróżnienia; brak emaili, wynagrodzeń i dokumentów            |
+| `context.personWork`      | `{personRef:opaque,purpose:'equipment_request'\|'employment',cursor?:opaque}`               | dopuszczone okresy: rodzaj, stan, daty, rola, bezpieczna etykieta projektu i token okresu; brak automatycznego wyboru spośród kilku                                   |
+| `context.findCases`       | `{personRef?:opaque,episodeRef?:opaque,state:'open'\|'any',limit:int(1..5),cursor?:opaque}` | dostępne sprawy z rezultatem, terminem, rewizją i niespełnionymi warunkami; IT korzysta z projekcji własnych zadań, nie pełnej sprawy HR                              |
+| `context.availableAssets` | `{assetType:enum,readyOn:date,episodeRef:opaque,limit:int(1..5)}`                           | `available_now` z datą `source.observedAt` i `requestedReadyOn`; brak gwarancji przyszłej rezerwacji oraz danych poprzedniego użytkownika                             |
+| `context.readRecord`      | `{ref:opaque,purpose:enum}`                                                                 | jedna z jawnych projekcji osoby/sprawy/sprzętu/roli/aplikacji/dokumentu; dokument wyłącznie metadane, rewizja i stan akceptacji; aplikacja wyłącznie lokalne licencje |
 
 Token odczytu/wyboru jest losowy, związany z rozmową, aktorem, tenantem, dozwoloną projekcją i źródłem; nie jest nowym uprawnieniem. Surowe identyfikatory z odpowiedzi modelu nie mogą ominąć tego powiązania. Broker rozwiązuje token do identyfikatora domenowego dopiero po ponownej walidacji. Etykiety osób widzi uprawniony użytkownik lokalnie; do dostawcy trafiają stabilne dla tej rozmowy pseudonimy i tylko potrzebne fakty. Nie wolno przekazywać modeli kont, loginów ani pełnej listy osób w celu samej pseudonimizacji.
 
-Każdy wynik otrzymuje serwerowe `source {module,id,version,updatedAt,observedAt,classification,projectionVersion,projectionHash}` i `freshness:'current'|'stale'|'unavailable'`. Model nie dostarcza hasha ani nie deklaruje aktualności. Kursor jest nieprzenośny pomiędzy aktorami/firmami i nie ujawnia liczby niedostępnych rekordów. Brak wyniku znaczy „brak dostępnego dopasowania”, nie dowodzi braku osoby w firmie.
+Każdy wynik otrzymuje serwerowe `source {module,id,version,updatedAt,observedAt,classification,projectionVersion,projectionHash}` i `freshness:'current'` dla udanego odczytu. Źródło nieaktualne, wygasłe lub niedostępne daje jawną odmowę; interfejs nie może przedstawiać ostatniej zapisanej odpowiedzi jako bieżącej. Model nie dostarcza hasha ani nie deklaruje aktualności. Kursor jest nieprzenośny pomiędzy aktorami/firmami i nie ujawnia liczby niedostępnych rekordów. Brak wyniku znaczy „brak dostępnego dopasowania”, nie dowodzi braku osoby w firmie.
 
 Budżet pierwszego wdrożenia: do 4 odczytów brokera na jedną turę, 5 wyników wyszukania, 1 pełniejsza projekcja naraz, łącznie najwyżej 24 KiB kontekstu i 8 ostatnich zminimalizowanych wiadomości; jeden jawny termin zakończenia tury. To wartości konfiguracyjne z testem granic, nie obietnica wykorzystania wszystkich limitów. Audyt techniczny zapisuje identyfikatory odczytów, projekcję, wersje, liczbę bajtów i decyzję dostępu, bez treści HR/promptów w telemetrii.
 

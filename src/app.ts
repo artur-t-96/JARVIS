@@ -75,6 +75,11 @@ export function createApp({
       : config.principals
     ).filter((actor) => actor.tenantId === tenantId);
   workspace?.setPrincipalProvider(activePrincipals);
+  conversations?.setPrincipalProvider(activePrincipals);
+  if (initiatives)
+    conversations?.setCompanyProvider((tenantId) =>
+      initiatives.profileForTenant(tenantId),
+    );
   const principal = (req: FastifyRequest): Principal => {
     if (config.mode === "accounts" && accounts) {
       engine.setPrincipals(accounts.principals());

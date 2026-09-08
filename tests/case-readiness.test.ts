@@ -64,6 +64,38 @@ function setup(t: TestContext) {
     raw: JsonObject,
     ctx = context(),
   ) => {
+    // Fixtures deliberately have one open period; production must receive an explicit selection.
+    if (
+      (module === "people" &&
+        ["activate", "beginOffboarding", "endEmployment"].includes(action)) ||
+      (module === "assets" && ["reserve", "issue"].includes(action)) ||
+      (module === "licenses" && ["assign", "revoke"].includes(action))
+    ) {
+      const episodes = store
+        .listEmploymentEpisodes(
+          manager,
+          String(module === "people" ? raw.id : raw.personId),
+        )
+        .filter((e) => e.status !== "ended");
+      assert.equal(
+        episodes.length,
+        1,
+        "fixture must select exactly one open employment period",
+      );
+      raw = {
+        employmentEpisodeId: episodes[0]!.id,
+        expectedEpisodeVersion: episodes[0]!.version,
+        ...raw,
+      };
+    }
+    if (module === "cases" && action === "revise" && raw.startDate) {
+      const current = get(String(raw.id));
+      const episode = store
+        .listEmploymentEpisodes(manager, String(current.data.personId))
+        .find((e) => e.id === current.data.employmentEpisodeId);
+      assert.ok(episode, "case must explicitly identify its period");
+      raw = { expectedEpisodeVersion: episode.version, ...raw };
+    }
     const adapter = tool(module, action),
       input = adapter.prepareInput?.(raw, ctx.tenantId) ?? raw;
     const result = await adapter.execute(ctx, input);
@@ -446,7 +478,7 @@ test("reserved asset fails; generic actual issuance can pass, but return invalid
   assert.equal(h.store.readiness(manager, e.id).acceptanceCurrent, false);
 });
 
-test("onboarding asset proof rejects another person and missing episode/case links", async (t) => {
+test("onboarding asset proof rejects another person and a missing case link", async (t) => {
   const h = setup(t),
     person = await h.person(),
     other = await h.person();
@@ -476,7 +508,7 @@ test("onboarding asset proof rejects another person and missing episode/case lin
     "failed",
   );
   e = await h.revise(e);
-  let correctPerson = await h.create("assets", "Legacy linked laptop", {
+  let correctPerson = await h.create("assets", "Laptop without a case link", {
     assetType: "laptop",
     serial: randomUUID(),
     condition: "good",
@@ -490,7 +522,7 @@ test("onboarding asset proof rejects another person and missing episode/case lin
   correctPerson = await h.action(correctPerson, "issue", {
     personId: person.id,
     issuedOn: "2026-09-08",
-    handoverNote: "Legacy issuance without episode link",
+    handoverNote: "Test issuance without a case link",
     humanConfirmed: true,
   });
   e = await h.bind(e, correctPerson, "asset_issued");

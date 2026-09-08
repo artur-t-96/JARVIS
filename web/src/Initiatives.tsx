@@ -3,6 +3,11 @@ import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
 import { Badge, Empty, Icon, Loading, Notice, Sheet } from "./ui";
+import {
+  EmploymentPolicyEditor,
+  safeEmploymentPolicy,
+  type EmploymentPolicy,
+} from "./EmploymentPolicyEditor";
 
 type Initiative = {
   id: string;
@@ -37,6 +42,7 @@ type CompanyProfile = {
   rules: Record<string, boolean>;
   processTemplates: { onboarding: TemplateTask[]; offboarding: TemplateTask[] };
   roleBindings?: { hr?: string; it?: string; manager?: string };
+  employmentPolicy?: EmploymentPolicy;
   updatedAt: string | null;
   updatedBy: string | null;
 };
@@ -74,6 +80,7 @@ export function companyProfileInput(
     quietHours,
     rules,
     roleBindings: roleBindings ?? {},
+    employmentPolicy: { ...(profile.employmentPolicy ?? safeEmploymentPolicy) },
     processTemplates: {
       onboarding: profile.processTemplates.onboarding.map((task) => ({
         ...task,
@@ -402,6 +409,13 @@ export function CompanySettings({ context }: { context: Context }) {
               </span>
             ))}
           </div>
+          <h3>Zasady współpracy</h3>
+          <p>
+            {profile.employmentPolicy?.mode === "parallel_projects"
+              ? `Równoległe projekty konsultanta: do ${profile.employmentPolicy.maxConcurrent} otwartych współprac.`
+              : "Jedna otwarta współpraca jednej osoby."}{" "}
+            Współpraca wewnętrzna nie może nakładać się na inną.
+          </p>
           <h3>Odpowiedzialność za proces</h3>
           <dl className="data-grid">
             {Object.entries(responsibilityLabels).map(([role, label]) => {
@@ -616,6 +630,13 @@ function ProfileForm({
               />
             </label>
           </div>
+          <EmploymentPolicyEditor
+            value={values.employmentPolicy ?? safeEmploymentPolicy}
+            disabled={busy}
+            onChange={(employmentPolicy) =>
+              setValues((current) => ({ ...current, employmentPolicy }))
+            }
+          />
           <h3>Osoby odpowiedzialne</h3>
           <p className="small muted">
             Konto wskazuje wykonawcę roli. Nie nadaje mu dodatkowych uprawnień.

@@ -18,6 +18,8 @@ import {
   processTemplatesSchema,
   roleBindingsSchema,
   baselineProcessTemplates,
+  employmentPolicySchema,
+  defaultEmploymentPolicy,
 } from "./workspace-models.js";
 
 export { baselineProcessTemplates } from "./workspace-models.js";
@@ -60,6 +62,7 @@ const settingsSchema = z
         high_severity_incident: z.boolean(),
       })
       .strict(),
+    employmentPolicy: employmentPolicySchema,
     roleBindings: roleBindingsSchema,
     processTemplates: processTemplatesSchema,
   })
@@ -223,10 +226,11 @@ export class InitiativeStore {
       const stored = JSON.parse(String(row.record_json)) as CompanyProfile;
       // Read old profiles without inventing bindings or a migration approval. Their
       // original version/authors remain intact and lifecycle rejects definition 1.
-      if (stored.definitionVersion !== "2")
+      if (stored.definitionVersion !== "3")
         return {
           ...stored,
           roleBindings: stored.roleBindings ?? {},
+          employmentPolicy: defaultEmploymentPolicy,
           needsConfiguration: true,
         };
       return stored;
@@ -245,12 +249,13 @@ export class InitiativeStore {
         license_expiry: true,
         high_severity_incident: true,
       },
+      employmentPolicy: defaultEmploymentPolicy,
       roleBindings: {},
       processTemplates: baselineProcessTemplates("internal"),
       updatedAt: null,
       updatedBy: null,
       updatedApprovedBy: null,
-      definitionVersion: "2",
+      definitionVersion: "3",
     };
   }
 
@@ -457,7 +462,7 @@ export class InitiativeStore {
         const toolId = `initiatives.${action}`;
         return {
           id: toolId,
-          version: action === "configure" ? "2" : "1",
+          version: action === "configure" ? "3" : "1",
           scope: action === "configure" ? "company" : "initiatives",
           effect: "write",
           recovery: "reconcile",
@@ -481,11 +486,18 @@ export class InitiativeStore {
                 400,
               );
             const input = json(parsed.data);
-            this.db.exec("BEGIN IMMEDIATE");
+            const releasePolicy =
+              action === "configure"
+                ? this.workspace.acquireEmploymentPolicyLock()
+                : () => {};
+            let transactionStarted = false;
             try {
+              this.db.exec("BEGIN IMMEDIATE");
+              transactionStarted = true;
               const existing = this.command(ctx, toolId, input);
               if (existing) {
                 this.db.exec("COMMIT");
+                transactionStarted = false;
                 return JSON.parse(String(existing.receipt_json)) as ToolResult;
               }
               const now = new Date(this.clock()).toISOString();
@@ -514,7 +526,7 @@ export class InitiativeStore {
                   updatedAt: now,
                   updatedBy: ctx.actorId!,
                   updatedApprovedBy: ctx.approvedBy!,
-                  definitionVersion: "2",
+                  definitionVersion: "3",
                 };
                 this.db
                   .prepare(
@@ -603,10 +615,13 @@ export class InitiativeStore {
                   now,
                 );
               this.db.exec("COMMIT");
+              transactionStarted = false;
               return receipt;
             } catch (error) {
-              this.db.exec("ROLLBACK");
+              if (transactionStarted) this.db.exec("ROLLBACK");
               throw error;
+            } finally {
+              releasePolicy();
             }
           },
           reconcile: async (ctx, input) => {

@@ -20,12 +20,16 @@ function setup(
   };
   const other: Principal = { ...person, id: "another" },
     foreign: Principal = { ...person, tenantId: "b" };
+  let active = [person, other, foreign];
   const store = new WorkspaceStore(":memory:"),
     tools = store.tools();
+  store.setPrincipalProvider((tenant) =>
+    active.filter((p) => p.tenantId === tenant),
+  );
   const engine = new Engine({
     dbPath: ":memory:",
     tools,
-    principals: [person, other, foreign],
+    principals: active,
     policies: ["a", "b"].map((tenantId) => ({
       tenantId,
       version: "1",
@@ -53,12 +57,14 @@ function setup(
                 content: [{ type: "text", text: JSON.stringify(proposal) }],
                 usage: { input_tokens: 10, output_tokens: 10 },
               }),
-              { status: 200 },
             );
           },
         }
       : undefined,
     diagnostics,
+  );
+  chat.setPrincipalProvider((tenant) =>
+    active.filter((p) => p.tenantId === tenant),
   );
   return {
     person,
@@ -68,6 +74,12 @@ function setup(
     engine,
     chat,
     requests,
+    change(p: Principal) {
+      active = active.map((a) =>
+        a.id === p.id && a.tenantId === p.tenantId ? p : a,
+      );
+      engine.setPrincipals(active);
+    },
     close() {
       chat.close();
       engine.close();
@@ -75,27 +87,26 @@ function setup(
     },
   };
 }
+const code = (expected: string) => (e: unknown) =>
+  e instanceof DomainError && e.code === expected;
+const forbidden = (e: unknown) =>
+  e instanceof DomainError && e.statusCode === 403;
 
-test("model telemetry counts one result per call and never invents a price or logs prompts", async () => {
+test("model telemetry counts one actual result per call and never invents prices or logs prompts", async () => {
   for (const proposal of [
     { kind: "answer", message: "PRIVATE-RESPONSE", planJson: "" },
     { kind: "ready", message: "PRIVATE-RESPONSE", planJson: "{}" },
   ]) {
-    const lines: string[] = [];
-    const diagnostics = new Diagnostics({
-      dataDir: tmpdir(),
-      version: "test",
-      writeLog: (line) => lines.push(line),
-    });
-    const f = setup(proposal, diagnostics);
+    const lines: string[] = [],
+      diagnostics = new Diagnostics({
+        dataDir: tmpdir(),
+        version: "test",
+        writeLog: (line) => lines.push(line),
+      }),
+      f = setup(proposal, diagnostics);
     try {
-      const conversation = f.chat.create(f.person);
-      const result = f.chat.message(
-        f.person,
-        conversation.id,
-        "PRIVATE-PROMPT",
-        randomUUID(),
-      );
+      const c = f.chat.create(f.person),
+        result = f.chat.message(f.person, c.id, "PRIVATE-PROMPT", randomUUID());
       if (proposal.kind === "ready") await assert.rejects(result);
       else await result;
       const calls = lines
@@ -112,10 +123,15 @@ test("model telemetry counts one result per call and never invents a price or lo
         lines.join(""),
         /PRIVATE-PROMPT|PRIVATE-RESPONSE|synthetic-only/,
       );
-      const metrics = await diagnostics.localMetrics();
-      const instruments = metrics.resourceMetrics.scopeMetrics.flatMap(
-        (scope) => scope.metrics,
+      assert.equal(
+        f.chat.usage(f.person)[0]!.inputTokens,
+        10,
+        "reported usage remains factual even when plan validation fails",
       );
+      const metrics = await diagnostics.localMetrics(),
+        instruments = metrics.resourceMetrics.scopeMetrics.flatMap(
+          (scope) => scope.metrics,
+        );
       assert.equal(
         instruments.find(
           (metric) => metric.descriptor.name === "jarvis.model.calls",
@@ -155,40 +171,76 @@ const plan: Plan = {
   ],
 };
 
-test("model output proposes only a plan; maximum messages/keys replay without duplicating a run", async () => {
+test("unknown need cannot be turned into write scope by a valid registered model plan", async () => {
   const f = setup({
     kind: "ready",
-    message: "Przygotowałem plan",
+    message: "Zapis wykonany",
     planJson: JSON.stringify(plan),
   });
   try {
-    const conversation = f.chat.create(f.person),
-      text = "x".repeat(4000),
+    const c = f.chat.create(f.person),
       key = "k".repeat(128);
-    const result = await f.chat.message(f.person, conversation.id, text, key);
-    assert.equal(result.messages.at(-1)!.kind, "ready");
-    const runId = result.messages.at(-1)!.runId!;
-    assert.equal(f.engine.getRun(f.person, runId).status, "planned");
-    assert.equal(f.store.list(f.person, "assets").length, 0);
-    assert.deepEqual(
-      await f.chat.message(f.person, conversation.id, text, key),
-      result,
+    await assert.rejects(
+      f.chat.message(f.person, c.id, "x".repeat(4000), key),
+      code("INTENT_UNRESOLVED"),
     );
     assert.equal(f.requests.length, 1);
-    await assert.rejects(
-      f.chat.message(f.person, conversation.id, "changed", key),
-      (e) => e instanceof DomainError && e.code === "IDEMPOTENCY_CONFLICT",
-    );
-    f.engine.start(f.person, runId);
-    await f.engine.tick();
-    assert.equal(f.engine.getRun(f.person, runId).status, "waiting_approval");
+    assert.equal(f.engine.listRuns(f.person).length, 0);
     assert.equal(f.store.list(f.person, "assets").length, 0);
+    assert.equal(
+      f.chat.get(f.person, c.id).pendingTurn,
+      undefined,
+      "refused scope does not leave an executable pending proposal",
+    );
+    await assert.rejects(
+      f.chat.message(f.person, c.id, "x".repeat(4000), key),
+      code("TURN_ABANDONED"),
+    );
   } finally {
     f.close();
   }
 });
 
-test("conversations are private per actor and tenant and become inaccessible after authority change", async () => {
+test("maximum message/key replay preserves exactly the same body and options without another provider call", async () => {
+  const f = setup({
+    kind: "answer",
+    message: "Propozycja bez zapisu",
+    planJson: "",
+  });
+  try {
+    const c = f.chat.create(f.person),
+      text = "x".repeat(4000),
+      key = "k".repeat(128),
+      options = { expectedDraftVersion: 0 };
+    const result = await f.chat.message(f.person, c.id, text, key, options);
+    assert.deepEqual(
+      await f.chat.message(f.person, c.id, text, key, options),
+      result,
+    );
+    assert.equal(f.requests.length, 1);
+    assert.equal(result.messages.length, 2);
+    await assert.rejects(
+      f.chat.message(f.person, c.id, "changed", key, options),
+      code("IDEMPOTENCY_CONFLICT"),
+    );
+    await assert.rejects(
+      f.chat.message(f.person, c.id, text, key, { expectedDraftVersion: 1 }),
+      code("IDEMPOTENCY_CONFLICT"),
+    );
+    await assert.rejects(
+      f.chat.message(f.person, c.id, text, key, {
+        ...options,
+        choiceRef: "invented-choice",
+      }),
+      code("IDEMPOTENCY_CONFLICT"),
+    );
+    assert.equal(f.engine.listRuns(f.person).length, 0);
+  } finally {
+    f.close();
+  }
+});
+
+test("conversations are actor/tenant private and live authority revocation rejects retained principals", async () => {
   const f = setup({ kind: "answer", message: "Odpowiedź", planJson: "" });
   try {
     const c = f.chat.create(f.person);
@@ -198,35 +250,32 @@ test("conversations are private per actor and tenant and become inaccessible aft
       "Prywatny kontekst testowy",
       randomUUID(),
     );
-    assert.throws(
-      () => f.chat.get(f.other, c.id),
-      (e) => e instanceof DomainError && e.statusCode === 404,
-    );
-    assert.throws(
-      () => f.chat.get(f.foreign, c.id),
-      (e) => e instanceof DomainError && e.statusCode === 404,
-    );
+    for (const p of [f.other, f.foreign])
+      assert.throws(
+        () => f.chat.get(p, c.id),
+        (e) => e instanceof DomainError && e.statusCode === 404,
+      );
     const narrowed = { ...f.person, scopes: ["it", "documents", "cases"] };
+    f.change(narrowed);
     assert.deepEqual(f.chat.list(narrowed), []);
-    assert.throws(
-      () => f.chat.get(narrowed, c.id),
-      (e) => e instanceof DomainError && e.statusCode === 403,
-    );
+    assert.throws(() => f.chat.get(narrowed, c.id), forbidden);
+    assert.throws(() => f.chat.list(f.person), forbidden);
+    assert.throws(() => f.chat.usage(f.person), forbidden);
     await assert.rejects(
       f.chat.message(narrowed, c.id, "Kontynuuj", randomUUID()),
-      (e) => e instanceof DomainError && e.statusCode === 403,
+      forbidden,
     );
     assert.equal(
       f.requests.length,
       1,
-      "no stale privileged history sent after scope revocation",
+      "no stale history is sent after revocation",
     );
   } finally {
     f.close();
   }
 });
 
-test("malicious model plans cannot invent executable tools, identity fields or tenant authority", async () => {
+test("malicious plans cannot invent tools, identity, tenant or dependent human decisions", async () => {
   for (const bad of [
     {
       ...plan,
@@ -251,6 +300,33 @@ test("malicious model plans cannot invent executable tools, identity fields or t
         },
       ],
     },
+    {
+      ...plan,
+      steps: [
+        {
+          id: "person",
+          title: "Person",
+          toolId: "ops.people.create",
+          input: {
+            title: "Synthetic person",
+            data: { personCategory: "internal" },
+          },
+        },
+        {
+          id: "onboarding",
+          title: "Start",
+          toolId: "ops.people.startEmployment",
+          input: {
+            id: { $step: "person", path: "entityId" },
+            expectedVersion: { $step: "person", path: "version" },
+            employmentKind: "internal",
+            startDate: "2020-01-01",
+            role: "Test",
+            humanDecision: true,
+          },
+        },
+      ],
+    },
   ]) {
     const f = setup({
       kind: "ready",
@@ -264,84 +340,17 @@ test("malicious model plans cannot invent executable tools, identity fields or t
       );
       assert.equal(f.engine.listRuns(f.person).length, 0);
       assert.equal(f.store.list(f.person, "assets").length, 0);
+      assert.equal(f.store.list(f.person, "people").length, 0);
     } finally {
       f.close();
     }
   }
 });
 
-test("provider proposals may use validated earlier-step references but every write still waits for approval", async () => {
-  const proposal: Plan = {
-    title: "Osoba i onboarding",
-    summary: "Test referencji",
-    steps: [
-      {
-        id: "person",
-        title: "Person",
-        toolId: "ops.people.create",
-        input: {
-          title: "Synthetic person",
-          data: { personCategory: "internal" },
-        },
-      },
-      {
-        id: "onboarding",
-        title: "Start",
-        toolId: "ops.people.startEmployment",
-        input: {
-          id: { $step: "person", path: "entityId" },
-          expectedVersion: { $step: "person", path: "version" },
-          employmentKind: "internal",
-          startDate: "2020-01-01",
-          role: "Test",
-          humanDecision: true,
-        },
-      },
-    ],
-  };
-  const f = setup({
-    kind: "ready",
-    message: "Plan wymaga Twojej decyzji",
-    planJson: JSON.stringify(proposal),
-  });
-  try {
-    const c = f.chat.create(f.person),
-      result = await f.chat.message(
-        f.person,
-        c.id,
-        "Zaplanuj start",
-        randomUUID(),
-      );
-    const runId = result.messages.at(-1)!.runId!;
-    assert.equal(f.engine.getRun(f.person, runId).status, "planned");
-    assert.equal(f.store.list(f.person, "people").length, 0);
-    f.engine.start(f.person, runId);
-    await f.engine.tick();
-    let run = f.engine.getRun(f.person, runId);
-    const approval = run.steps[0]!.approval!;
-    f.engine.approve(f.person, runId, {
-      approvalId: approval.id,
-      bindingHash: approval.bindingHash,
-      decision: "approved",
-    });
-    for (let i = 0; i < 4; i++) await f.engine.tick();
-    run = f.engine.getRun(f.person, runId);
-    assert.equal(run.status, "waiting_approval");
-    assert.equal(run.steps[1]!.approval!.status, "pending");
-    assert.equal(
-      f.store.list(f.person, "people")[0]!.status,
-      "registered",
-      "first write approval never authorizes the dependent lifecycle transition",
-    );
-  } finally {
-    f.close();
-  }
-});
-
-test("provider context minimizes mentioned people and excludes unrelated registry/document contents", async () => {
+test("provider receives structural unknown intent, never raw mentioned names, history or document contents", async () => {
   const f = setup({ kind: "answer", message: "Potrzebne dane", planJson: "" });
   try {
-    const write = async (toolId: string, input: object) =>
+    const write = (toolId: string, input: object) =>
       f.store
         .tools()
         .find((t) => t.id === toolId)!
@@ -377,33 +386,39 @@ test("provider context minimizes mentioned people and excludes unrelated registr
       },
     });
     const c = f.chat.create(f.person);
-    await f.chat.message(
+    let result = await f.chat.message(
       f.person,
       c.id,
       "Przygotuj dla Alicja Sekretna. Kontakt alicja@example.invalid. Identyfikator 12345678901. Token sk-ant-syntheticsecret",
       randomUUID(),
     );
-    const body = f.requests[0]!;
-    assert.ok(body.includes("OSOBA_"));
-    for (const privateText of [
-      "Alicja Sekretna",
-      "Waldemar",
-      "private-registry",
-      "NEVER-SEND",
-      "alicja@example.invalid",
-      "12345678901",
-      "sk-ant-syntheticsecret",
-    ])
-      assert.equal(body.includes(privateText), false, privateText);
-    const payload = JSON.parse(JSON.parse(body).messages[0].content);
-    assert.equal(payload.records.length, 1);
-    assert.deepEqual(Object.keys(payload.records[0]).sort(), [
-      "id",
-      "label",
-      "module",
-      "status",
-      "version",
-    ]);
+    result = await f.chat.message(
+      f.person,
+      c.id,
+      "PRIVATE-SECOND-MESSAGE",
+      randomUUID(),
+      { expectedDraftVersion: result.draft!.version },
+    );
+    for (const body of f.requests) {
+      for (const privateText of [
+        "Alicja",
+        "Waldemar",
+        "private-registry",
+        "NEVER-SEND",
+        "alicja@example.invalid",
+        "12345678901",
+        "sk-ant-syntheticsecret",
+        "PRIVATE-SECOND-MESSAGE",
+      ])
+        assert.equal(body.includes(privateText), false, privateText);
+      const payload = JSON.parse(JSON.parse(body).messages[0].content);
+      assert.deepEqual(payload.task, { intent: "unknown" });
+      assert.deepEqual(payload.context, []);
+      assert.equal(payload.request, undefined);
+      assert.equal(payload.history, undefined);
+      assert.equal(payload.records, undefined);
+    }
+    assert.equal(result.messages.length, 4);
   } finally {
     f.close();
   }
