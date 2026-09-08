@@ -1,0 +1,3 @@
+# Verified false positive: synthetic run UUID 0e70d33e-e740-4a55-a93a-33c55d80ba15.
+# Only this historical finding; no rule or file exclusions. See P08b1 delivery evidence.
+a805ab319a11586cdd1755d96520d39a51e01137:docs/delivery-state.md:generic-api-key:435
