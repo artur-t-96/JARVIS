@@ -3528,3 +3528,25 @@ tbody tr:hover {
     gap: 8px;
   }
 }
+
+.purchase-form > * + * {
+  margin-top: 18px;
+}
+.purchase-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0;
+}
+.purchase-terms {
+  margin-top: 8px;
+  max-width: 340px;
+}
+.purchase-terms summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.purchase-terms p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

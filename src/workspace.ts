@@ -4,6 +4,15 @@ import {
   type AccessTaskAction,
 } from "./task-access.js";
 import { DocumentSources, migrateDocumentContext } from "./document-sources.js";
+import {
+  createPurchase,
+  changePurchase,
+  purchaseProjection,
+  purchasingAuthority,
+  purchaseIntegrity,
+  type PurchasingServices,
+} from "./purchasing.js";
+import { purchasingActionNames } from "./purchasing-models.js";
 import { DocumentFiles, MAX_DOCUMENT_FILES } from "./document-files.js";
 import type { LocalLaboratory } from "./laboratory.js";
 import {
@@ -197,9 +206,12 @@ const editableSchemas: Record<ModuleId, z.ZodType> = {
   assets: createDataSchemas.assets
     .pick({ manufacturer: true, model: true })
     .partial(),
-  purchases: createDataSchemas.purchases
-    .pick({ description: true, expectedDelivery: true, supplierEmail: true })
-    .partial(),
+  purchases: z
+    .object({
+      description: z.string().trim().min(1).max(2000).optional(),
+      supplierEmail: z.string().email().max(254).optional(),
+    })
+    .strict(),
   licenses: z.object({}).strict(),
   sales: createDataSchemas.sales
     .pick({ contactEmail: true, scope: true })
@@ -397,6 +409,18 @@ export class WorkspaceStore {
             tenant_id,json_extract(data_json,'$.laboratoryContext.targetId'))
             WHERE module='cases' AND json_extract(data_json,'$.laboratoryContext.targetId') IS NOT NULL
             AND status IN ('open','needs_changes','awaiting_acceptance');`),
+        },
+        {
+          version: 13,
+          name: "Versioned procurement choices and one order per cost decision",
+          up: (db) =>
+            db.exec(`
+            CREATE UNIQUE INDEX ops_purchase_quote_source ON ops_entities(
+              tenant_id,json_extract(data_json,'$.requestId'),json_extract(data_json,'$.supplierId'),json_extract(data_json,'$.referenceKey'))
+              WHERE module='purchases' AND json_extract(data_json,'$.kind')='quote';
+            CREATE UNIQUE INDEX ops_purchase_order_request ON ops_entities(tenant_id,json_extract(data_json,'$.requestId'))
+              WHERE module='purchases' AND json_extract(data_json,'$.kind')='order' AND json_extract(data_json,'$.procurementVersion')=1;
+          `),
         },
       ],
     });
@@ -1284,6 +1308,7 @@ export class WorkspaceStore {
     ).map(asJson);
   }
   private relationalStateMatches(tenant: string, entity: Entity): boolean {
+    if (entity.module === "purchases") return purchaseIntegrity(entity);
     if (entity.module === "documents")
       return this.documentSources.integrity(tenant, entity);
     if (entity.module === "cases")
@@ -1360,6 +1385,20 @@ export class WorkspaceStore {
     if (depth > 25)
       fail("REFERENCE_DEPTH", "Zbyt głębokie powiązania źródłowe.");
     const scopes: string[] = [];
+    if (module === "purchases" && tenant) {
+      if (typeof data.requestId === "string") {
+        const request = this.read(tenant, "purchases", data.requestId);
+        scopes.push(
+          ...this.entityScopes("purchases", request.data, tenant, depth + 1),
+        );
+      } else if (typeof data.caseId === "string") {
+        const source = this.read(tenant, "cases", data.caseId);
+        scopes.push(
+          "cases",
+          ...this.entityScopes("cases", source.data, tenant, depth + 1),
+        );
+      }
+    }
     if (module === "cases") {
       const area: Record<string, string> = {
         onboarding: "people",
@@ -1679,12 +1718,105 @@ export class WorkspaceStore {
     this.state(e, "active");
     return e;
   }
+  private purchasingRead(tenant: string, id: string): Entity {
+    const entity = this.read(tenant, "purchases", id);
+    const snapshot = this.db
+      .prepare(
+        "SELECT snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+      )
+      .get(tenant, id, entity.version);
+    if (
+      snapshot?.snapshot_hash !== digest(entity) ||
+      !purchaseIntegrity(entity)
+    )
+      fail(
+        "PURCHASE_STATE_INCONSISTENT",
+        "Rekord zakupu nie odpowiada zapisanej historii.",
+      );
+    return entity;
+  }
+  private purchasingServices(cmd: Command): PurchasingServices {
+    return {
+      ctx: cmd.ctx,
+      now: cmd.now,
+      day: this.companyDate(cmd),
+      principal: (id) => this.livePrincipal(cmd.ctx.tenantId, id),
+      read: (id) => this.purchasingRead(cmd.ctx.tenantId, id),
+      save: (entity) => this.save(cmd, entity),
+      insert: (title, data, status) =>
+        this.saveNew(cmd, this.insert(cmd, "purchases", title, data, status)),
+      sourceProblem: (data) => {
+        if (!data.caseId) return null;
+        const source = this.read(
+          cmd.ctx.tenantId,
+          "cases",
+          String(data.caseId),
+        );
+        const snapshot = this.db
+          .prepare(
+            "SELECT snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+          )
+          .get(cmd.ctx.tenantId, source.id, source.version);
+        if (snapshot?.snapshot_hash !== digest(source))
+          return "Historia powiązanej sprawy jest niespójna.";
+        if (
+          !["open", "needs_changes", "awaiting_acceptance"].includes(
+            source.status,
+          )
+        )
+          return "Powiązana sprawa nie jest otwarta.";
+        if (source.data.scopeRevision !== data.caseScopeRevision)
+          return "Zakres powiązanej sprawy zmienił się. Zaktualizuj zapotrzebowanie.";
+        if (data.caseRequirementId) {
+          const requirement = this.readinessStore
+            .requirements(
+              cmd.ctx.tenantId,
+              source.id,
+              Number(data.caseScopeRevision),
+            )
+            .find((r) => r.id === data.caseRequirementId);
+          if (
+            !requirement ||
+            requirement.kind !== "asset_issued" ||
+            requirement.expected.assetType !== data.assetType
+          )
+            return "Zapotrzebowanie nie odpowiada wymaganemu wyposażeniu sprawy.";
+        }
+        return null;
+      },
+    };
+  }
+  purchasing(principal: Principal, id: string) {
+    this.get(principal, "purchases", id);
+    const ctx: ToolContext = {
+      tenantId: principal.tenantId,
+      actorId: principal.id,
+      operationKey: "read-only",
+      runId: "read-only",
+      stepId: "read-only",
+      signal: new AbortController().signal,
+    };
+    const cmd: Command = {
+      ctx,
+      actor: principal.id,
+      now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      toolId: "read-only",
+      changes: [],
+      profile: this.currentProfile(principal.tenantId),
+    };
+    return purchaseProjection(
+      this.purchasingServices(cmd),
+      this.purchasingRead(principal.tenantId, id),
+    );
+  }
   private create(
     cmd: Command,
     module: ModuleId,
     title: string,
     data: JsonObject,
   ): Entity {
+    if (module === "purchases")
+      return createPurchase(this.purchasingServices(cmd), title, data);
     let status = "draft";
     if (module === "people") {
       status = "registered";
@@ -1788,22 +1920,6 @@ export class WorkspaceStore {
         fail("DUPLICATE_SERIAL", "Sprzęt o tym numerze seryjnym już istnieje.");
       status = data.condition === "good" ? "available" : "maintenance";
       data.allocations = [];
-    }
-    if (module === "purchases") {
-      if (data.kind === "supplier") {
-        status = "active";
-        if (data.supplierId)
-          fail(
-            "INVALID_SUPPLIER",
-            "Dostawca nie może wskazywać innego dostawcy.",
-          );
-      } else {
-        this.supplier(cmd, data.supplierId);
-        if (!data.quantity)
-          fail("QUANTITY_REQUIRED", "Podaj ilość zamówienia.");
-        data.receivedQuantity = 0;
-        data.deliveries = [];
-      }
     }
     if (module === "licenses") {
       this.optionalRef(cmd, "purchases", data.supplierId);
@@ -3606,12 +3722,26 @@ export class WorkspaceStore {
       d.allocations = this.allocations(cmd.ctx.tenantId, e.id);
     }
     if (e.module === "purchases") {
+      if (purchasingActionNames.includes(action))
+        return changePurchase(
+          this.purchasingServices(cmd),
+          e,
+          action,
+          input as JsonObject,
+        );
+      if (e.data.kind === "request" && action === "cancel") {
+        this.state(e, "draft", "awaiting_budget", "approved", "needs_changes");
+        purchasingAuthority(this.purchasingServices(cmd));
+        e.status = "cancelled";
+        d.cancellationReason = String(input.reason);
+        return this.save(cmd, e);
+      }
       if (action === "deactivate") {
         this.kind(e, "supplier");
         this.state(e, "active");
         const active = this.db
           .prepare(
-            "SELECT id FROM ops_entities WHERE tenant_id=? AND module='purchases' AND json_extract(data_json,'$.supplierId')=? AND status NOT IN ('received','cancelled')",
+            "SELECT id FROM ops_entities WHERE tenant_id=? AND module='purchases' AND json_extract(data_json,'$.kind')='order' AND json_extract(data_json,'$.supplierId')=? AND status NOT IN ('received','cancelled')",
           )
           .get(cmd.ctx.tenantId, e.id);
         if (active)
@@ -3620,13 +3750,6 @@ export class WorkspaceStore {
         d.deactivationReason = String(input.reason);
       } else {
         this.kind(e, "order");
-        if (action === "placeOrder") {
-          this.state(e, "draft");
-          this.supplier(cmd, d.supplierId);
-          e.status = "ordered";
-          d.orderedAt = cmd.now;
-          d.dispatch = "not_sent_local_record";
-        }
         if (action === "acknowledge") {
           this.state(e, "ordered");
           this.human(cmd, input);
@@ -4376,6 +4499,68 @@ export class WorkspaceStore {
           ])
             this.scope(actor, area);
         };
+        const requirePurchaseAuthority = (
+          ctx: ToolContext,
+          input: JsonObject,
+        ) => {
+          if (module !== "purchases") return;
+          purchasingAuthority(
+            this.purchasingServices({
+              ctx,
+              actor: ctx.actorId ?? "",
+              now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+              toolId,
+              changes: [],
+              profile: this.currentProfile(ctx.tenantId),
+            }),
+          );
+          for (const id of [ctx.actorId, ctx.approvedBy]) {
+            const principal = this.livePrincipal(ctx.tenantId, id)!;
+            for (const area of this.inputScopes(
+              module,
+              action,
+              input,
+              ctx.tenantId,
+            ))
+              this.scope(principal, area);
+          }
+        };
+        const requirePurchaseReceipt = (
+          ctx: ToolContext,
+          row: Row | undefined,
+        ) => {
+          if (module !== "purchases" || !row) return;
+          const changes = JSON.parse(String(row.changes_json)) as {
+            id: string;
+            version: number;
+            hash: string;
+          }[];
+          if (!changes.length)
+            fail(
+              "PURCHASE_STATE_INCONSISTENT",
+              "Brak zapisanego skutku zakupu.",
+            );
+          for (const change of changes) {
+            this.purchasingRead(ctx.tenantId, change.id);
+            const saved = this.db
+              .prepare(
+                "SELECT snapshot_json,snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+              )
+              .get(ctx.tenantId, change.id, change.version);
+            if (
+              !saved ||
+              saved.snapshot_hash !== change.hash ||
+              digest(JSON.parse(String(saved.snapshot_json))) !== change.hash ||
+              !purchaseIntegrity(
+                JSON.parse(String(saved.snapshot_json)) as Entity,
+              )
+            )
+              fail(
+                "PURCHASE_STATE_INCONSISTENT",
+                "Zapisany wynik zakupu nie odpowiada historii.",
+              );
+          }
+        };
         const requireCommittedDocument = (
           ctx: ToolContext,
           row: Row | undefined,
@@ -4454,31 +4639,34 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version: cancelStart
-            ? "1"
-            : lifecycle
+          version:
+            module === "purchases"
               ? "5"
-              : module === "documents"
-                ? "10"
-                : taskAccess
-                  ? "1"
-                  : accessMutation ||
-                      (module === "it" &&
-                        [
-                          "reviseAccessBundle",
-                          "reviseApplication",
-                          "retireAccessDefinition",
-                        ].includes(action))
-                    ? "8"
-                    : module === "assets"
-                      ? action === "replaceReservation"
-                        ? "7"
-                        : "6"
-                      : module === "cases" && action === "bindEvidence"
+              : cancelStart
+                ? "1"
+                : lifecycle
+                  ? "5"
+                  : module === "documents"
+                    ? "10"
+                    : taskAccess
+                      ? "1"
+                      : accessMutation ||
+                          (module === "it" &&
+                            [
+                              "reviseAccessBundle",
+                              "reviseApplication",
+                              "retireAccessDefinition",
+                            ].includes(action))
                         ? "8"
-                        : module === "cases" && action === "create"
-                          ? "6"
-                          : "4",
+                        : module === "assets"
+                          ? action === "replaceReservation"
+                            ? "7"
+                            : "6"
+                          : module === "cases" && action === "bindEvidence"
+                            ? "8"
+                            : module === "cases" && action === "create"
+                              ? "6"
+                              : "4",
           ...(taskAccess
             ? {
                 canAccess: (
@@ -4626,10 +4814,12 @@ export class WorkspaceStore {
             const input = asJson(parsed.data);
             if (cancelStart) this.cancelStartAuthority(ctx, input);
             requireDocumentAuthority(ctx, input);
+            requirePurchaseAuthority(ctx, asJson(parsed.data));
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
             try {
               const existing = this.ledger(ctx, toolId, input);
+              requirePurchaseReceipt(ctx, existing);
               requireCommittedDocument(ctx, existing);
               // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
@@ -4678,6 +4868,8 @@ export class WorkspaceStore {
                 e = this.create(cmd, module, String(p.title), asJson(p.data!));
               else {
                 e = this.read(ctx.tenantId, module, String(p.id));
+                if (module === "purchases")
+                  e = this.purchasingRead(ctx.tenantId, String(p.id));
                 if (e.version !== p.expectedVersion)
                   fail(
                     "VERSION_CONFLICT",
@@ -4700,6 +4892,11 @@ export class WorkspaceStore {
                     "Historia ewidencji urządzenia jest niespójna.",
                   );
                 if (action === "update") {
+                  if (module === "purchases" && e.data.kind !== "supplier")
+                    fail(
+                      "REVISION_REQUIRED",
+                      "Zapotrzebowanie lub ofertę zmień przez właściwą rewizję.",
+                    );
                   if (module === "documents")
                     fail(
                       "REVISION_REQUIRED",
@@ -4973,6 +5170,8 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            requirePurchaseAuthority(ctx, asJson(parsed.data));
+            requirePurchaseReceipt(ctx, row);
             if (cancelStart) {
               this.cancelStartAuthority(ctx, asJson(parsed.data));
               if (row && !this.cancellationCommitted(ctx, asJson(parsed.data)))
@@ -5008,6 +5207,8 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            requirePurchaseAuthority(ctx, asJson(parsed.data));
+            requirePurchaseReceipt(ctx, row);
             if (cancelStart)
               this.cancelStartAuthority(ctx, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));

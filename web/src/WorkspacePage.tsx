@@ -22,6 +22,11 @@ import {
 import { EntityContent, RecordDownload } from "./EntityContent";
 import { LaboratoryPanel } from "./LaboratoryPanel";
 import { ItCase } from "./ItCase";
+import {
+  PurchaseForm,
+  PurchaseWorkflow,
+  purchasingSidebarAction,
+} from "./Purchasing";
 import { DocumentTemplate } from "./DocumentTemplate";
 import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
 import { DocumentFiles } from "./DocumentFiles";
@@ -690,6 +695,8 @@ export function WorkspacePage({
   const [status, setStatus] = useState("");
   const [form, setForm] = useState<FormSpec | null>(null);
   const [documentTemplate, setDocumentTemplate] = useState(false);
+  const [purchaseCreate, setPurchaseCreate] = useState(false);
+  const closePurchase = useCallback(() => setPurchaseCreate(false), []);
   const [copyMessage, setCopyMessage] = useState("");
   const closeForm = useCallback(() => setForm(null), []);
   const allowed = context.principal.roles.includes("operator");
@@ -701,12 +708,14 @@ export function WorkspacePage({
     (!cancelledCase || action === "create") &&
     context.tools.some((tool) => tool.id === `ops.${module.id}.${action}`);
   const create = () =>
-    setForm({
-      title: `Dodaj: ${module.label.toLocaleLowerCase("pl")}`,
-      action: "create",
-      fields: module.fields,
-      dataForm: true,
-    });
+    module.id === "purchases"
+      ? setPurchaseCreate(true)
+      : setForm({
+          title: `Dodaj: ${module.label.toLocaleLowerCase("pl")}`,
+          action: "create",
+          fields: module.fields,
+          dataForm: true,
+        });
   const items = (resource.data?.items ?? []).filter(
     (item) =>
       (!status || item.status === status) &&
@@ -770,6 +779,8 @@ export function WorkspacePage({
                   </div>
                 </div>
                 {allowedTool("update") &&
+                  (module.id !== "purchases" ||
+                    item.data.kind === "supplier") &&
                   module.id !== "documents" &&
                   !(module.id === "assets" && item.status === "retired") && (
                     <button
@@ -819,6 +830,14 @@ export function WorkspacePage({
               {item.module === "cases" && !!item.data.laboratoryContext && (
                 <ItCase item={item} context={context} />
               )}
+              {item.module === "purchases" && (
+                <PurchaseWorkflow
+                  key={item.id}
+                  item={item}
+                  context={context}
+                  revision={revision}
+                />
+              )}
               {item.module === "documents" && (
                 <>
                   <DocumentReadiness key={item.id} item={item} />
@@ -853,8 +872,12 @@ export function WorkspacePage({
                     {module.fields
                       .filter(
                         (field) =>
-                          !isAccessDefinition(item) ||
-                          ["kind", "description"].includes(field.key),
+                          (item.module !== "purchases" ||
+                            ["kind", "description", "supplierEmail"].includes(
+                              field.key,
+                            )) &&
+                          (!isAccessDefinition(item) ||
+                            ["kind", "description"].includes(field.key)),
                       )
                       .map((field) => (
                         <div
@@ -922,6 +945,8 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            (module.id !== "purchases" ||
+                              purchasingSidebarAction(item, action.id)) &&
                             !(
                               module.id === "people" &&
                               action.id === "cancelStart"
@@ -1048,6 +1073,9 @@ export function WorkspacePage({
     <>
       {documentTemplate && (
         <DocumentTemplate onClose={() => setDocumentTemplate(false)} />
+      )}
+      {purchaseCreate && (
+        <PurchaseForm mode="create" context={context} onClose={closePurchase} />
       )}
       {form && <CommandForm module={module} spec={form} onClose={closeForm} />}
       <div className="page-heading">

@@ -36,7 +36,7 @@ test("v7 migration preserves all existing custody rows and rolls back failed DDL
       ),
     );
     db.exec(
-      "INSERT INTO ops_asset_events SELECT * FROM synthetic_old_events; DROP TABLE synthetic_old_events; CREATE INDEX ops_asset_event_history ON ops_asset_events(tenant_id,asset_id,recorded_at,id); DROP TABLE ops_access_events; DROP TABLE ops_access_grants; DROP INDEX ops_application_key; DROP INDEX ops_access_bundle_key; DROP INDEX ops_open_laboratory_case; DELETE FROM schema_versions_operations WHERE version>=7;",
+      "INSERT INTO ops_asset_events SELECT * FROM synthetic_old_events; DROP TABLE synthetic_old_events; CREATE INDEX ops_asset_event_history ON ops_asset_events(tenant_id,asset_id,recorded_at,id); DROP TABLE ops_access_events; DROP TABLE ops_access_grants; DROP INDEX ops_application_key; DROP INDEX ops_access_bundle_key; DROP INDEX ops_open_laboratory_case; DROP INDEX ops_purchase_quote_source; DROP INDEX ops_purchase_order_request; DELETE FROM schema_versions_operations WHERE version>=7;",
     );
     for (const column of [
       "context_json",
@@ -65,7 +65,7 @@ test("v7 migration preserves all existing custody rows and rolls back failed DDL
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      12,
+      13,
     );
     assert.deepEqual(
       db.prepare("SELECT * FROM ops_asset_events ORDER BY rowid").all(),

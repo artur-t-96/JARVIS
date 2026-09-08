@@ -10,6 +10,10 @@ import {
 } from "./access-models.js";
 import { caseRequirementDefinitionsSchema } from "./case-readiness.js";
 import { laboratoryScopeSchema } from "./laboratory-contract.js";
+import {
+  purchaseCreateSchema,
+  purchasingActions,
+} from "./purchasing-models.js";
 
 export interface WorkspaceField {
   key: string;
@@ -281,18 +285,7 @@ export const createDataSchemas = {
       model: short.optional(),
     })
     .strict(),
-  purchases: z
-    .object({
-      kind: z.enum(["supplier", "order"]),
-      supplierId: id.optional(),
-      description: text,
-      quantity: integer.optional(),
-      budgetAmount: money.optional(),
-      currency: z.enum(["PLN", "EUR", "USD"]).optional(),
-      expectedDelivery: date.optional(),
-      supplierEmail: email,
-    })
-    .strict(),
+  purchases: purchaseCreateSchema,
   licenses: z
     .object({
       product: short,
@@ -781,7 +774,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
       .strict(),
   },
   purchases: {
-    placeOrder: z.object(base).strict(),
+    ...purchasingActions,
     acknowledge: z
       .object({
         ...base,
@@ -1001,12 +994,23 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
     f("condition", "Stan", "select", true, ["good", "repair"]),
   ],
   purchases: [
-    f("kind", "Rodzaj wpisu", "select", true, ["supplier", "order"]),
-    f("supplierId", "ID dostawcy (wymagane dla zamówienia)", "text", false),
+    f("kind", "Rodzaj wpisu", "select", true, ["supplier", "request", "quote"]),
+    f("supplierId", "Dostawca oferty", "text", false),
+    f("requestId", "Zapotrzebowanie", "text", false),
     f("description", "Opis", "textarea"),
-    f("quantity", "Liczba sztuk (zamówienie)", "number", false),
-    f("budgetAmount", "Budżet", "number", false),
+    f("quantity", "Liczba sztuk", "number", false),
+    f(
+      "budgetMinor",
+      "Budżet w najmniejszych jednostkach waluty",
+      "number",
+      false,
+    ),
     f("currency", "Waluta", "select", false, ["PLN", "EUR", "USD"]),
+    f("priceBasis", "Podstawa porównania ceny", "select", false, [
+      "net",
+      "gross",
+    ]),
+    f("requiredBy", "Potrzebne do", "date", false),
     f("expectedDelivery", "Planowana dostawa", "date", false),
     f("supplierEmail", "E-mail dostawcy", "text", false),
   ],
@@ -1121,7 +1125,12 @@ const actionLabels: Record<string, string> = {
   move: "Poświadcz przeniesienie",
   sendToService: "Przekaż do serwisu",
   retire: "Wycofaj z użytkowania",
-  placeOrder: "Zatwierdź lokalne zamówienie",
+  reviseRequest: "Zmień potrzebę lub budżet",
+  reviseQuote: "Nowa wersja oferty dostawcy",
+  withdrawQuote: "Wycofaj ofertę dostawcy",
+  selectQuote: "Wybierz ofertę do decyzji",
+  decideCost: "Podejmij decyzję kosztową",
+  placeOrder: "Zarejestruj zatwierdzone zamówienie",
   acknowledge: "Zarejestruj potwierdzenie dostawcy",
   recordDelivery: "Potwierdź odbiór dostawy",
   deactivate: "Wyłącz dostawcę",
@@ -1202,6 +1211,24 @@ const fieldLabels: Record<string, string> = {
   custodianPrincipalId: "Opiekun ewidencji",
   replacementAssetId: "Nowe urządzenie",
   supplierReference: "Numer potwierdzenia dostawcy",
+  supplierId: "Dostawca",
+  expectedSupplierVersion: "Wersja dostawcy",
+  requestId: "Zapotrzebowanie",
+  expectedRequestVersion: "Wersja zapotrzebowania",
+  quoteId: "Wybrana oferta",
+  expectedQuoteVersion: "Wersja wybranej oferty",
+  quoteReference: "Numer oferty dostawcy",
+  selectionReason: "Uzasadnienie wyboru",
+  costDecisionHash: "Odcisk decyzji kosztowej",
+  quantity: "Liczba sztuk",
+  budgetMinor: "Budżet w najmniejszych jednostkach waluty",
+  unitPriceMinor: "Cena sztuki w najmniejszych jednostkach waluty",
+  shippingMinor: "Dostawa w najmniejszych jednostkach waluty",
+  priceBasis: "Podstawa ceny",
+  requiredBy: "Potrzebne do",
+  validUntil: "Ważne do",
+  expectedDelivery: "Termin dostawy",
+  caseScopeRevision: "Rewizja powiązanej sprawy",
   acknowledgedOn: "Data potwierdzenia",
   quantityReceived: "Odebrana ilość",
   receivedOn: "Data odbioru",

@@ -28,6 +28,7 @@ const ctx = (
 ): ToolContext => ({
   tenantId,
   actorId: "human-reviewer",
+  approvedBy: "human-reviewer",
   operationKey,
   runId: "run-test",
   stepId: "step-test",
@@ -1030,12 +1031,55 @@ test("purchase acknowledgment is distinct from delivery; partial receipt and sup
       kind: "supplier",
       description: "Test",
     });
-    let order = await h.create("purchases", "Zamówienie", {
-      kind: "order",
-      supplierId: supplier.id,
-      description: "Test",
+    let request = await h.create("purchases", "Zapotrzebowanie", {
+      kind: "request",
+      description: "Syntetyczny zakup",
       quantity: 2,
+      budgetMinor: 1000000,
+      currency: "PLN",
+      priceBasis: "gross",
+      requiredBy: today,
     });
+    const quote = await h.create("purchases", "Oferta dostawcy", {
+      kind: "quote",
+      requestId: request.id,
+      expectedRequestVersion: request.version,
+      supplierId: supplier.id,
+      expectedSupplierVersion: supplier.version,
+      quoteReference: "SYNTHETIC-QUOTE",
+      description: "Syntetyczny zakup",
+      quantity: 2,
+      unitPriceMinor: 100000,
+      shippingMinor: 0,
+      currency: "PLN",
+      priceBasis: "gross",
+      validUntil: today,
+      expectedDelivery: today,
+      terms: "Syntetyczna oferta bez wysyłki",
+    });
+    request = store.get(principal(), "purchases", request.id);
+    request = await h.action(request, "selectQuote", {
+      quoteId: quote.id,
+      expectedQuoteVersion: quote.version,
+      selectionReason: "Uzgodniony koszt i termin",
+    });
+    request = await h.action(request, "decideCost", {
+      quoteId: quote.id,
+      expectedQuoteVersion: quote.version,
+      decision: "approved",
+      note: "Jawna decyzja testowa",
+      humanDecision: true,
+    });
+    const cost = request.data.costDecision as JsonObject;
+    request = await h.action(request, "placeOrder", {
+      costDecisionHash: cost.hash!,
+      expectedSupplierVersion: supplier.version,
+    });
+    let order = store.get(
+      principal(),
+      "purchases",
+      String(request.data.orderId),
+    );
     await assert.rejects(
       h.action(order, "recordDelivery", {
         quantityReceived: 1,
@@ -1045,7 +1089,6 @@ test("purchase acknowledgment is distinct from delivery; partial receipt and sup
       }),
       code("INVALID_TRANSITION"),
     );
-    order = await h.action(order, "placeOrder");
     assert.equal(order.data.dispatch, "not_sent_local_record");
     order = await h.action(order, "acknowledge", {
       supplierReference: "PO-TEST",

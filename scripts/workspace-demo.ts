@@ -289,13 +289,55 @@ try {
     kind: "supplier",
     description: "Syntetyczny dostawca — bez wysyłki",
   });
-  let purchase = await create("purchases", "Zamówienie", {
-    kind: "order",
-    description: "Demonstracyjne zamówienie",
-    supplierId: supplier.id,
+  let request = await create("purchases", "Zapotrzebowanie", {
+    kind: "request",
+    description: "Syntetyczny zakup",
     quantity: 1,
+    budgetMinor: 1000000,
+    currency: "PLN",
+    priceBasis: "gross",
+    requiredBy: today,
   });
-  purchase = await action(purchase, "placeOrder");
+  const quote = await create("purchases", "Oferta dostawcy", {
+    kind: "quote",
+    requestId: request.id,
+    expectedRequestVersion: request.version,
+    supplierId: supplier.id,
+    expectedSupplierVersion: supplier.version,
+    quoteReference: "SYNTHETIC-QUOTE",
+    description: "Syntetyczny zakup",
+    quantity: 1,
+    unitPriceMinor: 100000,
+    shippingMinor: 0,
+    currency: "PLN",
+    priceBasis: "gross",
+    validUntil: today,
+    expectedDelivery: today,
+    terms: "Syntetyczna oferta bez wysyłki",
+  });
+  request = workspace.get(operator, "purchases", request.id);
+  request = await action(request, "selectQuote", {
+    quoteId: quote.id,
+    expectedQuoteVersion: quote.version,
+    selectionReason: "Uzgodniony koszt i termin",
+  });
+  request = await action(request, "decideCost", {
+    quoteId: quote.id,
+    expectedQuoteVersion: quote.version,
+    decision: "approved",
+    note: "Jawna decyzja testowa",
+    humanDecision: true,
+  });
+  const cost = request.data.costDecision as JsonObject;
+  request = await action(request, "placeOrder", {
+    costDecisionHash: cost.hash!,
+    expectedSupplierVersion: supplier.version,
+  });
+  let purchase = workspace.get(
+    operator,
+    "purchases",
+    String(request.data.orderId),
+  );
   purchase = await action(purchase, "acknowledge", {
     supplierReference: "SYNTHETIC-PO",
     acknowledgedOn: today,
