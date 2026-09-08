@@ -19,7 +19,7 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P02    | w toku             | HTTP/run/tool/model zinstrumentowane; OTLP i Prometheus działają, zgoda zachowuje link przez restart.                                                                                         |
 | P03    | odebrane           | Minimalne kontrakty zadań, uprawnień i typowanych bramek; PR #7, 169 testów oraz odbiór głównej instalacji.                                                                                   |
 | P04    | blokada zewnętrzna | Lokalny przepływ odebrany w PR #8; rzeczywisty dostawca Claude pozostaje osobnym, niepotwierdzonym odbiorem.                                                                                  |
-| P05    | w toku             | P05a: dokładna alokacja, wydanie/zwrot przez zadanie IT, dowód i kontrola wygaśnięcia. P05b domknie ewidencję.                                                                                |
+| P05    | w toku             | P05a odebrane w PR #9; P05b domyka ewidencję, serwis i rozbieżności.                                                                                                                          |
 | P06    | do wykonania       | Pełny onboarding po P08a/P09a i bazowych profilach z P03.                                                                                                                                     |
 | P07    | do wykonania       | Pełny proces IT, certyfikat i niezależna weryfikacja.                                                                                                                                         |
 | P08    | do wykonania       | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P05a: wydanie i zwrot sprzętu przez zadanie IT.** P04 dostarczono lokalnie, z ograniczeniem odbioru rzeczywistego modelu. P01 pozostaje odebrane; P02/R09 wymaga dalszych reguł i rzeczywistego dostawcy. Aktualny worktree `/private/tmp/jarvis-equipment-custody`, gałąź `codex/equipment-custody`, baza `a21fe7cc8d1aa419a4aa44417d8de0753222186a`. Projekt: [P05](p05-design.md). Najpierw dokładna alokacja i historia, wąski dostęp wykonawcy IT, poświadczenie wydania, osobne powiązanie dowodu oraz zwrot. Dalsze P05b/P08a/P09a i pozytywny onboarding P06 pozostają osobnymi odbiorami.
+**P05b: ewidencja i inwentaryzacja wyposażenia.** P05a odebrano lokalnie w PR #9 na `7d188a41b23243f02a1908c4dc729d03b85a9e87`. Nowy worktree `/private/tmp/jarvis-asset-register`, gałąź `codex/asset-register`, od tego scalonego commitu. Rozwiniemy zamianę rezerwacji, metadane i odpowiedzialność za ewidencję, przeniesienia, serwis, wycofanie, spis z natury z rozbieżnościami i zatwierdzany import. P08a/P09a i pełny onboarding P06 pozostają kolejnymi zależnościami.
 
 ## Kontynuacja w tym zadaniu
 
@@ -109,3 +109,19 @@ Odbiór preview P05a (8.09.2026, 13:14–13:23 UTC), [PR #9](https://github.com/
 Firma B w Chrome: ta sama osoba ma jawne zadania projektów Alfa i Beta. Wybrano Betę z laptopem 2; odmowa drugiego konta w `e4be9997-f37c-48f4-a819-6a10a541c2d1` pozostawiła zero prób, obie rezerwacje i brak zdarzeń wydania. API potwierdziło odmowę pełnego HR/historii sprzętu dla IT oraz 404 dla zadania obcego tenanta. Prywatny dowód: `/private/tmp/jarvis-equipment-custody/.data/p05-preview/ui-proof.json`. Zrzuty i rzeczywista interakcja są w historii tego zadania Codex. Odbiór obejmuje wyłącznie jawnie syntetyczne dane.
 
 [CI dla `eaa2ca8`](https://github.com/artur-t-96/JARVIS/actions/runs/34231348999) zielone po poprawieniu dwóch dawnych fixture: rezerwacja modelu wskazuje sprawę, a test przyszłej migracji używa v6. Odbiór Chrome wykrył i usunął mylący opis „dowód wymaga powiązania” w zadaniu zwrotu. Czytelne podsumowanie zgody z nazwami właściwych zasobów, z technicznymi identyfikatorami w szczegółach, pozostaje pracą wspólnego panelu decyzji; obecny Core pokazuje dokładne zatwierdzane argumenty.
+
+## P05a — dostarczone wydania i zwroty
+
+[PR #9](https://github.com/artur-t-96/JARVIS/pull/9) scalono jako `7d188a41b23243f02a1908c4dc729d03b85a9e87`. Końcowe [CI PR](https://github.com/artur-t-96/JARVIS/actions/runs/34231712250) dla `be580dcfb96355e92da830b0fc030696c9d47b9a` oraz [CI main](https://github.com/artur-t-96/JARVIS/actions/runs/34231913381) zielone: **269 testów, 269 pass, 0 fail**, format, typy, build, secret scan, rzeczywisty SIGKILL oraz oba demonstratory. Demonstrator domenowy: 57 zatwierdzonych, niezależnie zweryfikowanych komend.
+
+Przed migracją zatrzymano aplikacje i zweryfikowano po sześć plików kopii: lab `/private/tmp/jarvis-before-p05a-lab-20260908T1325`, hash manifestu `3a627499afc57f5d7b84dd456dd8c592d41394bdd5c48132a3dfc4dd58f3b31f`; operational `/private/tmp/jarvis-before-p05a-operational-20260908T1325`, hash `a4ac3b940605449fa306ee3f446ee76a750eeef54a56501e0214d84f375ba5c2`. Nie wykonywano odtworzenia tych konkretnych kopii; wcześniejsze testy recovery pozostają osobnym dowodem. Zarządzane `local update` uruchomiło oba tryby na Node 22.23.0 i dokładnym scalonym SHA (8.09.2026, 13:26 UTC).
+
+Oba `/api/ready` zwracają `ready:true`. Obie Grafany mają 14 paneli, trzy źródła OK i rzeczywiste skorelowane ślady/logi: lab `4fac8dadacc6d3a717a649e9a9de7425`, operational `d120535c48a7c080569adf9ebba5bf4b`, po jednym logu. Dowód: `/Users/arturtwardowski/JARVIS/.data/local-product/p05a-oss-verification.json`. Stosy OSS nie były zatrzymywane podczas aktualizacji aplikacji; eksport modelu nadal nie jest odbiorem rzeczywistego Claude.
+
+Chrome użytkownika na głównym lab4310, 13:28–13:30 UTC: jawnie syntetyczne wydanie przez zadanie IT `3ea4a64f-074f-43fb-9c53-ef266e80e2d8`, następnie wybór konkretnego urządzenia i jego poświadczonego wydania w formularzu sprawy, binder `aba63e38-1aa5-4c63-a850-d6ca0b130573`. Obie operacje mają po jednej próbie, zgodę i pozytywną niezależną weryfikację. Panel pokazał „Potwierdzone” przy sprzęcie oraz brak dokumentu i dostępu; `ready:false`. Dane syntetyczne utworzono wyłącznie w lab, bez zmiany profilu firmy ani danych operational. Dowód: `/Users/arturtwardowski/JARVIS/.data/local-product/p05a-verification.json`. Prywatny podgląd P05 wyłączono po odbiorze. To domyka P05a; K05 pozostaje częściowe do odbioru P05b.
+
+## P05b1 — ewidencja i serwis, w odbiorze
+
+Gałąź `codex/asset-register`, baza `7d188a4`. Operations v6 dopisuje oddzielną historię każdej nowej wersji urządzenia, powiązaną z trwałym obrazem, inicjatorem i zatwierdzającym Core. Starsze dane zachowują brak historii do następnej zatwierdzonej zmiany. Nowe operacje: opiekun ewidencji, przeniesienie, serwis i wycofanie; naprawa ma poświadczenie w historii. Metadane obejmują producenta/model; lokalizacja wymaga jawnej czynności. Aktywna rezerwacja lub wydanie blokują ruch magazynowy. Zakres dalszej pracy opisuje [P05b](p05b-design.md).
+
+Lokalnie: 7 testów `asset-register`, `asset-register-migration`, `custody-api` oraz typecheck zaliczone; wcześniejszy rzeczywisty SIGKILL sprzętu także zaliczony z nową historią. Pełne CI, podgląd i odbiór głównej instalacji pozostają do wykonania.

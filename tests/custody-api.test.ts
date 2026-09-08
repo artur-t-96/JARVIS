@@ -48,6 +48,47 @@ test("task equipment API exposes one recipient and allocation to its accepted IT
     });
   try {
     const seed = await h.seed();
+    for (const endpoint of ["register", "custodians"]) {
+      assert.equal(
+        (await get(`/api/assets/${seed.assetId}/${endpoint}`)).statusCode,
+        403,
+      );
+      assert.equal(
+        (
+          await get(
+            `/api/assets/${seed.assetId}/${endpoint}`,
+            "manager",
+            "synthetic-b",
+          )
+        ).statusCode,
+        404,
+      );
+    }
+    const register = (
+      await get(
+        `/api/assets/${seed.assetId}/register?limit=1&offset=1`,
+        "manager",
+      )
+    ).json().register;
+    assert.equal(register.consistent, true);
+    assert.equal(register.total, 2);
+    assert.equal(register.events.length, 1);
+    assert.equal(register.events[0].assetVersion, 1);
+    assert.doesNotMatch(
+      JSON.stringify(register),
+      /PRIVATE_HR_|personId|allocations/,
+    );
+    for (const query of ["limit=0", "limit=101", "offset=-1", "unexpected=1"])
+      assert.equal(
+        (await get(`/api/assets/${seed.assetId}/register?${query}`, "manager"))
+          .statusCode,
+        400,
+      );
+    assert.deepEqual(
+      (await get(`/api/assets/${seed.assetId}/custodians`, "manager")).json()
+        .assignees,
+      [{ id: "manager", label: "manager" }],
+    );
     const response = await get(`/api/tasks/${seed.taskId}/equipment`);
     assert.equal(response.statusCode, 200, response.body);
     let equipment = response.json<{ equipment: TaskAssetProjection }>()

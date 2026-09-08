@@ -17,7 +17,7 @@ test("v4 custody migration rolls back completely and preserves unresolved author
     new WorkspaceStore(path).close();
     db = new DatabaseSync(path);
     db.exec(
-      "DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version=5",
+      "DROP TABLE ops_asset_register_events; DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version>=5",
     );
     for (const column of [
       "version",

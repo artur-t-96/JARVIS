@@ -284,6 +284,8 @@ export const createDataSchemas = {
       serial: short,
       location: short,
       condition: z.enum(["good", "repair"]),
+      manufacturer: short.optional(),
+      model: short.optional(),
     })
     .strict(),
   purchases: z
@@ -576,8 +578,51 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     bindAssetForTask: z
       .object({ ...taskCustodyInput, requirementId: id, issueEventId: id })
       .strict(),
+    assignCustodian: z
+      .object({
+        ...base,
+        custodianPrincipalId: principalIdSchema,
+        note: text,
+        humanConfirmed: yes,
+      })
+      .strict(),
+    move: z
+      .object({
+        ...base,
+        location: short,
+        occurredOn: date,
+        note: text,
+        humanConfirmed: yes,
+        profileVersion: z.number().int().min(0).optional(),
+      })
+      .strict(),
+    sendToService: z
+      .object({
+        ...base,
+        location: short,
+        occurredOn: date,
+        note: text,
+        humanConfirmed: yes,
+        profileVersion: z.number().int().min(0).optional(),
+      })
+      .strict(),
+    retire: z
+      .object({
+        ...base,
+        occurredOn: date,
+        note: text,
+        humanConfirmed: yes,
+        profileVersion: z.number().int().min(0).optional(),
+      })
+      .strict(),
     markRepaired: z
-      .object({ ...base, note: text, humanConfirmed: yes })
+      .object({
+        ...base,
+        note: text,
+        humanConfirmed: yes,
+        occurredOn: date.optional(),
+        profileVersion: z.number().int().min(0).optional(),
+      })
       .strict(),
   },
   purchases: {
@@ -764,6 +809,8 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
       "other",
     ]),
     f("serial", "Numer seryjny"),
+    f("manufacturer", "Producent", "text", false),
+    f("model", "Model", "text", false),
     f("location", "Lokalizacja"),
     f("condition", "Stan", "select", true, ["good", "repair"]),
   ],
@@ -870,6 +917,10 @@ const actionLabels: Record<string, string> = {
   returnForTask: "Poświadcz zwrot w zadaniu IT",
   bindAssetForTask: "Powiąż poświadczone wydanie z wymaganiem",
   markRepaired: "Potwierdź naprawę",
+  assignCustodian: "Wyznacz opiekuna ewidencji",
+  move: "Poświadcz przeniesienie",
+  sendToService: "Przekaż do serwisu",
+  retire: "Wycofaj z użytkowania",
   placeOrder: "Zatwierdź lokalne zamówienie",
   acknowledge: "Zarejestruj potwierdzenie dostawcy",
   recordDelivery: "Potwierdź odbiór dostawy",
@@ -947,6 +998,8 @@ const fieldLabels: Record<string, string> = {
   returnedOn: "Data zwrotu",
   condition: "Stan",
   receiptNote: "Protokół zwrotu",
+  occurredOn: "Rzeczywisty dzień czynności",
+  custodianPrincipalId: "Opiekun ewidencji",
   supplierReference: "Numer potwierdzenia dostawcy",
   acknowledgedOn: "Data potwierdzenia",
   quantityReceived: "Odebrana ilość",
