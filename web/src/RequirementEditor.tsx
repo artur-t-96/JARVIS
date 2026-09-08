@@ -1,5 +1,7 @@
 import { Icon, Notice } from "./ui";
 import type { RequirementKind } from "./CaseReadiness";
+import { useResource } from "./hooks";
+import type { Entity } from "./types";
 
 type RequirementBase = { key: string; title: string; required: boolean };
 export type RequirementDefinition = RequirementBase &
@@ -21,7 +23,14 @@ export type RequirementDefinition = RequirementBase &
           currentVersionRequired: true;
         };
       }
-    | { kind: "access_attested"; expected: { accessKey: string } }
+    | {
+        kind: "access_attested";
+        expected: {
+          accessKey: string;
+          bundleId?: string;
+          bundleVersion?: number;
+        };
+      }
     | { kind: "delivery_received"; expected: { purchaseId?: string } }
     | { kind: "test_passed"; expected: { testKey: string } }
   );
@@ -117,6 +126,11 @@ export function RequirementEditor({
   disabled?: boolean;
   onboarding?: boolean;
 }) {
+  const bundles = useResource<{ items: Entity[] }>(
+    value.some((r) => r.kind === "access_attested")
+      ? "/api/workspace/it"
+      : null,
+  );
   const change = (index: number, next: RequirementDefinition) =>
     onChange(value.map((item, i) => (i === index ? next : item)));
   return (
@@ -239,22 +253,79 @@ export function RequirementEditor({
                 </>
               )}
               {item.kind === "access_attested" && (
-                <label className="field wide">
-                  <span>Wymagany dostęp</span>
-                  <input
-                    required
-                    maxLength={80}
-                    pattern="[a-z](?:[a-z0-9_.]|-){0,79}"
-                    value={item.expected.accessKey}
-                    onChange={(event) =>
-                      setExpected("accessKey", event.target.value)
-                    }
-                  />
-                  <small>
-                    Nazwa dostępu, np. employee-workspace. Miejsce licencji nie
-                    potwierdza nadania dostępu.
-                  </small>
-                </label>
+                <>
+                  <label className="field wide">
+                    <span>Wymagany dostęp</span>
+                    <input
+                      required
+                      maxLength={80}
+                      pattern="[a-z](?:[a-z0-9_.]|-){0,79}"
+                      value={item.expected.accessKey}
+                      onChange={(event) =>
+                        setExpected("accessKey", event.target.value)
+                      }
+                    />
+                    <small>
+                      Nazwa dostępu, np. employee-workspace. Miejsce licencji
+                      nie potwierdza nadania dostępu.
+                    </small>
+                  </label>
+                  <label className="field wide">
+                    <span>Zatwierdzony zestaw aplikacji i ról</span>
+                    <select
+                      value={
+                        item.expected.bundleId &&
+                        bundles.data?.items.some(
+                          (b) =>
+                            b.id === item.expected.bundleId &&
+                            b.version === item.expected.bundleVersion,
+                        )
+                          ? item.expected.bundleId
+                          : ""
+                      }
+                      onChange={(event) => {
+                        const bundle = bundles.data?.items.find(
+                          (b) => b.id === event.target.value,
+                        );
+                        change(index, {
+                          ...item,
+                          expected: bundle
+                            ? {
+                                accessKey: String(bundle.data.accessKey),
+                                bundleId: bundle.id,
+                                bundleVersion: bundle.version,
+                              }
+                            : { accessKey: item.expected.accessKey },
+                        });
+                      }}
+                    >
+                      <option value="">Brak przypisanej konfiguracji</option>
+                      {bundles.data?.items
+                        .filter(
+                          (b) =>
+                            b.data.kind === "access_bundle" &&
+                            b.status === "active",
+                        )
+                        .map((b) => (
+                          <option key={b.id} value={b.id}>
+                            {b.title} · {String(b.data.accessKey)} · wersja{" "}
+                            {b.version}
+                          </option>
+                        ))}
+                    </select>
+                    <small>
+                      {item.expected.bundleId
+                        ? `Zapisany zestaw: ${item.expected.bundleId}, wersja ${item.expected.bundleVersion}.`
+                        : "Bez zestawu JARVIS pozostawi dostęp jako niepotwierdzony."}
+                    </small>
+                    {bundles.error && (
+                      <Notice>
+                        Nie można pobrać katalogu zestawów. Zapisane
+                        ograniczenia są zachowane.
+                      </Notice>
+                    )}
+                  </label>
+                </>
               )}
               {item.kind === "delivery_received" && (
                 <p className="small muted wide">

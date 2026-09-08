@@ -177,7 +177,9 @@ export function ReadinessCard({
                     </details>
                   ) : (
                     <p className="small muted">
-                      Brak dostępnego powiązania źródłowego.
+                      {requirement.kind === "access_attested"
+                        ? "Poświadcz wszystkie pozycje zestawu i powiąż dowód w sekcji dostępów tej sprawy."
+                        : "Brak dostępnego powiązania źródłowego."}
                     </p>
                   )}
                   {onBind && kind?.module && (

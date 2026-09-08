@@ -7,6 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { WorkspaceStore } from "../src/workspace.js";
 import type { Principal } from "../src/contracts.js";
+import { operationsV7 } from "./helpers/operations-v7.js";
 
 const now = "2026-09-08T10:00:00.000Z";
 test("v4 custody migration rolls back completely and preserves unresolved authors, periods and physical facts", async () => {
@@ -14,8 +15,7 @@ test("v4 custody migration rolls back completely and preserves unresolved author
     path = join(directory, "operations.sqlite");
   let store: WorkspaceStore | undefined, db: DatabaseSync | undefined;
   try {
-    new WorkspaceStore(path).close();
-    db = new DatabaseSync(path);
+    db = operationsV7(path);
     db.exec(
       "DROP TABLE ops_asset_register_events; DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version>=5",
     );

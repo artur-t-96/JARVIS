@@ -1,4 +1,5 @@
 import { custodyPins } from "./helpers/custody-pins.js";
+import { operationsV7 } from "./helpers/operations-v7.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -557,8 +558,7 @@ test("independent verification reads actual episode and allocation rows, not onl
 test("v3 migration pins only unambiguous lifecycle cases and preserves unresolved resource links", () => {
   const directory = mkdtempSync(join(tmpdir(), "jarvis-episode-migration-")),
     path = join(directory, "workspace.db");
-  new WorkspaceStore(path).close();
-  let db = new DatabaseSync(path);
+  let db = operationsV7(path);
   db.exec(
     "DROP TABLE ops_asset_register_events; DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version>=5",
   );
@@ -734,7 +734,7 @@ test("v3 migration pins only unambiguous lifecycle cases and preserves unresolve
       db
         .prepare("SELECT max(version) AS n FROM schema_versions_operations")
         .get()!.n,
-      7,
+      8,
     );
   } finally {
     db.close();

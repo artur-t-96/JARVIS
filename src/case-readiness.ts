@@ -4,6 +4,7 @@ import { z } from "zod";
 import { DomainError, type JsonObject, type ToolContext } from "./contracts.js";
 import type { Entity } from "./workspace.js";
 import { readIssuedAllocationProof } from "./asset-custody.js";
+import { AccessRegister } from "./access-register.js";
 
 const uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -51,8 +52,18 @@ export const caseRequirementDefinitionSchema = z.discriminatedUnion("kind", [
       ...base,
       kind: z.literal("access_attested"),
       expected: z
-        .object({ accessKey: z.string().regex(/^[a-z][a-z0-9_.-]{0,79}$/) })
-        .strict(),
+        .object({
+          accessKey: z.string().regex(/^[a-z][a-z0-9_.-]{0,79}$/),
+          bundleId: uuid.optional(),
+          bundleVersion: z.number().int().positive().optional(),
+        })
+        .strict()
+        .refine(
+          (value) =>
+            (value.bundleId === undefined) ===
+            (value.bundleVersion === undefined),
+          "Zestaw wymaga identyfikatora i wersji.",
+        ),
     })
     .strict(),
   z
@@ -303,7 +314,23 @@ export class CaseReadinessStore {
             "Nie można usunąć obowiązkowego sprzętu, dokumentu ani dostępu z onboardingu.",
           );
     }
-    for (const item of proposed)
+    for (const item of proposed) {
+      if (
+        item.kind === "access_attested" &&
+        item.expected.bundleId &&
+        item.expected.bundleVersion
+      ) {
+        const bundle = new AccessRegister(this.db).bundle(
+          tenant,
+          item.expected.bundleId,
+          item.expected.bundleVersion,
+        );
+        if (bundle.data.accessKey !== item.expected.accessKey)
+          error(
+            "ACCESS_BUNDLE_MISMATCH",
+            "Zestaw nie odpowiada wymaganemu kluczowi dostępu.",
+          );
+      }
       this.db
         .prepare(
           "INSERT INTO ops_case_requirements VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -325,6 +352,7 @@ export class CaseReadinessStore {
           actor,
           now,
         );
+    }
   }
   bindings(
     tenant: string,
@@ -360,7 +388,8 @@ export class CaseReadinessStore {
     requirement: CaseRequirement,
     module: string,
     id: string,
-    assetPin?: { allocationId?: string; issueEventId?: string },
+    assetPin: { allocationId?: string; issueEventId?: string } | undefined,
+    now: string,
   ) {
     const r = this.db
       .prepare(
@@ -383,6 +412,18 @@ export class CaseReadinessStore {
         allocationId: assetPin.allocationId,
         issueEventId: assetPin.issueEventId,
       });
+    } else if (requirement.kind === "access_attested" && module === "it") {
+      if (id !== requirement.expected.bundleId)
+        error(
+          "ACCESS_BUNDLE_MISMATCH",
+          "Źródło nie jest zestawem wymaganym przez sprawę.",
+        );
+      return new AccessRegister(this.db).assessment(
+        tenant,
+        requirement.caseId,
+        requirement.id,
+        now,
+      );
     } else if (
       requirement.kind === "document_approved" &&
       module === "documents"
@@ -472,6 +513,7 @@ export class CaseReadinessStore {
       sourceVersion: number;
       allocationId?: string;
       issueEventId?: string;
+      accessProofHash?: string;
     },
     now: string,
   ) {
@@ -491,6 +533,7 @@ export class CaseReadinessStore {
       input.sourceModule,
       input.sourceId,
       input,
+      now,
     );
     if (source.version !== input.sourceVersion)
       error(
@@ -519,6 +562,15 @@ export class CaseReadinessStore {
           "Poświadczone wydanie nie spełnia warunku właściwej osoby, współpracy, sprawy i stanu urządzenia.",
         );
     }
+    if (
+      requirement.kind === "access_attested" &&
+      (input.accessProofHash !== source.hash ||
+        source.identity.current !== true)
+    )
+      error(
+        "ACCESS_PROOF_CHANGED",
+        "Wymagane aktualne poświadczenia wszystkich pozycji zestawu i zgoda na dokładny odczyt dowodu.",
+      );
     const existing = this.bindings(
       ctx.tenantId,
       e.id,
@@ -635,23 +687,14 @@ export class CaseReadinessStore {
             reason: "Warunek wskazuje inną osobę lub współpracę.",
             nextAction: "Przygotuj prawidłową rewizję zakresu.",
           };
-        if (
-          ["access_attested", "delivery_received", "test_passed"].includes(
-            requirement.kind,
-          )
-        )
+        if (["delivery_received", "test_passed"].includes(requirement.kind))
           return {
             ...result,
-            reason:
-              requirement.kind === "access_attested"
-                ? "Brak właściwego rejestru poświadczeń dostępu. Miejsce licencji nie jest dostępem."
-                : "Właściwy odczyt źródła nie jest jeszcze dostępny.",
+            reason: "Właściwy odczyt źródła nie jest jeszcze dostępny.",
             nextAction:
-              requirement.kind === "access_attested"
-                ? "Wymagane niezależne poświadczenie dostępu dla tej współpracy."
-                : requirement.kind === "delivery_received"
-                  ? "Wymagane potwierdzenie odbioru we właściwym rejestrze dostaw."
-                  : "Wymagany niezależny wynik testu.",
+              requirement.kind === "delivery_received"
+                ? "Wymagane potwierdzenie odbioru we właściwym rejestrze dostaw."
+                : "Wymagany niezależny wynik testu.",
           };
         const binding = bindings.find(
           (item) => item.requirementId === requirement.id,
@@ -674,6 +717,7 @@ export class CaseReadinessStore {
                   ? binding.sourceIdentity.issueEventId
                   : undefined,
             },
+            now,
           );
         } catch {
           return {
@@ -705,6 +749,15 @@ export class CaseReadinessStore {
           };
         const expected = requirement.expected,
           value = source.identity;
+        if (requirement.kind === "access_attested" && value.current !== true)
+          return {
+            ...result,
+            status: "failed",
+            reason:
+              "Nie wszystkie wymagane aplikacje i role mają aktualne poświadczenie oraz wymaganą licencję.",
+            nextAction:
+              "Sprawdź i poświadcz brakujące dostępy właściwej współpracy.",
+          };
         if (requirement.kind === "asset_issued") {
           if (
             value.status !== "issued" ||

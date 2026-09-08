@@ -7,14 +7,14 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { WorkspaceStore } from "../src/workspace.js";
 import type { Principal } from "../src/contracts.js";
+import { operationsV7 } from "./helpers/operations-v7.js";
 
 test("v5 register migration rolls back and starts legacy history at the next approved version without inventing earlier facts", async () => {
   const directory = mkdtempSync(join(tmpdir(), "jarvis-register-v5-")),
     path = join(directory, "operations.sqlite");
   let db: DatabaseSync | undefined, store: WorkspaceStore | undefined;
   try {
-    new WorkspaceStore(path).close();
-    db = new DatabaseSync(path);
+    db = operationsV7(path);
     db.exec(
       "DROP TABLE ops_asset_register_events; DELETE FROM schema_versions_operations WHERE version>=6",
     );

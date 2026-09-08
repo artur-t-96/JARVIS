@@ -161,3 +161,25 @@ Weryfikacja lokalna: 18 ukierunkowanych testów (w tym dwie rzeczywiste próby S
 PR [#13](https://github.com/artur-t-96/JARVIS/pull/13), kod `c52df06436f0d6a13a9bb23aaf93b6ce8e200740`, [CI 34238905035](https://github.com/artur-t-96/JARVIS/actions/runs/34238905035) zielone. W Chrome wykonano formularz → plan → uruchomienie → zgoda innego konta → zweryfikowany wynik → otwarcie nowej sztuki. Wykonanie firmy A `592e10ef-e9a4-41ed-a416-ccf195caa39b`, API firmy B `a2b06aa4-6010-4aed-91aa-d288c7a6c280`: po jednej próbie, zgodny operator i zatwierdzający, stare sztuki dostępne v3, nowe zarezerwowane v2, historie 3/2 spójne. Zachowane terminy UTC: A `2026-09-12T22:00:00.000Z`, B `2026-09-13T04:00:00.000Z`. Rezerwacja projektu Beta w firmie B nie zmieniła się. Odczyt wąskiego IT 403, odczyt innej firmy 404.
 
 Dowód prywatny: `/private/tmp/jarvis-reservation-replacement/.data/p05b2-preview/ui-proof.json`, 8.09.2026 14:34:22 UTC. Zrzuty rzeczywistego Chrome obejmują formularz, nowy rekord, termin i autorów w historii przekazań. To odbiór gałęzi; aktualizacja głównej instalacji pozostaje kolejnym krokiem.
+
+### P05b2 — dostarczone lokalnie
+
+PR #13 scalony jako `d05d65aeeacd4989ecf1234a0b404453836c8702`; końcowe CI PR 34239244077 oraz main 34239470496 zielone (286 testów i pełne bramki). Instalacja zarządzana z 8.09.2026 14:37:57 UTC, Node 22.23.0. Laboratorium 4310 oraz tryb operacyjny 4320 serwują dokładnie ten SHA, provider pozostaje wyłączony.
+
+Rzeczywisty Chrome na scalonej wersji: run `25546051-6105-4eb0-9f59-b0d17e8694d0`, jedna próba, niezależna weryfikacja. Stary laptop `a4d6382e-9f60-4279-9a2a-47d4e2525b18` dostępny v3, nowy `a3915838-c448-4087-ba52-10869156dfcc` zarezerwowany v2; historie 3/2 spójne, termin `2026-09-12T22:00:00.000Z`, brak poświadczenia fizycznego wydania. Dawny dowód sprzętowy P05a nadal spełnia swój warunek. Dowód: `.data/local-product/p05b2-verification.json`.
+
+OSS obu środowisk: 14 paneli, Prometheus/Loki/Jaeger OK, metryka workera i skorelowany log/trace z SHA `d05d65a`. Ślady: lab `1b92351e3ba4d65af6c1efad8e142286`, operational `c066f7735c29706901fbaf3bbf5c03c5`; `.data/local-product/p05b2-oss-verification.json`.
+
+Backup przed aktualizacją (6 plików, konta osobno): `/private/tmp/jarvis-before-p05b2-lab-20260908T1438`, manifest `e87e17fc8398d1a12b67781695d6ba4c89d9eb148db3f18070b2726bfb94bead`; operational analogicznie `/private/tmp/jarvis-before-p05b2-operational-20260908T1438`, manifest `fdf36094a3c4928dcba01517aecd5235bb7612d5e263e3249ba2eb343ddcc506`. Podgląd dodatkowo odtworzono do pustego `/private/tmp/jarvis-p05b2-restored-20260908T1436`, manifest `4b0a5734d997fc5316cd5210a4387fb228a6df4ac54674c8f49d91fe3c4795fe`: dwie pary historii i replay bez kolejnego skutku.
+
+Następna aktywna paczka: P08a — wymagane dostępy i poświadczenia dla współpracy, następnie P09a i pełny onboarding P06. Spis i import P05b pozostają w końcowym zakresie K05, z powrotem po domknięciu demonstratora onboardingu.
+
+## P08a1 — katalog i poświadczenia dostępu: odbiór podglądu
+
+Implementacja w [PR #14](https://github.com/artur-t-96/JARVIS/pull/14), źródło `7d53b113ab77b15d78d37569e111122feae94c0a`. [CI 34243817006](https://github.com/artur-t-96/JARVIS/actions/runs/34243817006) zaliczyło 300 testów, skan sekretów, formatowanie, typy, build oraz oba demonstratory. Dziewięć scenariuszy domenowych obejmuje pełny zestaw, brak roli/licencji, odnowienie, cofnięcie, dwie firmy, równoległe projekty, utratę uprawnień, naruszenie historii i konflikt żądań. Hosted CI potwierdziło również API, migrację z zapisanego schematu v7 oraz rzeczywisty SIGKILL po utworzeniu, odnowieniu i cofnięciu poświadczenia.
+
+Chrome na odseparowanym podglądzie `a9c2021` wykonał formularz poświadczenia dostępu z konkretnym miejscem licencji (`b1a597ea-1d59-48ba-819e-529736735f32`) i osobne powiązanie pełnego zestawu (`f9284d4d-b248-4294-8218-b05c946ca304`). Obie operacje mają jedną próbę, pozytywną weryfikację i osobne konto zatwierdzającego. Formularze katalogu utworzyły aplikację (`0c41f6e2-759d-4ae9-817f-c7caf7c8fb5c`) i zestaw (`9a8e94ca-047e-4ca0-a655-4fba48839fbc`). Zrzuty i AX potwierdziły wynik: dostęp spełniony, cały onboarding nadal zablokowany. API sprawdziło drugą firmę i jej dwa projekty, 403 wąskiego IT oraz 404 dla obcej firmy.
+
+Podgląd zatrzymano przed kopią. Backup `/private/tmp/jarvis-p08a1-backup-20260908T1520`, odtworzenie `/private/tmp/jarvis-p08a1-restored-20260908T1520`, manifest `2d4926e93c347415ea2182c7c3f5ebc2ac7b3ac8349cd3b2e0111c9d745431cb`. Rzeczywisty restore zachował sześć poświadczeń i powiązania trzech współprac; ponowny odczyt sześciu zapisanych poleceń nie dodał skutku. Konta pozostają poza tym pakietem kopii i nie zostały odtworzone.
+
+Źródła odbioru: `.data/p08a-preview/ui-proof.json`, `http-proof.ts`, `restore-proof.ts` i zapis CI w worktree paczki. Aktualizacja głównego lab/operational i sprawdzenie dokładnego SHA pozostają oddzielnym krokiem dostarczenia. P08a2 — wąskie zadanie IT — jest następnym przyrostem; P09a i P06 nadal otwarte. Nie wykonano połączeń ani zmian w zewnętrznych aplikacjach.

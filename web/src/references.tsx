@@ -38,6 +38,7 @@ export const optionLabels: Record<string, string> = {
   offer: "Oferta",
   vacancy: "Rekrutacja",
   application: "Aplikacja",
+  access_bundle: "Zestaw dostępów",
   policy: "Polityka / procedura",
   contract: "Umowa",
   report: "Raport",

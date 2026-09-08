@@ -152,6 +152,8 @@ Projekt kontraktów, migracji, minimalnego zakresu i zależności: [P03 — spra
 
 **P08a przed P06:** minimalny rejestr wymaganych dostępów, poświadczenie dla właściwej osoby/współpracy oraz powiązanie miejsca licencji, jeśli wymaga go szablon. Zależności: P03–P05. Pełny obieg zakupowy poniżej może zostać domknięty później.
 
+P08a dostarczamy w dwóch przyrostach: P08a1 — katalog aplikacji, wersjonowane zestawy, poświadczenia i odczyt dowodów przez operatora sprawy; P08a2 — ten sam proces przez wąsko uprawnione zadanie IT. Odnowienie i cofnięcie mają własne zgody i historię. [Kontrakty i kryteria](p08a-design.md) obowiązują oba przyrosty; sam P08a1 nie zamyka tej zależności onboardingu.
+
 - Zapotrzebowanie, wersje ofert dostawców, porównanie, zgoda kosztowa i własna ewidencja zamówienia.
 - Częściowe dostawy, braki, różnice względem zamówienia i potwierdzenie przyjęcia. Każdy dokument/pozycja przyjęcia ma biznesową tożsamość; ponowne zgłoszenie tej samej dostawy z nowym kluczem komendy nie zwiększa ilości ani liczby urządzeń. Dopiero przyjęta pozycja może tworzyć dostępne wyposażenie.
 - Licencje: umowa/okres, miejsca, przydziały, właściciele, terminy i koszt w walucie. Przydział miejsca oraz potwierdzenie dostępu do usługi są osobnymi faktami.
