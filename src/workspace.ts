@@ -2510,14 +2510,22 @@ export class WorkspaceStore {
     ].sort())
       integrity("cases", id);
     fingerprints.push({ module: "it", rowsHash: digest(grants) });
-    for (const g of grants.filter((g) => g.status === "active"))
+    for (const g of grants.filter((g) => g.status === "active")) {
+      const application = this.db
+        .prepare(
+          "SELECT title FROM ops_entities WHERE tenant_id=? AND module='it' AND id=?",
+        )
+        .get(tenant, String(g.application_id));
       blockers.push({
         kind: "access",
         module: "cases",
         id: String(g.case_id),
-        title: "Dostęp wymagający cofnięcia",
+        title: application
+          ? `${application.title} · ${g.role}`
+          : "Dostęp wymagający cofnięcia",
         next: "Poświadcz cofnięcie dostępu w aplikacji. Upływ ważności obserwacji nie dowodzi odebrania uprawnień.",
       });
+    }
     return {
       ready: blockers.length === 0,
       blockers,

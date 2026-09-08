@@ -94,3 +94,44 @@ test("cancellation explains outstanding resources and requires an explicit state
   assert.match(history, /reviewer/);
   assert.ok(!history.includes("Przygotuj anulowanie"));
 });
+
+test("cancelled case evidence stays visible without instructions to finish or bind new work", async () => {
+  const { ReadinessCard } = await tsImport("../web/src/CaseReadiness.tsx", {
+    parentURL: import.meta.url,
+    tsconfig: fileURLToPath(new URL("../tsconfig.web.json", import.meta.url)),
+  });
+  const html = renderToStaticMarkup(
+    createElement(ReadinessCard, {
+      historical: true,
+      onBind() {},
+      readiness: {
+        scopeRevision: 2,
+        ready: false,
+        acceptanceCurrent: false,
+        taskBlockers: ["Ukończ zadanie kierownika"],
+        requirements: [
+          {
+            id: "doc",
+            kind: "document_approved",
+            title: "Historyczna umowa",
+            required: true,
+            status: "stale",
+            reason: "Źródło zmieniło wersję",
+            nextAction: "Przygotuj nową rewizję",
+          },
+        ],
+      },
+    }),
+  );
+  assert.match(html, /Historia warunków odbioru/);
+  assert.match(html, /Historyczna umowa/);
+  assert.match(html, /Źródło zmieniło wersję/);
+  for (const instruction of [
+    "Ukończ zadanie",
+    "Praca do zakończenia",
+    "Wskaż źródło",
+    "Przygotuj nową rewizję",
+    "Odbiór zablokowany",
+  ])
+    assert.ok(!html.includes(instruction), instruction);
+});

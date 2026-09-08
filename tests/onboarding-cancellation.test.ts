@@ -148,6 +148,13 @@ test("cancellation requires returns, revoked licences and explicit access remova
       "license",
     ]);
     assert.ok(!o.cancellation!.blockers.some((x) => x.id === b.assetId));
+    assert.deepEqual(
+      o
+        .cancellation!.blockers.filter((b) => b.kind === "access")
+        .map((b) => b.title)
+        .sort(),
+      ["Synthetic mail · member", "Synthetic wiki · reader"],
+    );
     assert.equal(o.cancellation!.command, undefined);
     const blocked = await f.stage(
       "ops.people.cancelStart",

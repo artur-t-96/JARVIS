@@ -93,7 +93,11 @@ export function OnboardingCard({
           <dd>{overview.episode.role}</dd>
         </div>
         <div>
-          <dt>Data rozpoczęcia</dt>
+          <dt>
+            {overview.episode.status === "cancelled"
+              ? "Planowana data rozpoczęcia"
+              : "Data rozpoczęcia"}
+          </dt>
           <dd>{dateLabel(overview.episode.startDate)}</dd>
         </div>
         <div>

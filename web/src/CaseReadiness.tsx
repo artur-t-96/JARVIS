@@ -68,9 +68,11 @@ const states = {
 export function ReadinessCard({
   readiness,
   onBind,
+  historical = false,
 }: {
   readiness: Readiness;
   onBind?: (requirement: CaseRequirement) => void;
+  historical?: boolean;
 }) {
   const sorted = [...readiness.requirements].sort(
     (a, b) =>
@@ -84,26 +86,32 @@ export function ReadinessCard({
             ODBIÓR BIZNESOWY · ZAKRES {readiness.scopeRevision}
           </span>
           <h2>
-            {readiness.ready
-              ? "Warunki gotowości potwierdzone"
-              : "Co blokuje odbiór"}
+            {historical
+              ? "Historia warunków odbioru"
+              : readiness.ready
+                ? "Warunki gotowości potwierdzone"
+                : "Co blokuje odbiór"}
           </h2>
           <p>
-            {readiness.acceptanceCurrent
-              ? "Odbiór odpowiada aktualnym warunkom i dowodom."
-              : readiness.ready
-                ? "Uprawniona osoba może teraz ocenić i odebrać tę rewizję."
-                : "Uzupełnij właściwe rezultaty przed przekazaniem sprawy do odbioru."}
+            {historical
+              ? "Sprawa jest anulowana. Powiązane źródła pokazują obecny stan dowodów; nie wymagają dalszej pracy w tej sprawie."
+              : readiness.acceptanceCurrent
+                ? "Odbiór odpowiada aktualnym warunkom i dowodom."
+                : readiness.ready
+                  ? "Uprawniona osoba może teraz ocenić i odebrać tę rewizję."
+                  : "Uzupełnij właściwe rezultaty przed przekazaniem sprawy do odbioru."}
           </p>
         </div>
-        <span
-          className={`readiness-indicator ${readiness.ready ? "confirmed" : "attention"}`}
-        >
-          <Icon name={readiness.ready ? "check" : "alert"} size={18} />
-          {readiness.ready ? "Gotowe do oceny" : "Odbiór zablokowany"}
-        </span>
+        {!historical && (
+          <span
+            className={`readiness-indicator ${readiness.ready ? "confirmed" : "attention"}`}
+          >
+            <Icon name={readiness.ready ? "check" : "alert"} size={18} />
+            {readiness.ready ? "Gotowe do oceny" : "Odbiór zablokowany"}
+          </span>
+        )}
       </div>
-      {(readiness.taskBlockers ?? []).length > 0 && (
+      {!historical && (readiness.taskBlockers ?? []).length > 0 && (
         <div className="readiness-task-blockers">
           <strong>Praca do zakończenia</strong>
           <ul>
@@ -138,7 +146,8 @@ export function ReadinessCard({
                     </span>
                   </div>
                   <p>{requirement.reason}</p>
-                  {requirement.status !== "satisfied" &&
+                  {!historical &&
+                    requirement.status !== "satisfied" &&
                     requirement.nextAction && (
                       <p className="requirement-next">
                         <strong>Następny krok:</strong> {requirement.nextAction}
@@ -177,12 +186,12 @@ export function ReadinessCard({
                     </details>
                   ) : (
                     <p className="small muted">
-                      {requirement.kind === "access_attested"
+                      {!historical && requirement.kind === "access_attested"
                         ? "Poświadcz wszystkie pozycje zestawu i powiąż dowód w sekcji dostępów tej sprawy."
                         : "Brak dostępnego powiązania źródłowego."}
                     </p>
                   )}
-                  {onBind && kind?.module && (
+                  {!historical && onBind && kind?.module && (
                     <button
                       className="button secondary"
                       onClick={() => onBind(requirement)}
@@ -400,6 +409,7 @@ export function CaseReadiness({
   );
   const [binding, setBinding] = useState<CaseRequirement | null>(null);
   const allowed =
+    item.status !== "cancelled" &&
     context.principal.roles.includes("operator") &&
     context.tools.some((tool) => tool.id === "ops.cases.bindEvidence");
   if (resource.error)
@@ -420,6 +430,7 @@ export function CaseReadiness({
       )}
       <ReadinessCard
         readiness={resource.data.readiness}
+        historical={item.status === "cancelled"}
         onBind={allowed ? setBinding : undefined}
       />
     </>

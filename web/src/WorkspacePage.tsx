@@ -692,8 +692,12 @@ export function WorkspacePage({
   const [copyMessage, setCopyMessage] = useState("");
   const closeForm = useCallback(() => setForm(null), []);
   const allowed = context.principal.roles.includes("operator");
+  const cancelledCase =
+    detail.data?.item.module === "cases" &&
+    detail.data.item.status === "cancelled";
   const allowedTool = (action: string) =>
     allowed &&
+    (!cancelledCase || action === "create") &&
     context.tools.some((tool) => tool.id === `ops.${module.id}.${action}`);
   const create = () =>
     setForm({
@@ -900,11 +904,14 @@ export function WorkspacePage({
                 <aside>
                   <section className="card">
                     <div className="card-heading">
-                      <h2>Kolejny krok</h2>
+                      <h2>
+                        {cancelledCase ? "Historia sprawy" : "Kolejny krok"}
+                      </h2>
                     </div>
                     <p className="muted">
-                      Wybierz operację. JARVIS przygotuje jej zakres do
-                      sprawdzenia.
+                      {cancelledCase
+                        ? "Sprawa jest anulowana. Historia pozostaje dostępna; nowa potrzeba wymaga osobnej sprawy."
+                        : "Wybierz operację. JARVIS przygotuje jej zakres do sprawdzenia."}
                     </p>
                     <div className="action-list">
                       {module.actions

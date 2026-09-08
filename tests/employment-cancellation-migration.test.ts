@@ -9,8 +9,8 @@ import { migrateDatabase } from "../src/migrations.js";
 
 test("v11 preserves historical employment and access foreign keys and permits a fresh start after cancellation", () => {
   const dir = mkdtempSync(join(tmpdir(), "jarvis-employment-v11-")),
-    path = join(dir, "operations.sqlite"),
-    db = new DatabaseSync(path);
+    path = join(dir, "operations.sqlite");
+  let db = new DatabaseSync(path);
   try {
     db.exec(
       readFileSync(
@@ -40,6 +40,10 @@ test("v11 preserves historical employment and access foreign keys and permits a 
       events = db.prepare("SELECT * FROM ops_access_events").all();
     new WorkspaceStore(path).close();
     new WorkspaceStore(path).close();
+    // Inspect the installed schema through a fresh connection after external DDL.
+    db.close();
+    db = new DatabaseSync(path);
+    db.exec("PRAGMA foreign_keys=ON");
     assert.deepEqual(
       db
         .prepare("SELECT * FROM ops_employment")
