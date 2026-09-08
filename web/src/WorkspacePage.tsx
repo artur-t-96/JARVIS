@@ -25,6 +25,12 @@ import { DocumentTemplate } from "./DocumentTemplate";
 import { CaseReadiness } from "./CaseReadiness";
 import { HumanTasks } from "./HumanTasks";
 import {
+  AllocationSelect,
+  allocationActions,
+  allocationSelection,
+  type CustodyAllocation,
+} from "./AssetCustody";
+import {
   RequirementEditor,
   cloneRequirementDefinitions,
   type RequirementDefinition,
@@ -32,6 +38,7 @@ import {
 import { EngagementSelect } from "./EngagementSelect";
 import {
   EmploymentPeriodSelect,
+  employmentPeriodLabel,
   useEmploymentPeriods,
 } from "./EmploymentPeriodSelect";
 import {
@@ -95,6 +102,24 @@ function CommandForm({
   }, [definitions.data, editRequirements, requirementsEdited]);
   const needsPeriod =
     !spec.dataForm && requiresEmploymentPeriod(module.id, spec.action);
+  const needsAllocation =
+    module.id === "assets" &&
+    !spec.dataForm &&
+    allocationActions.includes(spec.action);
+  const custody = useResource<{
+    custody: { assetId: string; allocations: CustodyAllocation[] };
+  }>(
+    needsAllocation && spec.entity
+      ? `/api/assets/${encodeURIComponent(spec.entity.id)}/custody?limit=1&offset=0`
+      : null,
+  );
+  const allocations =
+    custody.data?.custody.assetId === spec.entity?.id
+      ? (custody.data?.custody.allocations ?? [])
+      : [];
+  const selectedAllocation = allocations.find(
+    (entry) => entry.id === values.allocationId,
+  );
   const revisesPeriodDate =
     module.id === "cases" &&
     spec.action === "revise" &&
@@ -144,6 +169,26 @@ function CommandForm({
     setError("");
     const periodInput: Record<string, unknown> = {};
     try {
+      if (needsAllocation) {
+        if (custody.loading || custody.error)
+          throw new Error(
+            "Odczytaj aktualne przydziały przed przygotowaniem operacji.",
+          );
+        Object.assign(
+          periodInput,
+          allocationSelection(allocations, spec.action, values.allocationId),
+        );
+        if (
+          spec.action === "issue" &&
+          (values.personId !== selectedAllocation?.personId ||
+            values.employmentEpisodeId !==
+              selectedAllocation?.employmentEpisodeId ||
+            values.caseId !== selectedAllocation?.caseId)
+        )
+          throw new Error(
+            "Wybierz ponownie przydział. Powiązanie odbiorcy i współpracy uległo zmianie.",
+          );
+      }
       if (needsPeriod || revisesPeriodDate) {
         if (periods.loading || periods.error)
           throw new Error(
@@ -171,6 +216,8 @@ function CommandForm({
     for (const field of spec.fields) {
       if (
         field.key === "expectedEpisodeVersion" ||
+        (needsAllocation &&
+          ["allocationId", "expectedAllocationVersion"].includes(field.key)) ||
         (needsPeriod && field.key === "employmentEpisodeId")
       )
         continue;
@@ -205,6 +252,52 @@ function CommandForm({
     }
   }
   function fieldInput(field: Field) {
+    if (needsAllocation && field.key === "allocationId")
+      return (
+        <AllocationSelect
+          allocations={allocations}
+          action={spec.action}
+          selectedId={String(values.allocationId ?? "")}
+          disabled={busy || custody.loading || Boolean(custody.error)}
+          onSelect={(allocation) =>
+            setValues((current) => ({
+              ...current,
+              allocationId: allocation?.id ?? "",
+              personId: allocation?.personId ?? "",
+              employmentEpisodeId: allocation?.employmentEpisodeId ?? "",
+              caseId: allocation?.caseId ?? "",
+              humanConfirmed: false,
+            }))
+          }
+        />
+      );
+    if (
+      needsAllocation &&
+      spec.action === "issue" &&
+      ["personId", "employmentEpisodeId", "caseId"].includes(field.key)
+    )
+      return (
+        <div className="field">
+          <span>{referenceLabel(field.key, field.label)}</span>
+          <p>
+            {!selectedAllocation
+              ? "Najpierw wybierz przydział"
+              : field.key === "personId"
+                ? (selectedAllocation.recipientLabel ??
+                  refs.label("personId", selectedAllocation.personId))
+                : field.key === "employmentEpisodeId"
+                  ? selectedPeriod
+                    ? employmentPeriodLabel(selectedPeriod)
+                    : periods.loading
+                      ? "Pobieranie współpracy…"
+                      : "Współpraca niedostępna lub nieaktywna"
+                  : refs.label("caseId", selectedAllocation.caseId)}
+          </p>
+          {field.key === "employmentEpisodeId" && periods.error && (
+            <Notice tone="error">{periods.error}</Notice>
+          )}
+        </div>
+      );
     if (field.key === "engagementRef")
       return (
         <EngagementSelect
@@ -405,6 +498,9 @@ function CommandForm({
           {definitions.error && (
             <Notice tone="error">{definitions.error}</Notice>
           )}
+          {needsAllocation && custody.error && (
+            <Notice tone="error">{custody.error}</Notice>
+          )}
           {revisesPeriodDate && periods.error && (
             <Notice tone="error">{periods.error}</Notice>
           )}
@@ -434,6 +530,7 @@ function CommandForm({
               .filter(
                 (field) =>
                   field.key !== "expectedEpisodeVersion" &&
+                  field.key !== "expectedAllocationVersion" &&
                   !(editRequirements && field.key === "requirements"),
               )
               .map((field) => (
@@ -497,6 +594,10 @@ function CommandForm({
             className="button primary"
             disabled={
               busy ||
+              (needsAllocation &&
+                (custody.loading ||
+                  Boolean(custody.error) ||
+                  !selectedAllocation)) ||
               ((needsPeriod || revisesPeriodDate) &&
                 (periods.loading || Boolean(periods.error))) ||
               (needsPeriod && !selectedPeriod) ||
@@ -705,6 +806,10 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            !(
+                              module.id === "assets" &&
+                              action.id.endsWith("ForTask")
+                            ) &&
                             !(
                               module.id === "cases" &&
                               [

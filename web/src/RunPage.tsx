@@ -7,7 +7,8 @@ import { Badge, Icon, JsonView, Loading, Notice } from "./ui";
 export const isHumanTaskOperation = (toolId: string) =>
   /^ops\.cases\.(acceptTask|declineTask|transferTask|completeTask|cancelTask)$/.test(
     toolId,
-  );
+  ) ||
+  /^ops\.assets\.(issueForTask|returnForTask|bindAssetForTask)$/.test(toolId);
 
 const eventLabels: Record<string, string> = {
   plan_created: "Przygotowano plan",

@@ -353,6 +353,36 @@ export type DomainCreateData = {
 };
 export const moduleIds = Object.keys(createDataSchemas) as ModuleId[];
 const base = { id, expectedVersion: z.number().int().min(1) };
+const allocationInput = {
+  allocationId: id,
+  expectedAllocationVersion: z.number().int().positive(),
+};
+const custodyEpisodeInput = { ...resourceEpisodeInput, caseId: id };
+const taskCustodyInput = {
+  ...base,
+  ...allocationInput,
+  ...custodyEpisodeInput,
+  taskId: id,
+  expectedTaskVersion: z.number().int().positive(),
+  expectedCaseVersion: z.number().int().positive(),
+  scopeRevision: z.number().int().positive(),
+  scopeHash: z.string().regex(/^[a-f0-9]{64}$/),
+  allocationCaseId: id,
+};
+const issueAttestation = {
+  issuedOn: date,
+  location: short,
+  condition: z.enum(["good", "repair"]),
+  handoverNote: text,
+  humanConfirmed: yes,
+};
+const returnAttestation = {
+  returnedOn: date,
+  location: short,
+  condition: z.enum(["good", "repair"]),
+  receiptNote: text,
+  humanConfirmed: yes,
+};
 export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
   people: {
     startEmployment: z
@@ -494,6 +524,8 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         ]),
         sourceId: id,
         sourceVersion: z.number().int().min(1),
+        allocationId: id.optional(),
+        issueEventId: id.optional(),
       })
       .strict(),
     addEvidence: z
@@ -518,27 +550,32 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
   },
   assets: {
     reserve: z
-      .object({ ...base, ...resourceEpisodeInput, purpose: text, until: date })
+      .object({ ...base, ...custodyEpisodeInput, purpose: text, until: date })
       .strict(),
     issue: z
       .object({
         ...base,
-        ...resourceEpisodeInput,
-        issuedOn: date,
-        handoverNote: text,
-        humanConfirmed: yes,
+        ...allocationInput,
+        ...custodyEpisodeInput,
+        ...issueAttestation,
       })
       .strict(),
     return: z
-      .object({
-        ...base,
-        returnedOn: date,
-        condition: z.enum(["good", "repair"]),
-        receiptNote: text,
-        humanConfirmed: yes,
-      })
+      .object({ ...base, ...allocationInput, ...returnAttestation })
       .strict(),
-    release: z.object({ ...base, reason: text }).strict(),
+    release: z.object({ ...base, ...allocationInput, reason: text }).strict(),
+    expireReservation: z
+      .object({ ...base, ...allocationInput, reason: text })
+      .strict(),
+    issueForTask: z
+      .object({ ...taskCustodyInput, ...issueAttestation })
+      .strict(),
+    returnForTask: z
+      .object({ ...taskCustodyInput, ...returnAttestation })
+      .strict(),
+    bindAssetForTask: z
+      .object({ ...taskCustodyInput, requirementId: id, issueEventId: id })
+      .strict(),
     markRepaired: z
       .object({ ...base, note: text, humanConfirmed: yes })
       .strict(),
@@ -828,6 +865,10 @@ const actionLabels: Record<string, string> = {
   issue: "Potwierdź wydanie",
   return: "Potwierdź zwrot",
   release: "Zwolnij rezerwację",
+  expireReservation: "Zwolnij wygasłą rezerwację",
+  issueForTask: "Poświadcz wydanie w zadaniu IT",
+  returnForTask: "Poświadcz zwrot w zadaniu IT",
+  bindAssetForTask: "Powiąż poświadczone wydanie z wymaganiem",
   markRepaired: "Potwierdź naprawę",
   placeOrder: "Zatwierdź lokalne zamówienie",
   acknowledge: "Zarejestruj potwierdzenie dostawcy",
@@ -895,6 +936,14 @@ const fieldLabels: Record<string, string> = {
   purpose: "Cel rezerwacji",
   issuedOn: "Data wydania",
   handoverNote: "Protokół wydania",
+  allocationId: "Alokacja urządzenia",
+  expectedAllocationVersion: "Wersja alokacji",
+  issueEventId: "Zdarzenie poświadczonego wydania",
+  allocationCaseId: "Sprawa pierwotnej alokacji",
+  expectedCaseVersion: "Wersja sprawy",
+  scopeRevision: "Rewizja zakresu",
+  scopeHash: "Odcisk zakresu",
+  location: "Lokalizacja po przekazaniu",
   returnedOn: "Data zwrotu",
   condition: "Stan",
   receiptNote: "Protokół zwrotu",

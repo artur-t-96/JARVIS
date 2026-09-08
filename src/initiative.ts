@@ -952,14 +952,18 @@ export class InitiativeStore {
         if (
           allocation.status === "reserved" &&
           validDate(allocation.reservedUntil) &&
-          allocation.reservedUntil < today
+          (typeof allocation.expiresAt === "string"
+            ? Number.isFinite(Date.parse(allocation.expiresAt)) &&
+              this.clock() >= Date.parse(allocation.expiresAt)
+            : allocation.reservedUntil < today)
         )
           add(
             "expired_reservation",
             {
-              title: `Wygasła rezerwacja: ${entity.title}`,
-              summary:
-                "Sprawdź potrzebę rezerwacji, następnie zaplanuj zwolnienie lub ponowną rezerwację sprzętu.",
+              title: `${allocation.expiresAt ? "Wygasła rezerwacja" : "Historyczny termin do uzgodnienia"}: ${entity.title}`,
+              summary: allocation.expiresAt
+                ? "Upłynął utrwalony termin rezerwacji. Sprawdź potrzebę, następnie zaplanuj zatwierdzane zwolnienie sprzętu."
+                : "Historyczna rezerwacja nie ma utrwalonego czasu wygaśnięcia. Sprawdź właściwy termin i powiązania przed decyzją o zwolnieniu; obserwacja nie zwalnia sprzętu.",
               severity: "medium",
               dueDate: allocation.reservedUntil,
               ownerId: textValue(allocation.personId),
@@ -967,6 +971,8 @@ export class InitiativeStore {
             {
               id: allocation.id,
               reservedUntil: allocation.reservedUntil,
+              expiresAt: allocation.expiresAt ?? null,
+              allocationVersion: allocation.version ?? null,
               personId: allocation.personId,
             },
             textValue(allocation.id),

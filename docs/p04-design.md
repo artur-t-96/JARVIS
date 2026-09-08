@@ -1,6 +1,6 @@
 # P04 — kontrolowany kontekst firmy i ciągłość rozmowy
 
-Status: **implementacja P04 w toku; bez pełnego odbioru i dostarczenia paczki**. Podstawa: [roadmapa P04](roadmap.md#p04--kontekst-firmy-i-rozmowa), [odbiór](acceptance.md), odebrane minimalne kontrakty P03 z [PR #7](https://github.com/artur-t-96/JARVIS/pull/7), squash `625d42634c919b94d864d0c8b46817400bedc6ad`. Bieżący worktree `/private/tmp/jarvis-company-context`, gałąź `codex/company-context`, wymaga przed dostarczeniem rebase na scalone P03. Poniższa diagnoza luk dotyczy bazy przed implementacją P04; postęp roboczy opisano osobno. Nie jest to zgoda na uruchomienie integracji z innymi systemami.
+Status: **lokalny przepływ dostarczony w PR #8, scalony SHA `a21fe7cc8d1aa419a4aa44417d8de0753222186a`; rzeczywisty dostawca Claude oczekuje osobnego odbioru**. Podstawa: [roadmapa P04](roadmap.md#p04--kontekst-firmy-i-rozmowa) i [odbiór](acceptance.md). Końcowe CI: 250 testów; oba tryby lokalne i rzeczywisty Chrome sprawdzone. Pełne dowody i granice opisuje [dziennik](delivery-state.md#p04--lokalny-przepływ-dostarczony-dostawca-oczekuje-odbioru). Poniższa diagnoza luk opisuje bazę sprzed P04, a projekt pozostaje zapisem kontraktów. Integracje z innymi systemami pozostają wyłączone.
 
 ## 1. Konkretna luka i pierwszy rezultat
 

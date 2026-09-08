@@ -14,6 +14,7 @@ import {
 import {
   WorkspaceTasks,
   taskTablesSql,
+  migrateTaskCustody,
   type TaskContext,
   type TaskTransition,
   type TaskAction,
@@ -32,6 +33,7 @@ function fixture() {
   db.exec(`PRAGMA foreign_keys=ON;
     CREATE TABLE ops_entities(tenant_id TEXT,id TEXT,module TEXT,title TEXT,status TEXT,version INTEGER,data_json TEXT,PRIMARY KEY(tenant_id,id));
     ${taskTablesSql}`);
+  migrateTaskCustody(db);
   const caseId = randomUUID();
   for (const tenant of ["a", "b"])
     db.prepare("INSERT INTO ops_entities VALUES(?,?,?,?,?,?,?)").run(
