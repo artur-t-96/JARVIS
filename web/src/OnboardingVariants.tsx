@@ -54,7 +54,7 @@ export function OnboardingVariantsSummary({
   return (
     <div className="onboarding-variants-summary">
       {(["internal", "contractor"] as const).map((kind) => (
-        <details key={kind} className="technical-details">
+        <details key={kind} className="onboarding-variant">
           <summary>{labels[kind]} — onboarding</summary>
           <h4>Wymagane rezultaty</h4>
           <ul>

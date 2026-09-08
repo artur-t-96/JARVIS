@@ -3136,6 +3136,24 @@ tbody tr:hover {
   margin: 7px 0;
   font-size: 12px;
 }
+.onboarding-variants-summary {
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.6;
+}
+.onboarding-variant {
+  margin: 16px 0;
+}
+.onboarding-variant > summary {
+  font-size: 14px;
+  font-weight: 600;
+}
+.onboarding-variant h4 {
+  margin: 16px 0 8px;
+}
+.company-profile .onboarding-variants-summary li {
+  font-size: 14px;
+}
 .dependency-options {
   border: 1px solid var(--line);
   border-radius: 7px;
