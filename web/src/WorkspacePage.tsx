@@ -239,7 +239,9 @@ function CommandForm({
             ? { id: spec.entity.id, expectedVersion: spec.entity.version }
             : {}),
           title: String(values.title ?? "").trim(),
-          ...(spec.action === "update" ? {} : { data }),
+          ...(spec.action === "update" && module.id !== "assets"
+            ? {}
+            : { data }),
         }
       : { id: spec.entity!.id, expectedVersion: spec.entity!.version, ...data };
     try {
