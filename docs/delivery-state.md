@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P06b1: dwa warianty onboardingu w jednej firmie.** Baza: odebrany lokalnie PR #18, `830675895c289aef276303ae27c176031f286e14`. Worktree `/private/tmp/jarvis-onboarding-variants`, gałąź `codex/onboarding-variants`. Wersjonowane zadania i wymagania pracownika/konsultanta, zgodność starszych profili, zmiana terminu bez dziedziczenia potwierdzeń. Następnie P06b2: jawne anulowanie przed startem i rozliczenie zasobów. [Projekt i macierz P06](p06-design.md). Spis z natury oraz import P05b pozostają otwarte.
+**P06b1: końcowy odbiór dostawy PR #19.** Warianty obu rodzajów współpracy, Chrome dwóch firm i odtworzenie kopii przeszły opisane niżej próby. Pozostają końcowe CI, scalenie i odbiór właściwej głównej instalacji. Następnie P06b2: jawne anulowanie przed startem i rozliczenie zasobów. [Projekt i macierz P06](p06-design.md). Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -310,4 +310,14 @@ Kopie przed aktualizacją po zatrzymaniu obu procesów: lab `/private/tmp/jarvis
 
 Nowy profil v4 zapisuje oba warianty, ich typowane wymagania i zadania. Starsze profile zachowują wspólny szablon do jawnej konfiguracji; starszy klient nie może usunąć już przyjętych wariantów. Formularz wczytuje je do szkicu i pozwala osobno ustawić dokument/oryginał, rodzaj sprzętu, zestaw dostępu oraz terminy i role. Nowa sprawa przypina właściwy wariant. Powtórzenie zapisanego startu uzgadnia receipt także po kolejnej zmianie profilu.
 
-Osiem celowanych testów lokalnych obejmuje reguły, oba rodzaje współpracy w jednej firmie, odmowę dostępu, obcy i nieaktualny zestaw, niedziedziczenie odbioru po zmianie daty, opóźnienie IT, restart i bezskutkowy replay. Typy i build przeszły. Dwa nowe rzeczywiste testy SIGKILL (konfiguracja i start) czekają na hosted CI. Chrome, odtworzenie kopii i odbiór scalonej instalacji pozostają wymagane. P06b2 — anulowanie zamiaru współpracy z rozliczeniem zasobów — jest kolejną dostawą.
+Osiem celowanych testów lokalnych obejmuje reguły, oba rodzaje współpracy w jednej firmie, odmowę dostępu, obcy i nieaktualny zestaw, niedziedziczenie odbioru po zmianie daty, opóźnienie IT, restart i bezskutkowy replay. Typy i build przeszły. [CI 34264116065](https://github.com/artur-t-96/JARVIS/actions/runs/34264116065), kod `41fe9dea187c6f983dd7ae77464efd3f647476ab`: 356/356 testów, także dwa nowe rzeczywiste SIGKILL (konfiguracja i start), oraz pełne bramki.
+
+## P06b1 — odbiór podglądu i odtworzenia
+
+Podgląd kont lokalnych 4330, kod `41fe9de`, 8.09.2026 18:33–18:42 UTC. Dwie syntetyczne firmy dostały oba warianty: Alfa laptop dla pracownika / telefon dla konsultanta, Beta monitor / laptop. Wymagany oryginał umowy, własny zestaw dostępów w wersji 1 i osobne terminy zostały przypięte do czterech nowych spraw. Dwa wcześniejsze procesy zachowały dokładny stan. Odczyt obcej sprawy zwrócił 404, katalog profili dla konta IT 403.
+
+Rzeczywisty Chrome: konfiguracja Alfy `30fd0dad-93cd-40bc-ba89-6136eeb882d0`, start pracownika `18694b82-06fc-4212-b55e-d9cd9b7b0d12` i konsultanta Bety `7215af6f-0a93-4fa6-a57e-bc8aa0ca872c`. Oddzielne konta operatora i zatwierdzającego; każda operacja raz, z pozytywną weryfikacją. Panel pokazuje właściwe terminy HR/IT oraz blokady brakujących dowodów. Podsumowanie profilu poprawiono po odbiorze wizualnym; końcowy widok sprawdzono, konsola bez błędów i ostrzeżeń. Druga edycja profilu w Chrome zmieniła termin pracownika Bety i pozostawiła wariant konsultanta; plan `d59dff04-f3c5-4ed0-b951-a07d6420d210` oczekiwał na zgodę przed wykonaniem kopii.
+
+Po zatrzymaniu podglądu wykonano i odtworzono sześcioplikową kopię: `/private/tmp/jarvis-p06b1-backup-20260908T1841` → `/private/tmp/jarvis-p06b1-restored-20260908T1841`, manifest `d09eabb731b76ff54c3dcebf5c8698d56bafe4920cef85a11d2354d33299b933`. Dwa profile, sześć okresów współpracy i wszystkie sprawy zachowały stan. Replay sześciu zapisanych komend nie zmienił liczników. Po zgodzie odtworzone oczekiwanie utworzyło tylko jedną wersję profilu (v3) i jeden receipt; nie zmieniło żadnej sprawy ani zadania. Replay siedmiu komend ponownie nie miał skutków. Konta i sesje nie należą do odtwarzanej kopii; próba wykorzystała jawnie podane syntetyczne tożsamości.
+
+Prywatne dowody: `/private/tmp/jarvis-onboarding-variants/.data/p06b1-preview/ui-proof.json`, `verify-cases.mjs`, `restore-proof.ts`. Końcowa bramka dokumentacji, scalenie i odbiór głównego lab/operational oraz OSS pozostają wymagane. P06b2 jest kolejną dostawą; cały K03 nadal pozostaje otwarty.
