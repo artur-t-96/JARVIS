@@ -73,6 +73,8 @@ export function equipmentState(
   if (allocation.status === "issued") {
     if (!allocation.issueEvent)
       return "Wydany — brak poświadczenia na aktualnych zasadach";
+    if (allocation.binding.status === "not_applicable")
+      return "Wydany — do rozliczenia w tym zadaniu";
     return allocation.binding.status === "bound"
       ? "Wydany — dowód powiązany"
       : "Wydany — dowód wymaga powiązania";

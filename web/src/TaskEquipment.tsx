@@ -122,9 +122,9 @@ export function EquipmentTaskContent({
         </div>
       </dl>
       <Notice>
-        Poświadczenie wydania, powiązanie dowodu i wykonanie zadania są osobnymi
-        krokami. Dokumenty i dostęp wymagają odrębnego potwierdzenia przed
-        odbiorem całego onboardingu.
+        Poświadczenie przekazania i wykonanie zadania są osobnymi krokami.
+        Dokumenty i dostęp wymagają odrębnego potwierdzenia w ramach właściwej
+        sprawy.
       </Notice>
       {equipment.task.status !== "accepted" && (
         <Notice>
