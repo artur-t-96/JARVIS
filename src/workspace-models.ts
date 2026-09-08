@@ -551,6 +551,81 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
           .optional(),
       })
       .strict(),
+    attestAccessForTask: z
+      .object({
+        ...base,
+        ...accessBindingFields,
+        ...accessAttestationFields,
+        taskId: id,
+        expectedTaskVersion: z.number().int().positive(),
+        scopeHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+      })
+      .strict(),
+    renewAccessForTask: z
+      .object({
+        ...base,
+        ...accessBindingFields,
+        ...accessAttestationFields,
+        taskId: id,
+        expectedTaskVersion: z.number().int().positive(),
+        scopeHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        grantId: id,
+        expectedGrantVersion: z.number().int().positive(),
+      })
+      .strict(),
+    revokeAccessForTask: z
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().positive(),
+        requirementId: id,
+        scopeHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        personId: id.optional(),
+        employmentEpisodeId: id.optional(),
+        expectedEpisodeVersion: z.number().int().positive().optional(),
+        scopeRevision: z.number().int().positive().optional(),
+        profileVersion: z.number().int().min(0).optional(),
+        grantId: id,
+        expectedGrantVersion: z.number().int().positive(),
+        revokedOn: date,
+        note: text,
+        verificationMethod: text,
+        humanConfirmed: yes,
+      })
+      .strict(),
+    bindAccessForTask: z
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().positive(),
+        requirementId: id,
+        scopeHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        personId: id.optional(),
+        employmentEpisodeId: id.optional(),
+        expectedEpisodeVersion: z.number().int().positive().optional(),
+        scopeRevision: z.number().int().positive().optional(),
+        profileVersion: z.number().int().min(0).optional(),
+        sourceId: id.optional(),
+        sourceVersion: z.number().int().positive().optional(),
+        accessProofHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+        humanConfirmed: yes,
+      })
+      .strict(),
     attestAccess: z
       .object({ ...base, ...accessBindingFields, ...accessAttestationFields })
       .strict(),
@@ -1008,6 +1083,10 @@ const actionLabels: Record<string, string> = {
   issueForTask: "Poświadcz wydanie w zadaniu IT",
   returnForTask: "Poświadcz zwrot w zadaniu IT",
   bindAssetForTask: "Powiąż poświadczone wydanie z wymaganiem",
+  attestAccessForTask: "Poświadcz dostęp w zadaniu IT",
+  renewAccessForTask: "Odnów poświadczenie w zadaniu IT",
+  revokeAccessForTask: "Poświadcz cofnięcie w zadaniu IT",
+  bindAccessForTask: "Powiąż dowód dostępów w zadaniu IT",
   markRepaired: "Potwierdź naprawę",
   assignCustodian: "Wyznacz opiekuna ewidencji",
   replaceReservation: "Zamień zarezerwowane urządzenie",

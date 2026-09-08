@@ -1,3 +1,8 @@
+import {
+  TaskAccess,
+  accessTaskActions,
+  type AccessTaskAction,
+} from "./task-access.js";
 import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
 import { AccessRegister, migrateAccessRegister } from "./access-register.js";
 import {
@@ -180,6 +185,7 @@ export class WorkspaceStore {
   private readonly registerStore: AssetRegister;
   private readonly custodyStore: AssetCustody;
   private readonly accessStore: AccessRegister;
+  private readonly taskAccessStore: TaskAccess;
   constructor(
     dbPath: string,
     private readonly options: { clock?: () => number } = {},
@@ -354,6 +360,19 @@ export class WorkspaceStore {
         ).scopeHash,
       (tenant) => this.currentProfile(tenant)?.version ?? 0,
     );
+    this.taskAccessStore = new TaskAccess(
+      this.db,
+      this.taskStore,
+      this.accessStore,
+      (tenant, id) => this.livePrincipal(tenant, id),
+      (tenant, caseId) =>
+        this.readinessStore.evaluate(
+          tenant,
+          this.read(tenant, "cases", caseId),
+          new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+        ).scopeHash,
+      (tenant) => this.currentProfile(tenant)?.version ?? 0,
+    );
   }
   setPrincipalProvider(provider: (tenantId: string) => Principal[]) {
     this.principalProvider = provider;
@@ -376,6 +395,13 @@ export class WorkspaceStore {
   }
   taskEquipment(principal: Principal, taskId: string) {
     return this.taskStore.assetProjection(
+      principal,
+      taskId,
+      new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+    );
+  }
+  taskAccess(principal: Principal, taskId: string) {
+    return this.taskAccessStore.projection(
       principal,
       taskId,
       new Date(this.options.clock?.() ?? Date.now()).toISOString(),
@@ -437,7 +463,22 @@ export class WorkspaceStore {
       now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
       profile: this.currentProfile(principal.tenantId),
     });
-    return this.taskStore.project(principal, { today });
+    return this.taskStore.project(principal, { today }).map((task) => {
+      try {
+        const { scope } = this.taskAccessStore.context(principal, task.id);
+        return {
+          ...task,
+          operationalContext: {
+            ...task.operationalContext,
+            recipientLabel: scope.recipientLabel,
+            engagementLabel: scope.engagementLabel,
+            access: true as const,
+          },
+        };
+      } catch {
+        return task;
+      }
+    });
   }
   taskAssignees(principal: Principal, taskId: string) {
     return this.taskStore.eligibleAssignees(principal, taskId);
@@ -3214,9 +3255,13 @@ export class WorkspaceStore {
         const registerMutation =
           module === "assets" &&
           ["move", "sendToService", "markRepaired", "retire"].includes(action);
+        const taskAccess =
+          module === "cases" &&
+          accessTaskActions.includes(action as AccessTaskAction);
         const accessMutation =
           module === "cases" &&
-          ["attestAccess", "renewAccess", "revokeAccess"].includes(action);
+          (["attestAccess", "renewAccess", "revokeAccess"].includes(action) ||
+            (taskAccess && action !== "bindAccessForTask"));
         const accessBinding = module === "cases" && action === "bindEvidence";
         const usesProfile =
           lifecycle ||
@@ -3237,7 +3282,7 @@ export class WorkspaceStore {
           ctx: ToolContext,
           input: JsonObject,
         ): boolean => {
-          if (!taskTransition && !taskCustody) return true;
+          if (!taskTransition && !taskCustody && !taskAccess) return true;
           try {
             const current = this.taskStore.get(
               ctx.tenantId,
@@ -3267,7 +3312,13 @@ export class WorkspaceStore {
               event.taskVersion === current.version &&
               event.toStatus === current.status &&
               event.assigneePrincipalId === current.assigneePrincipalId &&
-              (["issueForTask", "returnForTask"].includes(event.action)
+              ([
+                "issueForTask",
+                "returnForTask",
+                "attestAccessForTask",
+                "renewAccessForTask",
+                "revokeAccessForTask",
+              ].includes(event.action)
                 ? current.status === "accepted" &&
                   current.performedBy === null &&
                   event.performedBy === event.requestedBy
@@ -3286,6 +3337,12 @@ export class WorkspaceStore {
                 ctx,
                 input,
                 action as AssetTaskAction,
+              )) ||
+            (taskAccess &&
+              !this.taskAccessStore.verifyCommitted(
+                ctx,
+                input,
+                action as AccessTaskAction,
               ))
           )
             fail(
@@ -3319,29 +3376,30 @@ export class WorkspaceStore {
           input: JsonObject,
         ) => {
           if (!accessMutation) return;
-          this.accessAuthority(ctx, action, input);
+          if (!taskAccess) this.accessAuthority(ctx, action, input);
           if (!accessConsistent(ctx))
             fail(
               "ACCESS_HISTORY_INCONSISTENT",
               "Brak spójnego zdarzenia poświadczenia dostępu.",
             );
         };
-        const requiredScopes = taskCustody
-          ? ["it"]
-          : module === "people" && action !== "create" && action !== "update"
-            ? ["cases"]
-            : module === "recruitment" && action === "hire"
-              ? ["people", "cases"]
-              : module === "sales" && action === "handoff"
-                ? ["cases"]
-                : (module === "assets" &&
-                      ["reserve", "issue", "replaceReservation"].includes(
-                        action,
-                      )) ||
-                    (module === "licenses" &&
-                      ["assign", "revoke"].includes(action))
-                  ? ["people"]
-                  : [];
+        const requiredScopes =
+          taskCustody || taskAccess
+            ? ["it"]
+            : module === "people" && action !== "create" && action !== "update"
+              ? ["cases"]
+              : module === "recruitment" && action === "hire"
+                ? ["people", "cases"]
+                : module === "sales" && action === "handoff"
+                  ? ["cases"]
+                  : (module === "assets" &&
+                        ["reserve", "issue", "replaceReservation"].includes(
+                          action,
+                        )) ||
+                      (module === "licenses" &&
+                        ["assign", "revoke"].includes(action))
+                    ? ["people"]
+                    : [];
         const definition = catalog.find((m) => m.id === module)!;
         const actionLabel =
           action === "create"
@@ -3352,14 +3410,15 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version:
-            accessMutation ||
-            (module === "it" &&
-              [
-                "reviseAccessBundle",
-                "reviseApplication",
-                "retireAccessDefinition",
-              ].includes(action))
+          version: taskAccess
+            ? "1"
+            : accessMutation ||
+                (module === "it" &&
+                  [
+                    "reviseAccessBundle",
+                    "reviseApplication",
+                    "retireAccessDefinition",
+                  ].includes(action))
               ? "8"
               : module === "assets"
                 ? action === "replaceReservation"
@@ -3368,38 +3427,52 @@ export class WorkspaceStore {
                 : module === "cases" && action === "bindEvidence"
                   ? "6"
                   : "4",
-          ...(taskCustody
+          ...(taskAccess
             ? {
                 canAccess: (
                   principal: Principal,
                   input: JsonObject,
                   context?: import("./contracts.js").ToolAccessContext,
                 ) =>
-                  this.taskStore.canAccessAsset(
+                  this.taskAccessStore.canAccess(
                     principal,
                     input,
                     context,
-                    action as AssetTaskAction,
+                    action as AccessTaskAction,
                   ),
               }
-            : taskTransition
+            : taskCustody
               ? {
                   canAccess: (
                     principal: Principal,
                     input: JsonObject,
                     context?: import("./contracts.js").ToolAccessContext,
                   ) =>
-                    this.taskStore.canAccess(
+                    this.taskStore.canAccessAsset(
                       principal,
                       input,
                       context,
-                      action as TaskAction,
+                      action as AssetTaskAction,
                     ),
                 }
-              : { scope: module }),
+              : taskTransition
+                ? {
+                    canAccess: (
+                      principal: Principal,
+                      input: JsonObject,
+                      context?: import("./contracts.js").ToolAccessContext,
+                    ) =>
+                      this.taskStore.canAccess(
+                        principal,
+                        input,
+                        context,
+                        action as TaskAction,
+                      ),
+                  }
+                : { scope: module }),
           requiredScopes,
           requiredScopesForInput: (input: JsonObject, tenantId: string) => {
-            if (taskCustody)
+            if (taskCustody || taskAccess)
               return [
                 "it",
                 ...this.taskStore.get(tenantId, String(input.taskId))
@@ -3424,9 +3497,18 @@ export class WorkspaceStore {
           recovery: "reconcile",
           description: `${definition.label}: ${actionLabel}.${["people.startEmployment", "people.beginOffboarding", "recruitment.hire"].includes(`${module}.${action}`) ? " Tworzy powiązaną sprawę i obowiązkowe zadania człowieka." : module === "sales" && action === "handoff" ? " Tworzy sprawę realizacji oraz zamyka powiązaną szansę jako wygraną." : ""} Zmienia wyłącznie lokalne dane JARVIS.`,
           inputSchema,
-          ...(usesProfile || taskCustody || accessBinding
+          ...(usesProfile || taskCustody || accessBinding || taskAccess
             ? {
                 prepareInput: (input: JsonObject, tenantId: string) => {
+                  if (taskAccess)
+                    return this.taskAccessStore.prepare(
+                      tenantId,
+                      input,
+                      action as AccessTaskAction,
+                      new Date(
+                        this.options.clock?.() ?? Date.now(),
+                      ).toISOString(),
+                    );
                   if (taskCustody)
                     return this.taskStore.prepareAssetInput(
                       tenantId,
@@ -3602,6 +3684,61 @@ export class WorkspaceStore {
                       e.id,
                     );
                   e = this.save(cmd, e);
+                } else if (taskAccess) {
+                  this.taskAccessStore.authorize(
+                    ctx,
+                    input,
+                    action as AccessTaskAction,
+                    cmd.now,
+                  );
+                  if (action === "bindAccessForTask") {
+                    this.readinessStore.bind(
+                      ctx,
+                      e,
+                      {
+                        requirementId: String(input.requirementId),
+                        sourceModule: "it",
+                        sourceId: String(input.sourceId),
+                        sourceVersion: Number(input.sourceVersion),
+                        accessProofHash: String(input.accessProofHash),
+                      },
+                      cmd.now,
+                    );
+                  } else {
+                    cmd.accessEvent =
+                      action === "revokeAccessForTask"
+                        ? this.accessStore.revoke(
+                            ctx,
+                            input,
+                            cmd.now,
+                            cmd.profile?.timezone ?? "UTC",
+                          )
+                        : this.accessStore.attest(
+                            ctx,
+                            input,
+                            cmd.now,
+                            cmd.profile?.timezone ?? "UTC",
+                            cmd.profile?.version ?? 0,
+                            action === "renewAccessForTask",
+                          );
+                  }
+                  this.taskAccessStore.record(
+                    ctx,
+                    input,
+                    action as AccessTaskAction,
+                    cmd.accessEvent
+                      ? {
+                          grantId: cmd.accessEvent.grantId,
+                          eventId: cmd.accessEvent.id,
+                        }
+                      : {
+                          sourceId: input.sourceId!,
+                          accessProofHash: input.accessProofHash!,
+                        },
+                    cmd.now,
+                  );
+                  this.caseState(cmd, e);
+                  e = this.save(cmd, e);
                 } else if (taskCustody) {
                   this.taskStore.authorizeAsset(
                     ctx,
@@ -3650,7 +3787,7 @@ export class WorkspaceStore {
                 } else e = this.change(cmd, e, action, p);
               }
               const task =
-                taskTransition || taskCustody
+                taskTransition || taskCustody || taskAccess
                   ? this.taskStore.get(ctx.tenantId, String(input.taskId))
                   : undefined;
               const receipt: ToolResult = {
@@ -3662,6 +3799,13 @@ export class WorkspaceStore {
                       taskId: task.id,
                       taskVersion: task.version,
                       status: task.status,
+                      ...(cmd.accessEvent
+                        ? {
+                            grantId: cmd.accessEvent.grantId,
+                            grantVersion: cmd.accessEvent.grantVersion,
+                            eventId: cmd.accessEvent.id,
+                          }
+                        : {}),
                       ...(taskCustody
                         ? {
                             allocationId: String(input.allocationId),
@@ -3776,7 +3920,7 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
-              if (accessMutation)
+              if (accessMutation && !taskAccess)
                 this.accessAuthority(ctx, action, asJson(parsed.data));
             }
             let ok = Boolean(

@@ -4,6 +4,7 @@ import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
 import { Empty, Icon, Loading, Notice, Sheet } from "./ui";
 import { TaskEquipment } from "./TaskEquipment";
+import { TaskAccess } from "./TaskAccess";
 
 export type TaskAction =
   "acceptTask" | "declineTask" | "transferTask" | "completeTask" | "cancelTask";
@@ -29,7 +30,8 @@ export interface HumanTask {
   operationalContext?: {
     recipientLabel: string;
     engagementLabel: string;
-    equipment: true;
+    equipment?: true;
+    access?: true;
   };
   events: {
     action: string;
@@ -75,6 +77,10 @@ const eventLabels: Record<string, string> = {
   issueForTask: "Poświadczenie wydania sprzętu",
   returnForTask: "Poświadczenie zwrotu sprzętu",
   bindAssetForTask: "Powiązanie dowodu wydania",
+  attestAccessForTask: "Poświadczenie dostępu",
+  renewAccessForTask: "Ponowne sprawdzenie dostępu",
+  revokeAccessForTask: "Poświadczenie cofnięcia dostępu",
+  bindAccessForTask: "Powiązanie dowodu dostępów",
   accepted: "Przyjęcie zadania",
   declined: "Odmowa wykonania",
   transferred: "Przekazanie zadania",
@@ -119,11 +125,13 @@ export function HumanTaskCard({
   onAction,
   actions = task.allowedActions,
   onEquipment,
+  onAccess,
 }: {
   task: HumanTask;
   onAction: (action: TaskAction) => void;
   actions?: TaskAction[];
   onEquipment?: () => void;
+  onAccess?: () => void;
 }) {
   const blocked = task.dependsOn.filter((dependency) => !dependency.completed);
   return (
@@ -225,6 +233,11 @@ export function HumanTaskCard({
           Sprzęt i przekazanie
         </button>
       )}
+      {task.operationalContext?.access && onAccess && (
+        <button className="button secondary equipment-open" onClick={onAccess}>
+          Dostępy i poświadczenia
+        </button>
+      )}
       {task.events.length > 0 && (
         <details className="task-history">
           <summary>Historia zadania ({task.events.length})</summary>
@@ -238,6 +251,10 @@ export function HumanTaskCard({
                     "issueForTask",
                     "returnForTask",
                     "bindAssetForTask",
+                    "attestAccessForTask",
+                    "renewAccessForTask",
+                    "revokeAccessForTask",
+                    "bindAccessForTask",
                   ].includes(entry.action) && <p>{entry.reason}</p>}
                 <span className="small muted">
                   Wersja zadania {entry.taskVersion}
@@ -460,6 +477,7 @@ export function HumanTasks({
   );
   const [filter, setFilter] = useState("current");
   const [kind, setKind] = useState("");
+  const [accessTask, setAccessTask] = useState<HumanTask | null>(null);
   const [equipmentTask, setEquipmentTask] = useState<HumanTask | null>(null);
   const [selected, setSelected] = useState<{
     task: HumanTask;
@@ -483,6 +501,14 @@ export function HumanTasks({
     );
   return (
     <>
+      {accessTask && (
+        <TaskAccess
+          key={accessTask.id}
+          taskId={accessTask.id}
+          title={accessTask.title}
+          onClose={() => setAccessTask(null)}
+        />
+      )}
       {equipmentTask && (
         <TaskEquipment
           key={equipmentTask.id}
@@ -569,6 +595,7 @@ export function HumanTasks({
                 }
                 onAction={(action) => setSelected({ task, action })}
                 onEquipment={() => setEquipmentTask(task)}
+                onAccess={() => setAccessTask(task)}
               />
             ))}
           </div>
