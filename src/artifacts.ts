@@ -34,6 +34,19 @@ export function exportArtifact(
   const entity = workspace.get(p, module, id);
   let body: string, filename: string, contentType: string;
   if (module === "documents") {
+    const readiness = workspace.documentReadiness(p, id);
+    if (!readiness.integrity)
+      throw new DomainError(
+        "DOCUMENT_INTEGRITY_FAILED",
+        "Treść i kontekst dokumentu nie odpowiadają historii.",
+        409,
+      );
+    if (entity.status === "approved" && !readiness.approvalCurrent)
+      throw new DomainError(
+        "DOCUMENT_APPROVAL_STALE",
+        "Akceptacja nie odpowiada bieżącym źródłom. Przygotuj nową rewizję przed eksportem zatwierdzonego dokumentu.",
+        409,
+      );
     body = `# ${md(entity.title)}\n\nStatus: ${md(entity.status)} · wersja rekordu ${entity.version} · rewizja ${md(entity.data.revision ?? 1)}\n\n${String(entity.data.content)}\n\n---\n\nŹródła (wersja i data odczytu):\n${JSON.stringify(entity.data.sources ?? [], null, 2)}\n`;
     filename = `document-${id}-v${entity.version}.md`;
     contentType = "text/markdown; charset=utf-8";
@@ -131,6 +144,7 @@ export function materializeArtifact(dataDir: string, artifact: Artifact) {
   }
 }
 export const documentTemplates = [
+  { id: "case_scope", label: "Uzgodniony zakres sprawy", module: "cases" },
   { id: "case_brief", label: "Karta sprawy", module: "cases" },
   { id: "asset_report", label: "Protokół wyposażenia", module: "assets" },
   { id: "sales_offer", label: "Podsumowanie oferty", module: "sales" },
@@ -149,6 +163,34 @@ export function prepareDocument(
   const template = documentTemplates.find((t) => t.id === templateId);
   if (!template) throw new DomainError("UNKNOWN_TEMPLATE", "Nieznany szablon.");
   const source = workspace.get(p, template.module, sourceId);
+  if (template.id === "case_scope") {
+    const scope = workspace.documentScope(p, sourceId);
+    const s = scope.snapshot;
+    const requirements =
+      (s.requirements as JsonObject[])
+        .map(
+          (r) => `- ${r.required ? "Wymagane" : "Opcjonalne"}: ${md(r.title)}`,
+        )
+        .join("\n") || "Nie określono dodatkowych warunków.";
+    const period = s.employmentEpisodeId
+      ? `\n\n## Współpraca\n\n${s.employmentKind === "contractor" ? "Współpraca projektowa" : "Współpraca wewnętrzna"}. Data rozpoczęcia: ${md(s.employmentStartDate)}.\n\nIdentyfikator okresu: ${md(s.employmentEpisodeId)}.`
+      : "";
+    const content = `# Uzgodniony zakres sprawy\n\n${md(source.title)}\n\nRewizja zakresu: ${scope.version}.\n\n## Zakres\n\n${String(s.brief)}\n\n## Kryteria odbioru\n\n${String(s.acceptanceCriteria)}\n\n## Termin\n\n${s.dueDate ?? "Brak terminu — wymaga ustalenia."}${period}\n\n## Wymagane rezultaty\n\n${requirements}\n\nRaport opisuje uzgodniony zakres. Wykonanie, dowody i odbiór są sprawdzane osobno. Ten raport nie stanowi umowy.`;
+    return {
+      title: `${template.label}: ${source.title}`.slice(0, 160),
+      data: {
+        accessScope: ["onboarding", "offboarding"].includes(
+          String(source.data.caseType),
+        )
+          ? "people"
+          : "documents",
+        documentType: "report",
+        linkedCaseId: source.id,
+        content,
+        sources: [JSON.parse(JSON.stringify(scope.source))],
+      },
+    };
+  }
   const fields: Record<string, string[]> = {
     cases: [
       "brief",

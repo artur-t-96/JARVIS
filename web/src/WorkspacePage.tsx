@@ -22,6 +22,7 @@ import {
 import { EntityContent, RecordDownload } from "./EntityContent";
 import { LaboratoryPanel } from "./LaboratoryPanel";
 import { DocumentTemplate } from "./DocumentTemplate";
+import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
 import { CaseReadiness } from "./CaseReadiness";
 import { HumanTasks } from "./HumanTasks";
 import { CaseAccess } from "./CaseAccess";
@@ -726,8 +727,14 @@ export function WorkspacePage({
   if (entityId)
     return (
       <>
-        {form && (
-          <CommandForm module={module} spec={form} onClose={closeForm} />
+        {form?.action === "revise" &&
+        module.id === "documents" &&
+        form.entity ? (
+          <DocumentRevision item={form.entity} onClose={closeForm} />
+        ) : (
+          form && (
+            <CommandForm module={module} spec={form} onClose={closeForm} />
+          )
         )}
         <button
           className="text-button back-link"
@@ -756,6 +763,7 @@ export function WorkspacePage({
                   </div>
                 </div>
                 {allowedTool("update") &&
+                  module.id !== "documents" &&
                   !(module.id === "assets" && item.status === "retired") && (
                     <button
                       className="button secondary"
@@ -788,6 +796,9 @@ export function WorkspacePage({
                   context={context}
                   revision={revision}
                 />
+              )}
+              {item.module === "documents" && (
+                <DocumentReadiness key={item.id} item={item} />
               )}
               {item.module === "cases" &&
                 context.principal.scopes?.some(

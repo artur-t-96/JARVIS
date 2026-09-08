@@ -88,7 +88,10 @@ export function DocumentTemplate({ onClose }: { onClose: () => void }) {
               {!sources.loading &&
                 sources.data?.items.map((item) => (
                   <option key={item.id} value={item.id}>
-                    {item.title} · wersja {item.version}
+                    {item.title} ·{" "}
+                    {templateId === "case_scope"
+                      ? `zakres ${String(item.data.scopeRevision)}`
+                      : `wersja ${item.version}`}
                   </option>
                 ))}
             </select>

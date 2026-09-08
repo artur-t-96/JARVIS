@@ -5,6 +5,7 @@ import { DomainError, type JsonObject, type ToolContext } from "./contracts.js";
 import type { Entity } from "./workspace.js";
 import { readIssuedAllocationProof } from "./asset-custody.js";
 import { AccessRegister } from "./access-register.js";
+import { DocumentSources } from "./document-sources.js";
 
 const uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -441,42 +442,34 @@ export class CaseReadinessStore {
         : [];
       if (references.length > 20)
         error("DOCUMENT_SOURCES_INVALID", "Zbyt wiele źródeł dokumentu.");
-      const sourceReferences = references.map((reference) => {
-        const current = this.db
-          .prepare(
-            "SELECT * FROM ops_entities WHERE tenant_id=? AND module=? AND id=?",
-          )
-          .get(tenant, String(reference.module), String(reference.id)) as
-          Row | undefined;
-        const currentEntity = current
-          ? {
-              id: String(current.id),
-              module: String(current.module),
-              title: String(current.title),
-              status: String(current.status),
-              version: Number(current.version),
-              data: JSON.parse(String(current.data_json)),
-              createdAt: String(current.created_at),
-              updatedAt: String(current.updated_at),
-            }
+      const sources = new DocumentSources(this.db);
+      const sourceReferences = sources.references(tenant, references);
+      const state =
+        data.sourceContract === "p09a1"
+          ? sources.assessment(tenant, {
+              id,
+              module: "documents",
+              title: String(r.title),
+              status: String(r.status),
+              version: Number(r.version),
+              data,
+              createdAt: String(r.created_at),
+              updatedAt: String(r.updated_at),
+            })
           : null;
-        return {
-          module: String(reference.module),
-          id: String(reference.id),
-          version: Number(reference.version),
-          currentVersion: current ? Number(current.version) : null,
-          current: Boolean(
-            currentEntity &&
-            currentEntity.version === reference.version &&
-            readinessHash(currentEntity) === reference.snapshotHash,
-          ),
-        };
-      });
       identity = {
         documentId: id,
         documentType: data.documentType ?? null,
         sourceReferences,
-        sourcesCurrent: sourceReferences.every((source) => source.current),
+        sourcesCurrent:
+          sourceReferences.every((source) => source.current) &&
+          (!state || state.readyForReview),
+        ...(state
+          ? {
+              contextHash: state.contextHash,
+              contextValid: state.integrity && state.readyForReview,
+            }
+          : {}),
         revision,
         contentHash: String(document.content_hash),
         contentMatchesHash:
@@ -809,7 +802,8 @@ export class CaseReadinessStore {
                 source !== null &&
                 !Array.isArray(source) &&
                 source.module === "cases" &&
-                source.id === e.id,
+                source.id === e.id &&
+                source.kind !== "case_scope",
             )
           )
             return {
@@ -828,6 +822,7 @@ export class CaseReadinessStore {
                 "Przygotuj dokument z aktualnymi źródłami i nową rewizję odbioru.",
             };
           if (
+            (onboarding && value.contextValid !== true) ||
             value.status !== "approved" ||
             value.entityStatus !== "approved" ||
             value.contentMatchesHash !== true ||

@@ -265,6 +265,24 @@ export function registerWorkspaceApi(
       ),
     };
   });
+  app.get("/api/cases/:id/document-scope", async (req) => ({
+    scope: workspace.documentScope(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
+  app.get("/api/documents/:id/readiness", async (req) => ({
+    readiness: workspace.documentReadiness(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
+  app.get("/api/documents/:id/refresh-sources", async (req) => ({
+    input: workspace.documentRefresh(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
   app.post("/api/document-templates/prepare", async (req, reply) => {
     const actor = principal(req);
     const { templateId, sourceId, idempotencyKey } = z

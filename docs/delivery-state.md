@@ -23,7 +23,7 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P06    | do wykonania       | Pełny onboarding po P08a/P09a i bazowych profilach z P03.                                                                                                                                     |
 | P07    | do wykonania       | Pełny proces IT, certyfikat i niezależna weryfikacja.                                                                                                                                         |
 | P08    | w toku             | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
-| P09    | do wykonania       | Kompletne źródła, dowody plikowe i gotowe dokumenty.                                                                                                                                          |
+| P09    | w toku             | P09a1: kontekst rewizji i źródła; następnie dowody plikowe i gotowe dokumenty.                                                                                                                |
 | P10    | do wykonania       | Oferta, przekazanie, realizacja i pakiet rozliczeniowy.                                                                                                                                       |
 | P11    | do wykonania       | Rekrutacja i pełne zamknięcie konkretnej współpracy.                                                                                                                                          |
 | P12    | do wykonania       | Inicjatywy i operacyjny przegląd kierownika.                                                                                                                                                  |
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P08a2: poświadczenia przez zadanie IT.** Punkt startu: odebrany lokalnie PR #14, `b887e737afad858167f554447eebc750a985ced7`. Worktree `/private/tmp/jarvis-access-tasks`, gałąź `codex/access-tasks`. Bieżący wykonawca przyjętego zadania otrzyma minimalne dane odbiorcy, aplikacje/role właściwego zestawu i poświadczenia swojej współpracy. Zapis, odnowienie, cofnięcie i powiązanie dowodu wymagają osobnych zgód oraz kontroli obsady, zależności i wersji. Następne zależności to P09a i pełny onboarding P06. Spis z natury oraz import P05b pozostają otwarte.
+**P09a1: źródła i zaakceptowana rewizja dokumentu.** Baza: odebrany lokalnie PR #15, `389f6b30e98f3154c32fb46959228ceb625ed87e`. Worktree `/private/tmp/jarvis-onboarding-documents`, gałąź `codex/onboarding-documents`. Kontrakt `case_scope` oraz własne źródła każdej rewizji usuwają cykl odbioru. Projekt i granice: [P09a](p09a-design.md). Następnie P09a2 (pliki i praktyczny eksport) i pełny onboarding P06. Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -207,3 +207,31 @@ API obu firm: dziewięć dalszych zatwierdzonych komend, sześć poświadczeń d
 Preview zatrzymano. Rzeczywista kopia sześciu plików z 8.09, 15:50:14 UTC została odtworzona w `/private/tmp/jarvis-p08a2-restored-20260908T1550`; manifest `475f713e7973bcb138cc122105b245ce54151a5e10bdf48ce4a722d35bb03805`. Jedenaście zapisanych poleceń uzgodniono bez dodatkowego skutku; sześć grantów, autorzy, historia zadania i stan gotowości pozostały identyczne. Konta nie zostały odtworzone, serwera odtworzonej bazy nie uruchamiano. Dowody i skrypty: `/private/tmp/jarvis-access-tasks/.data/p08a2-preview/ui-proof.json`.
 
 Scalenie i odbiór głównej instalacji pozostają ostatnim krokiem dostarczenia P08a2. P09a i pełny onboarding P06 pozostają otwarte.
+
+## P08a2 — główna instalacja odebrana
+
+[PR #15](https://github.com/artur-t-96/JARVIS/pull/15) scalono jako `389f6b30e98f3154c32fb46959228ceb625ed87e`. Końcowe [CI PR 34247473200](https://github.com/artur-t-96/JARVIS/actions/runs/34247473200) i [CI main 34247896109](https://github.com/artur-t-96/JARVIS/actions/runs/34247896109) zielone: 311 testów i pełne bramki. Oba tryby zarządzanej instalacji uruchomiono na dokładnym SHA 8.09 o 15:56 UTC, Node 22.23.0.
+
+Rzeczywisty Chrome lab4310: formularz zadania IT poświadczył konto z właściwą licencją (`ca66b183-2edd-4f67-9c1d-f5e8a1585c33`), a osobny plan powiązał zestaw (`44012b86-6d8e-48af-bfe3-dc645e8b72e3`). Każda operacja ma osobną zgodę, jedną próbę i niezależną weryfikację. Dostęp jest spełniony, zadanie pozostaje przyjęte do pracy, onboarding nadal ma inne blokady. Zrzut Chrome potwierdza komunikat oraz konta i autorów. Wcześniejsze dowody P08a1 i rezerwacja P05b2 zachowały stan. Dowód: `.data/local-product/p08a2-verification.json`.
+
+Oba stosy OSS: trzy źródła Grafany OK, 14 paneli, metryki workera i skorelowane logi/ślady z właściwym SHA. Lab `d9b0e4505dd30b0f4386038ff3f813db`, operational `fd63a441a7f651a7d46bc91d5053a847`. Dowód: `.data/local-product/p08a2-oss-verification.json`.
+
+Kopie przed aktualizacją: `/private/tmp/jarvis-before-p08a2-lab-20260908T1556`, manifest `5507d4f2870490df6ee6cddbece57d7e30ae92e589e257314567c4f498790331`; operational `/private/tmp/jarvis-before-p08a2-operational-20260908T1556`, manifest `75c021fbb5682f1f5beef513659f284a2243758e76896f24e2c6491d557c6e85`. Rzeczywisty restore podglądu opisano powyżej.
+
+## P09a1 — implementacja do odbioru
+
+Migracja operations v9 dodaje kontekst źródeł, autora i zgodę każdej nowej rewizji; stare rekordy pozostawia bez dopisanej proweniencji. Źródło `case_scope` przypina rewizję i hash uzgodnionych danych, nie status zadań i odbioru. Dokumenty mają narzędzia w wersji 9. Formularz rewizji wymaga jawnej decyzji o odświeżeniu źródeł i zachowuje historię. Nowe odczyty pokazują aktualność, braki i zgodność treści. Eksport zatwierdzonego dokumentu odmawia przy nieaktualnej akceptacji.
+
+Lokalnie przeszło sześć celowanych scenariuszy domenowych i integralności oraz kontrola typów. Pełne bramki, migrację zamrożonego schematu v8, API i trzy rzeczywiste SIGKILL wykonuje CI. Odbiór przeglądarki, restore i scalonej instalacji pozostają do wykonania. P09a2/P06 i cały K08 nie są jeszcze odebrane.
+
+## P09a1 — odbiór podglądu
+
+[PR #16](https://github.com/artur-t-96/JARVIS/pull/16), [CI 34250207717](https://github.com/artur-t-96/JARVIS/actions/runs/34250207717), źródło `43a1509277b68bea7fd6d4f46d2c90591cba5933`: 322 testy i pełne bramki zielone. Obejmują zamrożony schemat v8, izolację i uprawnienia API, rollback oraz trzy rzeczywiste SIGKILL po utworzeniu, rewizji i decyzji, z późniejszą zmianą zakresu przed odzyskaniem.
+
+Rzeczywisty Chrome podglądu `0de61b4` wykonał utworzenie raportu z nowego szablonu (`110515df-22d2-4eae-ab89-b9c7c9386112`), przekazanie (`afe9e9ad-ef13-42d9-b41b-c240f47cf5f6`), decyzję (`d8af1c7f-82b3-4426-a9ac-53b015300a4a`) i nową rewizję z jawnym odświeżeniem źródła (`4062b588-12c6-4253-87bb-25bcbd16429d`). Każdy plan zatwierdziło osobne konto, z jedną próbą i pozytywną weryfikacją. API potwierdziło, że powiązanie dowodu i odbiór sprawy zachowują aktualność raportu; zmiana zakresu blokuje eksport zatwierdzonej treści kodem `DOCUMENT_APPROVAL_STALE`. Formularz i zrzuty potwierdzają nowe źródło 2 oraz zachowanie pierwszej rewizji. Po osobnym odbiorze nowy dokument jest aktualny, v6, rewizja 2.
+
+Dwóch autorów w dwóch firmach i trzy okresy współpracy (wewnętrzny oraz projekty Alfa/Beta) mają osobne źródła i zatwierdzone dokumenty. Powiązane wymagania dokumentowe są spełnione; całe onboardingi nadal mają inne blokady. Chrome firmy B potwierdził właściwy dokument projektu Beta. API: 401 bez sesji oraz 404 dla dokumentów drugiej firmy. Dowód prywatny: `/private/tmp/jarvis-onboarding-documents/.data/p09a1-preview/ui-proof.json`, 8.09.2026 16:25 UTC.
+
+Podgląd zatrzymano przed kopią. Backup `/private/tmp/jarvis-p09a1-backup-20260908T1628`, odtworzenie `/private/tmp/jarvis-p09a1-restored-20260908T1628`, manifest `e360832c9ed9c36f57f17ea7db7b3a89910b6406b8325accb2b3701ca833bc6a`. Restore zachował cztery dokumenty i pięć rewizji. Ponowne wykonanie oraz weryfikacja piętnastu zapisanych poleceń dokumentów nie dodały efektu, wersji, audytu ani zdarzenia outbox. Konta nie należą do tego pakietu kopii.
+
+Po przeglądarce uproszczono nowy szablon raportu do czytelnych sekcji, spolszczono etykiety i doprecyzowano utratę aktualności dawnej akceptacji. Końcowe CI, scalenie oraz odbiór głównej instalacji pozostają ostatnim krokiem tej paczki. P09a2 i P06 są kolejnymi pracami; pełny K08 pozostaje otwarty.

@@ -28,6 +28,7 @@ test("persisted reference resolution never exposes HR input or results to a docu
     scopes: ["documents", "it", "cases"],
   };
   const workspace = new WorkspaceStore(":memory:");
+  workspace.setPrincipalProvider(() => [owner, viewer]);
   const source: ToolDefinition = {
     id: "test.area",
     version: "1",

@@ -43,6 +43,8 @@ const labels: Record<string, string> = {
   assignedAt: "Przydzielono",
   revokedAt: "Odebrano",
   contentHash: "Odcisk treści",
+  contextHash: "Odcisk źródeł i klasyfikacji",
+  createdBy: "Autor rewizji",
   title: "Nazwa",
   note: "Notatka",
   reference: "Źródło / odnośnik",

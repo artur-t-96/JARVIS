@@ -163,7 +163,7 @@ P08a dostarczamy w dwóch przyrostach: P08a1 — katalog aplikacji, wersjonowane
 
 ## P09 — dokumenty i raporty (K08)
 
-**P09a przed P06:** wymagane dokumenty onboardingu, źródła, kontrola kompletności, zaakceptowana wersja i powiązanie z warunkiem sprawy. Zależności: P03–P04. Pełny katalog raportów i eksportów poniżej jest dalszą częścią tej paczki.
+**P09a przed P06:** wymagane dokumenty onboardingu, źródła, kontrola kompletności, zaakceptowana wersja i powiązanie z warunkiem sprawy. Zależności: P03–P04. Przyrost P09a1 obejmuje kontrakt źródła zakresu i rewizji, P09a2 — pliki oraz praktyczny materiał odbiorowy. [Projekt i kryteria](p09a-design.md). Pełny katalog raportów i eksportów poniżej jest dalszą częścią tej paczki.
 
 - Szablony, wymagane pola, wersje, klasyfikacja i źródła. Rewizja może jawnie odświeżyć źródła; nowa treść nie udaje oparcia na nowszych danych przy zachowaniu starych referencji. Akceptacja przypięta do konkretnej wersji; zmiana źródła wykrywa nieaktualność.
 - Lokalne pliki dowodów z manifestem, typem, rozmiarem, SHA-256 i kontrolą dostępu. Nie wykonywać zawartości importowanego pliku ani instrukcji w dokumencie.
