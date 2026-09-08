@@ -2,7 +2,7 @@
 
 Lokalny partner operacyjny firmy: rozmowy, sprawy, ludzie, sprzęt, sprzedaż, rekrutacja, zakupy, licencje, dokumenty i IT. Polska aplikacja React obsługiwana przez ten sam proces Fastify. Wszystkie zmiany biznesowe przechodzą przez trwały Core i zgodę na konkretne argumenty; wykonanie techniczne oraz odbiór biznesowy są osobnymi decyzjami.
 
-Punktem odniesienia jest [wizja v0.4](docs/vision.md), a dowody i granice są w [macierzy pokrycia](docs/coverage.md). JARVIS ma własne dane i konfigurację. Nie zmienia ATLAS, NEXUS, COMPASS, ELEVATE ani QUALRIX i nie zawiera automatycznych połączeń do tych aplikacji.
+Punktem odniesienia jest [wizja v0.4](docs/vision.md), a dowody i granice są w [macierzy pokrycia](docs/coverage.md). Pełną kolejność dalszych prac określa [roadmapa wykonawcza](docs/roadmap.md), z [decyzjami o gotowych komponentach OSS](docs/oss-decisions.md), [planem odbioru](docs/acceptance.md) i [dziennikiem realizacji](docs/delivery-state.md). JARVIS ma własne dane i konfigurację. Nie zmienia ATLAS, NEXUS, COMPASS, ELEVATE ani QUALRIX i nie zawiera automatycznych połączeń do tych aplikacji.
 
 ## Uruchomienie
 
@@ -27,7 +27,7 @@ Panel: <http://127.0.0.1:4310>. Domyślny `local` jest laboratorium przeznaczony
 4. Sprawa ma rewizję zakresu, terminy, zależności zadań, dowody i zapisy czasu/kosztu. Po odbiorze można pobrać pakiet JSON do przygotowania rozliczenia. Pakiet nie wykonuje księgowania ani płatności.
 5. Asystent lokalny przeprowadza np. „przygotuj laptop dla Ani”, dopytując o osobę i termin. Tryb bez modelu jest jawnie ograniczonym zestawem szablonów. Opcjonalny Claude otrzymuje zamknięty katalog faktycznych narzędzi i minimalny kontekst, a jego odpowiedź nadal jest tylko propozycją.
 
-Pełne lokalne przebiegi: oferta → przekazanie → odbiór; rekrutacja → decyzja → onboarding; rezerwacja → wydanie → zwrot; zamówienie → potwierdzenie → dostawa; miejsca licencyjne; wersje dokumentów ze źródłami; offboarding ze zwrotami i zadaniami dostępu; diagnoza i naprawa własnej usługi laboratoryjnej przez HTTP. Zapisy o fizycznych działaniach są poświadczeniami człowieka. Połączenia z systemami produkcyjnymi wymagają osobnego uruchomienia adapterów.
+Obecne lokalne przejścia modułów: oferta → przekazanie → odbiór; rekrutacja → decyzja → onboarding; rezerwacja → wydanie → zwrot; zamówienie → potwierdzenie → dostawa; miejsca licencyjne; wersje dokumentów ze źródłami; offboarding ze zwrotami i zadaniami dostępu; diagnoza i naprawa własnej usługi laboratoryjnej przez HTTP. Zapisy o fizycznych działaniach są poświadczeniami człowieka. Połączenia z systemami produkcyjnymi wymagają osobnego uruchomienia adapterów.
 
 ## Konta i dwie firmy
 
@@ -75,7 +75,7 @@ Claude otrzymuje ograniczone metadane wybranych rekordów, schematy narzędzi i 
 | `/api/documents/:id/export`, `/api/cases/:id/package`  | Eksport z wersją i SHA-256; pakiet sprawy wymaga odbioru.       |
 | `/api/ops`                                             | Technologia, terminy/blokady i zużycie modelu.                  |
 
-Inicjatywy powstają z konkretnych danych i reguł. Mają źródło, wiek, właściciela/termin, deduplikację, odłożenie i wyciszenie. Nie wysyłają wiadomości do ludzi przez zewnętrzne usługi. OpenTelemetry ma lokalny bufor; eksport sieciowy jest wyłączony.
+Inicjatywy powstają z konkretnych danych i reguł. Mają źródło, wiek, właściciela/termin, deduplikację, odłożenie i wyciszenie. Nie wysyłają wiadomości do ludzi przez zewnętrzne usługi. OpenTelemetry ma lokalny bufor; eksport sieciowy jest wyłączony. Trwały stos observability OSS jest zaplanowany w P01–P02 i nie jest jeszcze uruchomiony. Testy modułów nie oznaczają pełnego odbioru procesów biznesowych; wymagane powiązania i bramki opisuje roadmapa.
 
 ## Sprawdzenie i dostarczenie
 
