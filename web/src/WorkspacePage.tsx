@@ -21,6 +21,7 @@ import {
 } from "./references";
 import { EntityContent, RecordDownload } from "./EntityContent";
 import { LaboratoryPanel } from "./LaboratoryPanel";
+import { ItCase } from "./ItCase";
 import { DocumentTemplate } from "./DocumentTemplate";
 import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
 import { DocumentFiles } from "./DocumentFiles";
@@ -814,6 +815,9 @@ export function WorkspacePage({
                   context={context}
                   revision={revision}
                 />
+              )}
+              {item.module === "cases" && !!item.data.laboratoryContext && (
+                <ItCase item={item} context={context} />
               )}
               {item.module === "documents" && (
                 <>

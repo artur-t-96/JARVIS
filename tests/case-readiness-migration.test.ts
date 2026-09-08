@@ -364,10 +364,10 @@ test("failed readiness migration rolls back table replacement and refuses an unk
     new WorkspaceStore(path).close();
     db = new DatabaseSync(path);
     db.prepare("INSERT INTO schema_versions_operations VALUES(?,?)").run(
-      12,
+      13,
       "2026-09-08T10:00:00Z",
     );
-    assert.throws(() => new WorkspaceStore(path), /newer than supported v11/);
+    assert.throws(() => new WorkspaceStore(path), /newer than supported v12/);
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });

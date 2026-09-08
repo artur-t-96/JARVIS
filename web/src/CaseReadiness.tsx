@@ -31,6 +31,7 @@ export interface CaseRequirement {
     version: number;
     hash: string;
     observedAt: string;
+    runId?: string;
   };
 }
 export interface Readiness {
@@ -177,7 +178,9 @@ export function ReadinessCard({
                         className="text-button"
                         onClick={() =>
                           navigate(
-                            `module/${encodeURIComponent(requirement.source!.module)}/${encodeURIComponent(requirement.source!.id)}`,
+                            requirement.source!.runId
+                              ? `runs/${encodeURIComponent(requirement.source!.runId)}`
+                              : `module/${encodeURIComponent(requirement.source!.module)}/${encodeURIComponent(requirement.source!.id)}`,
                           )
                         }
                       >

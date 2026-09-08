@@ -9,6 +9,7 @@ import {
   accessAttestationFields,
 } from "./access-models.js";
 import { caseRequirementDefinitionsSchema } from "./case-readiness.js";
+import { laboratoryScopeSchema } from "./laboratory-contract.js";
 
 export interface WorkspaceField {
   key: string;
@@ -252,6 +253,7 @@ export const createDataSchemas = {
     .strict(),
   cases: z
     .object({
+      laboratory: laboratoryScopeSchema.optional(),
       requirements: caseRequirementDefinitionsSchema.optional(),
       caseType: z.enum([
         "general",
@@ -533,6 +535,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         ...base,
         requirementId: id,
         sourceModule: z.enum([
+          "laboratory",
           "assets",
           "documents",
           "licenses",
@@ -541,6 +544,10 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         ]),
         sourceId: id,
         sourceVersion: z.number().int().min(1),
+        sourceProofHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
         allocationId: id.optional(),
         issueEventId: id.optional(),
         accessProofHash: z

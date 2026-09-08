@@ -20,8 +20,8 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P03    | odebrane           | Minimalne kontrakty zadań, uprawnień i typowanych bramek; PR #7, 169 testów oraz odbiór głównej instalacji.                                                                                   |
 | P04    | blokada zewnętrzna | Lokalny przepływ odebrany w PR #8; rzeczywisty dostawca Claude pozostaje osobnym, niepotwierdzonym odbiorem.                                                                                  |
 | P05    | w toku             | P05a odebrane w PR #9; P05b domyka ewidencję, serwis i rozbieżności.                                                                                                                          |
-| P06    | w toku             | P06a łączy dokument, sprzęt, dostępy, odbiór i aktywację; P06b obejmuje konfiguracje obu rodzajów współpracy i anulowanie startu.                                                             |
-| P07    | do wykonania       | Pełny proces IT, certyfikat i niezależna weryfikacja.                                                                                                                                         |
+| P06    | odebrane lokalnie  | PR #18–20: pełny obieg, warianty i anulowanie; dostawca modelu P04 oraz końcowy przekrojowy odbiór P14 pozostają osobne.                                                                      |
+| P07    | w toku             | P07a: sprawa z dowodem z laboratorium; P07b: certyfikat i niezależna weryfikacja.                                                                                                             |
 | P08    | w toku             | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
 | P09    | w toku             | P09a1: kontekst rewizji i źródła; następnie dowody plikowe i gotowe dokumenty.                                                                                                                |
 | P10    | do wykonania       | Oferta, przekazanie, realizacja i pakiet rozliczeniowy.                                                                                                                                       |
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P06b2: anulowanie rozpoczęcia współpracy.** Baza: odebrany lokalnie PR #19, `907edea9455e186b2ede6c866aa89d8f3ad7f609`. Worktree `/private/tmp/jarvis-cancel-onboarding`, gałąź `codex/cancel-onboarding`. Jawna decyzja o niezrealizowanym starcie, rozliczenie zasobów właściwego okresu, zachowanie historii i możliwość nowego startu. [Projekt i macierz P06](p06-design.md). Spis z natury oraz import P05b pozostają otwarte.
+**P07a: sprawa IT z rzeczywistym wynikiem testu.** Baza: odebrany lokalnie PR #20, `c1cbb1f14850e3da24e5c6e8fb61847db24d35bb`. Worktree `/private/tmp/jarvis-it-cases`, gałąź `codex/it-cases`. Obserwacja własnej usługi, uzgodniony zakres, naprawa Core i typowany odbiór; P07b dodaje rzeczywisty przypadek certyfikatu. [Projekt P07](p07-design.md). Pełny spis/import P05b i pozostałe kompetencje są nadal w roadmapie.
 
 ## Kontynuacja w tym zadaniu
 
@@ -349,3 +349,21 @@ Po zatrzymaniu podglądu wykonano ośmioplikową kopię wraz z oryginałem dokum
 Dowody prywatne: `/private/tmp/jarvis-cancel-onboarding/.data/p06b2-preview/ui-proof.json`, `final-proof.mjs`, `restore-proof.ts`. Końcowe CI, scalenie i główna instalacja z bieżącym śladem OSS pozostają do odebrania.
 
 [CI kodu 34267979653](https://github.com/artur-t-96/JARVIS/actions/runs/34267979653) dla `a37638692a889ae4b903f126852c54e8a547e676` jest zielone: wszystkie testy, format, typy, build, secret scan oraz oba demonstratory. Bramka obejmuje zachowanie historycznych wartości i odniesień FK w v11, rollback oraz rzeczywisty SIGKILL po anulowaniu. Po końcowym commicie dokumentacji wymagane są jeszcze CI dokładnego head, scalenie i odbiór zainstalowanego SHA. Podgląd został zatrzymany po odbiorze i odtworzeniu.
+
+## P06b2 — dostarczone lokalnie
+
+[PR #20](https://github.com/artur-t-96/JARVIS/pull/20) scalono jako `c1cbb1f14850e3da24e5c6e8fb61847db24d35bb`. Końcowe [CI PR 34268262846](https://github.com/artur-t-96/JARVIS/actions/runs/34268262846), head `8cc152492bcb5549c49fc28b662d678b595d0083`, oraz [CI main 34268543645](https://github.com/artur-t-96/JARVIS/actions/runs/34268543645) zielone: **367/367**, format, typy, build, secret scan, SIGKILL i oba demonstratory. Zarządzana instalacja 8.09.2026 19:22:38 UTC na Node22.23.0; oba tryby gotowe, provider wyłączony.
+
+Przed aktualizacją zatrzymano obie aplikacje i zweryfikowano kopie: lab `/private/tmp/jarvis-before-p06b2-lab-20260908T1922`, 20 plików, manifest `9d54e72a530e98ea93b4c85be41c780664c0cec8212923ea41dc5175d222c985`; operational `/private/tmp/jarvis-before-p06b2-operational-20260908T1922`, sześć plików, manifest `1aa72353d8a32b381c2120e065c98da08551f49eaff651c93f4bc3eb4e96de5b`. Rzeczywiste odtworzenie podglądu opisano wyżej. Po aktualizacji operations v11 i kontrola FK są poprawne w obu trybach. Wszystkie wskazane stare osoby/sprawy miały identyczne wartości przed pierwszą nową operacją.
+
+Główne lab4310: Chrome przygotował, uruchomił i zatwierdził anulowanie `e390a643-47ce-46f1-8be6-df66d7526acd` syntetycznej współpracy z PR #19. Sprawa `c08bbd94-0647-4dad-bf29-5d04120d5ad7` jest anulowana, okres nie ma daty zakończenia pracy, osoba wróciła do `registered`. Osobno zatwierdzony nowy start utworzył sprawę `6516f13b-af93-41a0-8339-e974b638601c` z nowymi zadaniami i trzema brakującymi dowodami. Obie komendy mają jedną próbę i pozytywną weryfikację. Druga współpraca i wcześniejszy odebrany onboarding `eb8de6cd-2935-4406-956e-5a57f946151a` pozostały identyczne; jego odbiór nadal jest aktualny. Oba wyniki obejrzano w Chrome; konsola bez błędów i ostrzeżeń. Dowód `.data/local-product/p06b2-verification.json` rozdziela faktyczną komendę Chrome i komendę API.
+
+OSS 19:23 UTC: obie Grafany13.2.1, po 14 paneli i trzy źródła OK; aktualne metryki workera oraz ślady/logi scalonego SHA. Lab `b6c283865fcb6bac9473befa6801dd47`, operational `7146e857cce67a0617732f55ce6a022b`, po jednym skorelowanym logu. `.data/local-product/p06b2-oss-verification.json`. Pierwsza kontrola zaraz po uruchomieniu czekała na próbkę Prometheus; po cyklu zbierania potwierdzono rzeczywiste dane.
+
+P06 jest odebrane w lokalnym zakresie opisanym w projekcie: pozytywny onboarding (PR #18), przypięte warianty i zmiana daty (PR #19), anulowanie i powrót bez odziedziczonego odbioru (PR #20). To poświadczenia syntetyczne w JARVIS. Zewnętrzny dostawca modelu P04, pełna proaktywność P12 oraz przekrojowy odbiór całego produktu P14 pozostają otwarte. Hosting produkcyjny nie jest skonfigurowany. Kolejna paczka: P07a.
+
+## P07a — sprawa IT z dowodem z laboratorium
+
+Worktree `/private/tmp/jarvis-it-cases`, gałąź `codex/it-cases`, baza `c1cbb1f`. Implementacja wiąże rzeczywistą obserwację HTTP z diagnozą, właścicielem, terminem, wersją procedury i rewizją sprawy. Obowiązkowy `test_passed` czyta wyłącznie integralny wynik zatwierdzonego `lab.repairCase`, zgodny z zakończoną weryfikacją Core i oddzielnym magazynem skutków. Późniejsza awaria albo upływ pięciu minut blokuje aktualny odbiór. Ręczny zapis IT oraz dawny `lab.repair` nie zastępują tego dowodu. Automatyczna procedura nie wymaga fikcyjnego zadania człowieka; dodane wymagane zadania nadal blokują odbiór do ich wykonania.
+
+Lokalne osiem ukierunkowanych testów domeny/API/UI przechodzi. Obejmują dwie firmy, osobną zgodę i odbiór, duplikaty, odmowę, zmianę zakresu, odwołanie dostępu, negatywny test, wygaśnięcie, próbę podstawienia źródła oraz restart i odczyt zapisanego skutku. Typy i format poprawne. Pełne migracje, SIGKILL, CI, Chrome, kopia/odtworzenie i aktualizacja głównej instalacji pozostają kolejnymi krokami odbioru. P07b — certyfikat — jest osobną następną paczką.

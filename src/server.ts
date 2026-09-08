@@ -48,6 +48,7 @@ const laboratory = new LocalLaboratory(
   resolve(config.dataDir, "laboratory.sqlite"),
 );
 await laboratory.start();
+workspace.setLaboratory(laboratory);
 const voice = new VoiceService(config.dataDir);
 const tools = [
   ...demo.tools,
@@ -83,6 +84,9 @@ const engine = new Engine({
   diagnostics,
   onEvent: (event, details) => diagnostics.recordExecution(event, details),
 });
+laboratory.setOutcomeReader((tenant, runId, stepId) =>
+  engine.verificationReceipt(tenant, runId, stepId),
+);
 const planner =
   config.plannerKind === "anthropic"
     ? AnthropicPlanner.fromEnv()

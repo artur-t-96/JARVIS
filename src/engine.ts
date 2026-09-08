@@ -22,6 +22,7 @@ import {
   type ToolDefinition,
   type ToolResult,
   type Verification,
+  type StepEvidenceReceipt,
 } from "./contracts.js";
 
 export function canonical(value: unknown): string {
@@ -643,6 +644,46 @@ export class Engine {
         createdAt: String(e.created_at),
         details: parse<JsonObject>(e.details_json),
       })),
+    };
+  }
+  /** Internal provenance reader for closed source adapters. Never expose as an HTTP endpoint. */
+  verificationReceipt(
+    tenantId: string,
+    runId: string,
+    stepId: string,
+  ): StepEvidenceReceipt | null {
+    const row = this.db
+      .prepare(
+        `SELECT s.*,r.tool_versions,r.requested_by,r.status AS run_status FROM steps s
+      JOIN runs r ON r.id=s.run_id WHERE r.tenant_id=? AND s.run_id=? AND s.id=?`,
+      )
+      .get(tenantId, runId, stepId) as Row | undefined;
+    if (!row) return null;
+    const verification = row.verification_json
+      ? parse<Verification>(row.verification_json)
+      : null;
+    const approval = this.db
+      .prepare(
+        "SELECT decided_by FROM approvals WHERE run_id=? AND step_id=? AND status='approved' ORDER BY rowid DESC LIMIT 1",
+      )
+      .get(runId, stepId);
+    return {
+      toolId: String(row.tool_id),
+      toolVersion:
+        parse<Record<string, string>>(row.tool_versions)[String(row.tool_id)] ??
+        "",
+      inputHash: hash(parse<JsonObject>(row.resolved_input ?? row.input_json)),
+      outputHash: row.output_json
+        ? hash(parse<ToolResult>(row.output_json))
+        : null,
+      verificationHash: verification ? hash(verification) : null,
+      succeeded:
+        row.run_status === "completed" &&
+        row.status === "succeeded" &&
+        verification?.ok === true,
+      requestedBy: String(row.requested_by),
+      approvedBy: approval?.decided_by ? String(approval.decided_by) : null,
+      operationKey: String(row.operation_key),
     };
   }
   listRuns(
