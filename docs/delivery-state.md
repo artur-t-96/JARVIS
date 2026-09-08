@@ -12,23 +12,23 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 
 ## Stan paczek
 
-| Paczka | Status       | Następny warunek                                                     |
-| ------ | ------------ | -------------------------------------------------------------------- |
-| P00    | do odbioru   | Przegląd roadmapy, wymagane CI i merge dokumentacji.                 |
-| P01    | do wykonania | Manifest natywnych komponentów OSS, konfiguracja i lifecycle.        |
-| P02    | do wykonania | Naprawa kontekstu asynchronicznego i eksport rzeczywistych sygnałów. |
-| P03    | do wykonania | Typowane warunki odbioru i właściwi wykonawcy zadań.                 |
-| P04    | do wykonania | Kontrolowane odczyty kontekstu, ciągłość rozmowy i sprawy.           |
-| P05    | do wykonania | Kompletny obieg wyposażenia z poświadczeniami.                       |
-| P06    | do wykonania | Pełny onboarding po P08a/P09a i bazowych profilach z P03.            |
-| P07    | do wykonania | Pełny proces IT, certyfikat i niezależna weryfikacja.                |
-| P08    | do wykonania | Dostawy, koszty, miejsca i odnowienia licencji.                      |
-| P09    | do wykonania | Kompletne źródła, dowody plikowe i gotowe dokumenty.                 |
-| P10    | do wykonania | Oferta, przekazanie, realizacja i pakiet rozliczeniowy.              |
-| P11    | do wykonania | Rekrutacja i pełne zamknięcie konkretnej współpracy.                 |
-| P12    | do wykonania | Inicjatywy i operacyjny przegląd kierownika.                         |
-| P13    | do wykonania | Dwa pełne profile, rozszerzenia i rozmowa głosowa.                   |
-| P14    | do wykonania | Cała macierz i powtarzalna instalacja po aktualizacji.               |
+| Paczka | Status       | Następny warunek                                                                                                                                                                              |
+| ------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| P00    | odebrane     | [PR #4](https://github.com/artur-t-96/JARVIS/pull/4), merge `0ecee032cc69125c60fb8c75866ca60d3e9930c4`; [wymagane CI](https://github.com/artur-t-96/JARVIS/actions/runs/34215317438) zielone. |
+| P01    | do wykonania | Manifest natywnych komponentów OSS, konfiguracja i lifecycle.                                                                                                                                 |
+| P02    | w toku       | Kontekst asynchroniczny poprawiony w pierwszej paczce; eksport i instrumentacja HTTP/run/model do wykonania.                                                                                  |
+| P03    | do wykonania | Typowane warunki odbioru i właściwi wykonawcy zadań.                                                                                                                                          |
+| P04    | do wykonania | Kontrolowane odczyty kontekstu, ciągłość rozmowy i sprawy.                                                                                                                                    |
+| P05    | do wykonania | Kompletny obieg wyposażenia z poświadczeniami.                                                                                                                                                |
+| P06    | do wykonania | Pełny onboarding po P08a/P09a i bazowych profilach z P03.                                                                                                                                     |
+| P07    | do wykonania | Pełny proces IT, certyfikat i niezależna weryfikacja.                                                                                                                                         |
+| P08    | do wykonania | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
+| P09    | do wykonania | Kompletne źródła, dowody plikowe i gotowe dokumenty.                                                                                                                                          |
+| P10    | do wykonania | Oferta, przekazanie, realizacja i pakiet rozliczeniowy.                                                                                                                                       |
+| P11    | do wykonania | Rekrutacja i pełne zamknięcie konkretnej współpracy.                                                                                                                                          |
+| P12    | do wykonania | Inicjatywy i operacyjny przegląd kierownika.                                                                                                                                                  |
+| P13    | do wykonania | Dwa pełne profile, rozszerzenia i rozmowa głosowa.                                                                                                                                            |
+| P14    | do wykonania | Cała macierz i powtarzalna instalacja po aktualizacji.                                                                                                                                        |
 
 Statusy P01–P14 oznaczają brak pełnego odbioru paczki opisanej w roadmapie. Nie oznaczają braku całego kodu bazowego danego modułu.
 
@@ -38,7 +38,7 @@ Statusy P01–P14 oznaczają brak pełnego odbioru paczki opisanej w roadmapie. 
 
 1. Zweryfikować main i otwarte PR-y/worktrees JARVIS; dokończyć istniejącą paczkę zamiast dublować implementację.
 2. Rozdzielić niezależne prace: manifest/instalator i zamknięty lifecycle, konfiguracje/panele, kontekst/instrumentacja oraz niezależny przegląd.
-3. Naprawić `Diagnostics.currentSpan` jako domyślne źródło korelacji wszystkich logów. Dodać test równoległego HTTP i workera, osobnych kontekstów i redakcji.
+3. Pierwsza poprawka kontekstu ma commit `b1e4b9b`: `AsyncLocalStorage`, `withSpan` i `withWorkerTick`, testy równoległego HTTP/workera, zagnieżdżeń, błędów, zakończenia i redakcji. Sprawdzono lokalnie 12 testów infrastruktury, backend TypeScript i format. Przed kontynuacją sprawdzić PR gałęzi `codex/observability-context` oraz dokładny merge/CI i lokalny SHA. Eksport, trwała korelacja run/step/model i spany HTTP nadal pozostają do wykonania.
 4. Przypiąć oficjalne binaria z SHA-256, przygotować własne katalogi i jawne porty loopback; bez globalnych usług i odczytu innych repozytoriów przez kolektor.
 5. Uruchomić na syntetycznym laboratorium rzeczywiste metryki, logi i ślady. Sprawdzić retencję, restart, awarię kolektora, rozdział danych i zużycie zasobów.
 6. Doprowadzić kod przez bot branch/PR/CI/merge. Po merge zaktualizować wyłącznie zarządzaną instalację JARVIS, z zachowaniem danych i sprawdzeniem wersji w przeglądarce.

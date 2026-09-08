@@ -1,6 +1,12 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync, statfsSync } from "node:fs";
 import { join } from "node:path";
-import { SpanStatusCode, type Span } from "@opentelemetry/api";
+import {
+  ROOT_CONTEXT,
+  SpanStatusCode,
+  trace,
+  type Span,
+} from "@opentelemetry/api";
 import { MeterProvider, MetricReader } from "@opentelemetry/sdk-metrics";
 import {
   AlwaysOnSampler,
@@ -105,7 +111,9 @@ export class Diagnostics {
     "jarvis.http.duration",
     { unit: "ms" },
   );
-  private currentSpan: Span | undefined;
+  private readonly spanContext = new AsyncLocalStorage<Span>();
+  private readonly activeSpans = new Set<Span>();
+  private workerSpan: Span | undefined;
   private tickStartedAt: number | null = null;
   private tickCompletedAt: number | null = null;
   private lastDurationMs: number | null = null;
@@ -128,16 +136,57 @@ export class Diagnostics {
   }
 
   workerTickStarted(): void {
-    if (this.currentSpan || this.closed) return;
+    if (this.workerSpan || this.closed) return;
     this.tickStartedAt = this.clock();
-    if (this.exporter.getFinishedSpans().length >= 128) this.exporter.reset();
-    this.currentSpan = this.tracer.startSpan("worker.tick");
+    this.workerSpan = this.startSpan("worker.tick");
+  }
+
+  /** Scope correlation to this operation and its awaited work, never to other requests. */
+  async withSpan<T>(name: string, operation: () => T | Promise<T>): Promise<T> {
+    if (this.closed) throw new Error("Diagnostics is closed");
+    const span = this.startSpan(name);
+    return this.spanContext.run(span, async () => {
+      try {
+        const result = await operation();
+        if (span.isRecording()) span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (error) {
+        if (span.isRecording()) span.setStatus({ code: SpanStatusCode.ERROR });
+        throw error;
+      } finally {
+        this.endSpan(span);
+      }
+    });
+  }
+
+  async withWorkerTick<T>(
+    operation: () => T | Promise<T>,
+    queueSnapshot?: () => QueueSnapshot,
+  ): Promise<T> {
+    if (this.closed) throw new Error("Diagnostics is closed");
+    if (this.workerSpan) throw new Error("Worker tick is already running");
+    this.workerTickStarted();
+    const span = this.workerSpan!;
+    return this.spanContext.run(span, async () => {
+      try {
+        const result = await operation();
+        this.workerTickCompleted({ queue: queueSnapshot?.() });
+        return result;
+      } catch (error) {
+        this.workerTickCompleted({ errorCode: "worker_tick_failed" });
+        throw error;
+      } finally {
+        this.endSpan(span);
+        if (this.workerSpan === span) this.workerSpan = undefined;
+      }
+    });
   }
 
   workerTickCompleted(
     result: { queue?: QueueSnapshot; errorCode?: string } = {},
   ): void {
-    if (!this.currentSpan || this.tickStartedAt === null || this.closed) return;
+    const span = this.workerSpan;
+    if (!span || this.tickStartedAt === null || this.closed) return;
     this.tickCompletedAt = this.clock();
     this.lastDurationMs = Math.max(
       0,
@@ -155,16 +204,21 @@ export class Diagnostics {
     if (result.queue) this.queue = this.cleanQueue(result.queue);
     this.tickCounter.add(1, { outcome: failed ? "error" : "ok" });
     this.tickDuration.record(this.lastDurationMs);
-    this.currentSpan?.setStatus({
+    span.setStatus({
       code: failed ? SpanStatusCode.ERROR : SpanStatusCode.OK,
     });
-    this.currentSpan?.end();
-    this.currentSpan = undefined;
-    if (failed)
-      this.log("error", "worker.tick.failed", {
-        code: this.lastErrorCode,
-        durationMs: this.lastDurationMs,
-      });
+    try {
+      if (failed)
+        this.spanContext.run(span, () =>
+          this.log("error", "worker.tick.failed", {
+            code: this.lastErrorCode,
+            durationMs: this.lastDurationMs,
+          }),
+        );
+    } finally {
+      this.endSpan(span);
+      this.workerSpan = undefined;
+    }
   }
 
   setMaintenance(value: boolean): void {
@@ -206,7 +260,8 @@ export class Diagnostics {
     const safeEvent = /^[a-z0-9_.-]{1,80}$/.test(event)
       ? event
       : "invalid_event";
-    const context = this.currentSpan?.spanContext();
+    const span = this.spanContext.getStore();
+    const context = span?.isRecording() ? span.spanContext() : undefined;
     const line = JSON.stringify({
       time: new Date(this.clock()).toISOString(),
       level,
@@ -226,7 +281,7 @@ export class Diagnostics {
       this.tickCompletedAt === null
         ? null
         : Math.max(0, now - this.tickCompletedAt);
-    const inProgress = Boolean(this.currentSpan);
+    const inProgress = Boolean(this.workerSpan);
     const tickAgeMs =
       inProgress && this.tickStartedAt !== null
         ? Math.max(0, now - this.tickStartedAt)
@@ -307,12 +362,33 @@ export class Diagnostics {
   async close(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
-    this.currentSpan?.end();
-    this.currentSpan = undefined;
+    for (const span of this.activeSpans) this.endSpan(span);
+    this.workerSpan = undefined;
+    this.spanContext.disable();
     await Promise.all([
       this.traceProvider.shutdown(),
       this.meterProvider.shutdown(),
     ]);
+  }
+
+  private startSpan(name: string): Span {
+    const parent = this.spanContext.getStore();
+    const context = parent?.isRecording()
+      ? trace.setSpan(ROOT_CONTEXT, parent)
+      : ROOT_CONTEXT;
+    const span = this.tracer.startSpan(
+      /^[a-z0-9_.-]{1,80}$/.test(name) ? name : "invalid_operation",
+      {},
+      context,
+    );
+    this.activeSpans.add(span);
+    return span;
+  }
+
+  private endSpan(span: Span): void {
+    if (!this.activeSpans.delete(span)) return;
+    if (this.exporter.getFinishedSpans().length >= 128) this.exporter.reset();
+    span.end();
   }
 
   private iso(value: number | null) {

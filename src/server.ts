@@ -128,17 +128,12 @@ const interval = setInterval(() => {
       }
     }
   }
-  diagnostics.workerTickStarted();
-  current = engine
-    .tick()
-    .then((result) => {
-      diagnostics.workerTickCompleted({ queue: engine.queue() });
-      return result;
-    })
-    .catch(() => {
-      diagnostics.workerTickCompleted({ errorCode: "worker_tick_failed" });
-      return false;
-    })
+  current = diagnostics
+    .withWorkerTick(
+      () => engine.tick(),
+      () => engine.queue(),
+    )
+    .catch(() => false)
     .finally(() => {
       current = undefined;
     });

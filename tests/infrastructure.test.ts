@@ -37,6 +37,14 @@ function temporary() {
   return mkdtempSync(join(tmpdir(), "jarvis-infrastructure-"));
 }
 
+function barrier() {
+  let release!: () => void;
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { promise, release };
+}
+
 test("upgrades the original v1 ledger and keeps operations migrations independent", () => {
   const db = new DatabaseSync(":memory:");
   try {
@@ -237,21 +245,22 @@ test("logs drop request content, credentials and errors while retaining safe cor
     writeLog: (line) => lines.push(line),
   });
   try {
-    diagnostics.workerTickStarted();
-    diagnostics.log("error", "tool.failed", {
-      tenantId: "tenant-a",
-      runId: "run-123",
-      operationKey: "operation-1",
-      toolId: "local.read",
-      requestId: "Bearer confidential-token",
-      durationMs: 12,
-      token: "never-print",
-      body: { password: "never-print" },
-      error: new Error("never-print"),
-      request: "private business request",
-      apiKey: "never-print",
-      input: { email: "private@example.com" },
-    });
+    await diagnostics.withWorkerTick(() =>
+      diagnostics.log("error", "tool.failed", {
+        tenantId: "tenant-a",
+        runId: "run-123",
+        operationKey: "operation-1",
+        toolId: "local.read",
+        requestId: "Bearer confidential-token",
+        durationMs: 12,
+        token: "never-print",
+        body: { password: "never-print" },
+        error: new Error("never-print"),
+        request: "private business request",
+        apiKey: "never-print",
+        input: { email: "private@example.com" },
+      }),
+    );
     assert.equal(lines.length, 1);
     const record = JSON.parse(lines[0]!);
     assert.equal(record.runId, "run-123");
@@ -265,6 +274,249 @@ test("logs drop request content, credentials and errors while retaining safe cor
       { code: "[redacted]" },
     );
   } finally {
+    await diagnostics.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("worker, nested and parallel spans keep their own context across awaits", async () => {
+  const dir = temporary();
+  const records: Record<string, string>[] = [];
+  const diagnostics = new Diagnostics({
+    dataDir: dir,
+    version: "test",
+    minimumFreeBytes: 0,
+    writeLog: (line) => records.push(JSON.parse(line)),
+  });
+  const nestedGate = barrier();
+  const workerResumed = barrier();
+  const workerGate = barrier();
+  const parallelGate = barrier();
+  const record = (event: string) => {
+    const result = records.find((entry) => entry.event === event);
+    assert.ok(result, `Missing ${event}`);
+    return result;
+  };
+  try {
+    const worker = diagnostics.withWorkerTick(
+      async () => {
+        diagnostics.log("info", "worker.before");
+        const nested = diagnostics.withSpan("tool.execute", async () => {
+          diagnostics.log("info", "nested.before");
+          await nestedGate.promise;
+          diagnostics.log("info", "nested.after");
+        });
+        diagnostics.log("info", "worker.nested_pending");
+        await nested;
+        diagnostics.log("info", "worker.resumed");
+        workerResumed.release();
+        await workerGate.promise;
+        diagnostics.log("info", "worker.after");
+        return "done";
+      },
+      () => ({ waitingApproval: 1 }),
+    );
+    const parallel = diagnostics.withSpan("model.request", async () => {
+      diagnostics.log("info", "parallel.before");
+      await parallelGate.promise;
+      diagnostics.log("info", "parallel.after");
+    });
+    assert.equal(
+      diagnostics.snapshot({ databaseHealthy: true }).worker.inProgress,
+      true,
+    );
+    diagnostics.recordRequest({
+      method: "GET",
+      route: "/api/runs",
+      statusCode: 200,
+      durationMs: 1,
+      requestId: "http-unrelated",
+    });
+    diagnostics.log("info", "outside.pending");
+    nestedGate.release();
+    await workerResumed.promise;
+    parallelGate.release();
+    await parallel;
+    diagnostics.log("info", "outside.parallel_finished");
+    workerGate.release();
+    assert.equal(await worker, "done");
+    diagnostics.log("info", "outside.finished");
+
+    const root = record("worker.before");
+    assert.match(root.traceId!, /^[a-f0-9]{32}$/);
+    assert.match(root.spanId!, /^[a-f0-9]{16}$/);
+    for (const event of [
+      "worker.nested_pending",
+      "worker.resumed",
+      "worker.after",
+    ]) {
+      assert.equal(record(event).traceId, root.traceId);
+      assert.equal(record(event).spanId, root.spanId);
+    }
+    assert.equal(record("nested.before").traceId, root.traceId);
+    assert.notEqual(record("nested.before").spanId, root.spanId);
+    assert.equal(record("nested.before").spanId, record("nested.after").spanId);
+    assert.equal(record("nested.after").traceId, root.traceId);
+    assert.notEqual(record("parallel.before").traceId, root.traceId);
+    assert.equal(
+      record("parallel.after").traceId,
+      record("parallel.before").traceId,
+    );
+    assert.equal(
+      record("parallel.after").spanId,
+      record("parallel.before").spanId,
+    );
+    for (const event of [
+      "http.request",
+      "outside.pending",
+      "outside.parallel_finished",
+      "outside.finished",
+    ]) {
+      assert.equal(record(event).traceId, undefined, event);
+      assert.equal(record(event).spanId, undefined, event);
+    }
+    const state = diagnostics.snapshot({ databaseHealthy: true });
+    assert.equal(state.worker.inProgress, false);
+    assert.equal(state.worker.state, "healthy");
+    assert.equal(state.queue.waitingApproval, 1);
+    assert.equal(state.telemetry.counters.workerTicks, 1);
+    assert.equal(state.telemetry.retainedTraces, 3);
+  } finally {
+    nestedGate.release();
+    workerGate.release();
+    parallelGate.release();
+    await diagnostics.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("failed scopes restore their parent, correlate worker failure and redact secrets", async () => {
+  const dir = temporary();
+  const lines: string[] = [];
+  const diagnostics = new Diagnostics({
+    dataDir: dir,
+    version: "test",
+    writeLog: (line) => lines.push(line),
+  });
+  const privateError = new Error("Bearer confidential-token");
+  try {
+    await diagnostics.withSpan("parent.operation", async () => {
+      diagnostics.log("info", "parent.before");
+      await assert.rejects(
+        diagnostics.withSpan("nested.operation", async () => {
+          await Promise.resolve();
+          diagnostics.log("warn", "nested.failed", {
+            error: privateError,
+            code: "Bearer confidential-token",
+          });
+          throw privateError;
+        }),
+        (error) => error === privateError,
+      );
+      diagnostics.log("info", "parent.after");
+      await assert.rejects(
+        diagnostics.withWorkerTick(async () => {
+          await Promise.resolve();
+          diagnostics.log("info", "worker.before_failure");
+          throw privateError;
+        }),
+        (error) => error === privateError,
+      );
+      diagnostics.log("info", "parent.after_worker");
+    });
+    diagnostics.log("info", "outside.after_failure");
+    const records = lines.map((line) => JSON.parse(line));
+    const parent = records[0];
+    assert.equal(records[1].traceId, parent.traceId);
+    assert.notEqual(records[1].spanId, parent.spanId);
+    for (const index of [2, 5]) {
+      assert.equal(records[index].traceId, parent.traceId);
+      assert.equal(records[index].spanId, parent.spanId);
+    }
+    const worker = records[3];
+    const failure = records[4];
+    assert.equal(failure.event, "worker.tick.failed");
+    assert.equal(failure.traceId, worker.traceId);
+    assert.equal(failure.spanId, worker.spanId);
+    assert.notEqual(failure.spanId, parent.spanId);
+    assert.equal(failure.code, "worker_tick_failed");
+    assert.equal(records[6].traceId, undefined);
+    assert.equal(records[6].spanId, undefined);
+    assert.ok(!lines.join("\n").includes("confidential-token"));
+    const state = diagnostics.snapshot({ databaseHealthy: true });
+    assert.equal(state.worker.state, "error");
+    assert.equal(state.worker.inProgress, false);
+    assert.equal(state.telemetry.counters.workerErrors, 1);
+    assert.equal(state.telemetry.retainedTraces, 3);
+    await diagnostics.withWorkerTick(() => {});
+    assert.equal(
+      diagnostics.snapshot({ databaseHealthy: true }).worker.state,
+      "healthy",
+    );
+  } finally {
+    await diagnostics.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("ended or closed scopes cannot correlate detached work and trace retention stays bounded", async () => {
+  const dir = temporary();
+  const records: Record<string, string>[] = [];
+  const diagnostics = new Diagnostics({
+    dataDir: dir,
+    version: "test",
+    writeLog: (line) => records.push(JSON.parse(line)),
+  });
+  const detachedGate = barrier();
+  const closeGate = barrier();
+  const finishTogether = barrier();
+  try {
+    let detached!: Promise<void>;
+    await diagnostics.withSpan("short.operation", () => {
+      detached = (async () => {
+        await detachedGate.promise;
+        diagnostics.log("info", "detached.after_end");
+      })();
+    });
+    detachedGate.release();
+    await detached;
+    assert.equal(records[0]?.traceId, undefined);
+    assert.equal(records[0]?.spanId, undefined);
+
+    const concurrent = Array.from({ length: 129 }, () =>
+      diagnostics.withSpan("parallel.operation", () => finishTogether.promise),
+    );
+    finishTogether.release();
+    await Promise.all(concurrent);
+    const retained = diagnostics.snapshot({ databaseHealthy: true }).telemetry
+      .retainedTraces;
+    assert.ok(retained > 0 && retained <= 128);
+
+    const closing = diagnostics.withWorkerTick(async () => {
+      diagnostics.log("info", "worker.before_close");
+      await closeGate.promise;
+      diagnostics.log("info", "worker.after_close");
+    });
+    await diagnostics.close();
+    closeGate.release();
+    await closing;
+    diagnostics.log("info", "outside.after_close");
+    assert.match(records[1]?.traceId ?? "", /^[a-f0-9]{32}$/);
+    for (const record of records.slice(2)) {
+      assert.equal(record.traceId, undefined);
+      assert.equal(record.spanId, undefined);
+    }
+    const state = diagnostics.snapshot({ databaseHealthy: true });
+    assert.equal(state.live, false);
+    assert.equal(state.worker.inProgress, false);
+    await assert.rejects(
+      diagnostics.withSpan("closed.operation", () => assert.fail("closed")),
+      /Diagnostics is closed/,
+    );
+  } finally {
+    detachedGate.release();
+    closeGate.release();
+    finishTogether.release();
     await diagnostics.close();
     rmSync(dir, { recursive: true, force: true });
   }
