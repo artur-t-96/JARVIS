@@ -1,10 +1,12 @@
-# JARVIS Core
+# JARVIS lokalnie
 
-Samodzielny rdzeń prowadzenia zadań: plan, kontrolowane wykonanie, decyzja człowieka i potwierdzony wynik.
+Lokalny partner operacyjny firmy: rozmowy, sprawy, ludzie, sprzęt, sprzedaż, rekrutacja, zakupy, licencje, dokumenty i IT. Polska aplikacja React obsługiwana przez ten sam proces Fastify. Wszystkie zmiany biznesowe przechodzą przez trwały Core i zgodę na konkretne argumenty; wykonanie techniczne oraz odbiór biznesowy są osobnymi decyzjami.
 
-Projekt jest budowany niezależnie od pozostałych systemów. Nie zawiera połączeń do produkcji ATLAS, NEXUS, COMPASS ani ELEVATE.
+Punktem odniesienia jest [wizja v0.4](docs/vision.md), a dowody i granice są w [macierzy pokrycia](docs/coverage.md). JARVIS ma własne dane i konfigurację. Nie zmienia ATLAS, NEXUS, COMPASS, ELEVATE ani QUALRIX i nie zawiera automatycznych połączeń do tych aplikacji.
 
 ## Uruchomienie
+
+Node **22.23.0**, npm, bez Dockera:
 
 ```sh
 nvm use
@@ -13,90 +15,77 @@ npm run build
 npm start
 ```
 
-Panel: `http://127.0.0.1:4310`. Domyślny tryb `local` przyjmuje wyłącznie ruch loopback i pracuje na danych syntetycznych. Przygotuj plan, uruchom go, sprawdź argumenty zapisu i zatwierdź operację. Po restarcie ten sam katalog `.data/` zachowuje zadania, decyzje i dowody.
+Panel: <http://127.0.0.1:4310>. Domyślny `local` jest laboratorium przeznaczonym na dane testowe, z lokalnym operatorem i jawną zgodą na każdy zapis. Dane pozostają w `.data/`; restart zachowuje sprawy, decyzje, rozmowy i efekty. `npm run dev` używa źródeł i oznacza wersję jako `development`.
 
-`npm run dev` uruchamia źródła bez kompilowania. `npm run demo` pokazuje dwa wznowienia: po oczekiwaniu na zgodę i po utracie odpowiedzi na już wykonany zapis. Testowa baza demonstracji jest odseparowana i usuwana po zakończeniu.
+[Instalacja zarządzana](docs/local-product.md) rozdziela `.data/lab` i `.data/operational`, sprawdza manifest kompilacji i pozwala kontrolować wyłącznie własne procesy JARVIS. [Backup/restore i diagnostyka](docs/operations.md) opisują odtwarzanie bez ponawiania już zapisanego skutku.
 
-## Co obejmuje v0.1
+## Praca w panelu
 
-- Trwałe plany, kroki, decyzje, dziennik i dowody w SQLite.
-- Kontrolę organizacji oraz ról operatora, zatwierdzającego i obserwatora.
-- Zgodę na każdy zapis, powiązaną z hashem konkretnego planu, argumentów, narzędzia i zasad. Opcjonalny wymóg drugiej osoby w konfiguracji.
-- Lease i kontrolę właściciela próby, deadline, zatrzymanie oraz uzgadnianie niepewnego skutku.
-- Idempotentne narzędzie testowe z osobną trwałą bazą; niezależny odczyt rzeczywistego efektu przy weryfikacji.
-- Polski panel: plan, przebieg, decyzja, blokada, historia i dowód.
-- Domyślny jawnie oznaczony planer demonstracyjny. Opcjonalny adapter Anthropic przygotowuje wyłącznie plan w zamkniętym katalogu testowym.
+1. Dodaj lokalną osobę, urządzenie albo sprawę. Formularz przygotuje plan; dane nie są jeszcze zmienione.
+2. Uruchom plan, przeczytaj dokładne argumenty i zatwierdź konkretną operację. Możesz odmówić lub anulować.
+3. Otwórz zapisany rekord. Zadania człowieka, protokoły wydania, dostępów i odbiór wymagają odrębnego potwierdzenia.
+4. Sprawa ma rewizję zakresu, terminy, zależności zadań, dowody i zapisy czasu/kosztu. Po odbiorze można pobrać pakiet JSON do przygotowania rozliczenia. Pakiet nie wykonuje księgowania ani płatności.
+5. Asystent lokalny przeprowadza np. „przygotuj laptop dla Ani”, dopytując o osobę i termin. Tryb bez modelu jest jawnie ograniczonym zestawem szablonów. Opcjonalny Claude otrzymuje zamknięty katalog faktycznych narzędzi i minimalny kontekst, a jego odpowiedź nadal jest tylko propozycją.
 
-Opis dowolnego zadania w trybie demo jest tematem stałego scenariusza testowego. System nie wykonuje jeszcze rzeczywistego onboardingu, sprzedaży ani działań IT. Model nie może dodać narzędzia, wybrać organizacji ani przyznać sobie zgody.
+Pełne lokalne przebiegi: oferta → przekazanie → odbiór; rekrutacja → decyzja → onboarding; rezerwacja → wydanie → zwrot; zamówienie → potwierdzenie → dostawa; miejsca licencyjne; wersje dokumentów ze źródłami; offboarding ze zwrotami i zadaniami dostępu; diagnoza i naprawa własnej usługi laboratoryjnej przez HTTP. Zapisy o fizycznych działaniach są poświadczeniami człowieka. Połączenia z systemami produkcyjnymi wymagają osobnego uruchomienia adapterów.
 
-## Konfiguracja
+## Konta i dwie firmy
 
-Zmienne są odczytywane ze środowiska procesu; plik `.env` nie jest automatycznie ładowany. Przykład nazw znajduje się w `.env.example`.
-
-| Zmienna                                 | Domyślnie               | Znaczenie                                     |
-| --------------------------------------- | ----------------------- | --------------------------------------------- |
-| `HOST` / `PORT`                         | `127.0.0.1` / `4310`    | Adres i port serwera.                         |
-| `JARVIS_DATA_DIR`                       | `.data`                 | Trwały katalog na lokalnym dysku.             |
-| `JARVIS_MODE`                           | `local`                 | `authenticated` wymaga pliku uprawnień.       |
-| `JARVIS_AUTH_FILE`                      | —                       | Prywatny plik JSON poza repozytorium.         |
-| `JARVIS_PLANNER`                        | `demo`                  | `anthropic` wymaga jawnego klucza i modelu.   |
-| `ANTHROPIC_API_KEY` / `ANTHROPIC_MODEL` | —                       | Wyłącznie dla opcjonalnego planera Anthropic. |
-| `GIT_SHA`                               | SHA lokalnego checkoutu | Wersja prezentowana przez healthcheck.        |
-
-W trybie `anthropic` opis zadania i ograniczony katalog narzędzi są wysyłane do Anthropic. Wybór tego trybu jest świadomym włączeniem zewnętrznego przetwarzania. Domyślna demonstracja nie wymaga sieci ani klucza modelu; nie odczytuje sekretów innych aplikacji.
-
-Schemat prywatnego pliku autoryzacji:
+Do własnych danych operacyjnych użyj `JARVIS_MODE=accounts` na loopback. Utwórz konto przez `npm run users -- create`, przekazując prywatny JSON na stdin; CLI nie wypisuje hasła. Przykład struktury (nie jest gotowym kontem):
 
 ```json
 {
-  "principals": [
-    {
-      "id": "operator-1",
-      "tenantId": "company-a",
-      "roles": ["operator", "approver", "viewer"],
-      "token": "REPLACE_WITH_AT_LEAST_32_RANDOM_CHARACTERS"
-    }
-  ],
-  "policies": [
-    {
-      "tenantId": "company-a",
-      "version": "v1",
-      "name": "Firma testowa A",
-      "allowedTools": ["demo.inspect", "demo.publish"],
-      "approvalTools": [],
-      "allowSelfApproval": true
-    }
-  ]
+  "id": "operator-1",
+  "tenantId": "dynaminds",
+  "username": "operator",
+  "password": "REPLACE_WITH_PRIVATE_PASSWORD",
+  "roles": ["operator", "approver", "viewer"],
+  "scopes": ["*"]
 }
 ```
 
-Wygeneruj unikalny losowy token dla każdej tożsamości i przechowuj plik z uprawnieniami `0600`. Token jest podawany w panelu i pozostaje wyłącznie w pamięci karty. API używa `Authorization: Bearer …`. Konfiguracja jest ładowana przy starcie; zmiana zasad lub ról wymaga restartu i jest ponownie sprawdzana przed wykonaniem. Zmiana zasad może zablokować stary plan zamiast automatycznie odziedziczyć wcześniejszą zgodę.
+Identyfikator firmy izoluje dane. Role: `operator`, `approver`, `viewer`. Obszary: `people`, `cases`, `assets`, `purchases`, `licenses`, `sales`, `recruitment`, `documents`, `it`, `initiatives`, `company`. Odwołania do osób, źródeł dokumentów i spraw mogą wymagać kilku obszarów jednocześnie. `npm run users -- revoke TENANT USER` odbiera konto i sesje; worker sprawdza aktualne uprawnienia przed wykonaniem i wznowieniem.
 
-## API
+Tryb kont lokalnych pozwala osobie mającej obie role zatwierdzić własny plan. Wymóg drugiej osoby można wymusić w trybie `authenticated` przez prywatny plik polityk (`allowSelfApproval:false`). Plik musi mieć uprawnienia `0600`, unikalne tokeny i jawną listę `allowedTools`; nie kopiuj konfiguracji innych systemów. Przykład i zasady kontraktu są w [architekturze](docs/architecture.md).
 
-| Metoda     | Ścieżka                 | Działanie                                                                 |
-| ---------- | ----------------------- | ------------------------------------------------------------------------- |
-| GET        | `/api/health`           | Stan bazy/workera i SHA; publiczny endpoint bez danych zadań.             |
-| GET        | `/api/context`          | Aktualna organizacja, role, zasady i katalog narzędzi.                    |
-| GET / POST | `/api/runs`             | Lista lub przygotowanie planu: `request`, `idempotencyKey`.               |
-| GET        | `/api/runs/:id`         | Plan, kroki, decyzje i dowody.                                            |
-| POST       | `/api/runs/:id/start`   | Uruchomienie niezmiennego planu.                                          |
-| POST       | `/api/runs/:id/approve` | `approvalId`, `bindingHash`, `decision`: `approved` lub `rejected`.       |
-| POST       | `/api/runs/:id/cancel`  | Zatrzymanie; możliwy skutek w toku pozostaje do uzgodnienia.              |
-| POST       | `/api/runs/:id/retry`   | Uzgodnienie niepewnego wyniku albo ponowna weryfikacja zapisanego efektu. |
+Profil firmy zawiera nazwę, strefę czasową, reguły inicjatyw, wyciszenie i szablony onboardingu/offboardingu. Edycja jest wersjonowaną operacją z zatwierdzeniem. Plan przypina wersję profilu, a zmiana szablonu przed wykonaniem wymaga nowego planu.
 
-POST wymaga JSON. `start`, `cancel` i `retry` przyjmują `{}`. Organizacja i aktor pochodzą z uwierzytelnionego kontekstu, nie z żądania ani planu. Powtórzenie klucza utworzenia z innym żądaniem daje `409`.
+## Głos i model
 
-## Weryfikacja i dostarczenie
+[Instrukcja głosu](docs/voice.md): `npm run voice:setup` instaluje lokalny whisper.cpp i model; `npm run voice:smoke` sprawdza transkrypcję. Mikrofon działa przyciskiem. Tekst można poprawić przed wysłaniem; transkrypcja sama niczego nie zatwierdza. Odczytywanie odpowiedzi używa głosu systemowego przeglądarki.
+
+`JARVIS_PLANNER=anthropic` wymaga własnego `ANTHROPIC_API_KEY` i jawnego `ANTHROPIC_MODEL`. Klucz można przechowywać w lokalnym Keychain przez narzędzie instalacyjne. Nie ma automatycznego odczytu kluczy innych repozytoriów. Brak klucza oznacza tryb lokalnych szablonów, a nie działającego Claude.
+
+Claude otrzymuje ograniczone metadane wybranych rekordów, schematy narzędzi i fragment rozmowy, z pseudonimami znanych osób. Pełne dokumenty HR i bazy osób nie trafiają do kontekstu. Nie umieszczaj sekretów w swobodnym tekście rozmowy: redakcja typowych formatów nie rozpoznaje dowolnego sekretu. Włączenie tego adaptera świadomie uruchamia przetwarzanie u dostawcy.
+
+`JARVIS_MODEL_PRICING` przyjmuje JSON `{ "version":"cennik-wlasny-1", "currency":"USD", "inputPerMillion":0, "outputPerMillion":0 }` z własnymi zweryfikowanymi stawkami. Użyj rzeczywistych cen zamiast przykładowych zer. Każde wywołanie zachowuje wersję cennika, tokeny, czas i koszt szacowany. Bez cennika koszt pozostaje `null`; nie jest zgadywany.
+
+## API i diagnostyka
+
+| Interfejs                                              | Znaczenie                                                       |
+| ------------------------------------------------------ | --------------------------------------------------------------- |
+| `/api/live`, `/api/ready`, `/api/health`               | Żywy HTTP, gotowość workera i stan bazy/rewizji.                |
+| `/api/workspace`, `/api/workspace/:module/:id`         | Katalog i dane dostępne bieżącej osobie.                        |
+| `POST /api/commands`                                   | `{toolId,input,idempotencyKey}` przygotowuje zatwierdzany plan. |
+| `/api/runs?limit=50&offset=0`                          | Stronicowana historia, filtrowana uprawnieniami.                |
+| `/api/runs/:id/start`, `/approve`, `/cancel`, `/retry` | Rozpoczęcie, konkretna zgoda, anulowanie i uzgadnianie.         |
+| `/api/conversations`, `/:id/messages`                  | Rozmowa prywatna dla osoby i firmy.                             |
+| `/api/initiatives`, `/api/profile`                     | Zaległości i wersjonowane reguły firmy.                         |
+| `/api/document-templates/prepare`                      | Szkic dokumentu ze źródłem, przez Core.                         |
+| `/api/documents/:id/export`, `/api/cases/:id/package`  | Eksport z wersją i SHA-256; pakiet sprawy wymaga odbioru.       |
+| `/api/ops`                                             | Technologia, terminy/blokady i zużycie modelu.                  |
+
+Inicjatywy powstają z konkretnych danych i reguł. Mają źródło, wiek, właściciela/termin, deduplikację, odłożenie i wyciszenie. Nie wysyłają wiadomości do ludzi przez zewnętrzne usługi. OpenTelemetry ma lokalny bufor; eksport sieciowy jest wyłączony.
+
+## Sprawdzenie i dostarczenie
 
 ```sh
 npm run format:check
 npm run check
 npm run demo
+npm run demo:workspace
 ```
 
-CI wykonuje skan sekretów, format, TypeScript, testy (w tym rzeczywiste SIGKILL), kompilację i demonstrację odzyskiwania. Nie wymaga Dockera ani sekretów innych systemów.
+CI uruchamia skan sekretów, format, TypeScript backendu i panelu, testy (w tym rzeczywiste SIGKILL i osobny trwały magazyn skutków), build oraz oba demonstratory. Zmiany przechodzą przez PR, zielone CI i merge. Po merge sprawdzamy lokalnie właściwą rewizję i panel.
 
-Hosting produkcyjny nie jest skonfigurowany. Nie ma automatycznego deployu, publicznej domeny ani powiązania z istniejącymi aplikacjami. Pierwsze wdrożenie sieciowe wymaga wskazania środowiska, TLS, prywatnej konfiguracji dostępu, trwałego dysku oraz sprawdzonego backup/restore. Jeden host i lokalny filesystem są świadomą granicą v0.1; nie używać współdzielonego dysku sieciowego jako bazy.
-
-Szczegóły gwarancji i ograniczeń: [architektura](docs/architecture.md). Nie deklarujemy dokładnie jednego skutku dla dowolnego przyszłego adaptera. Adapter musi zapewniać trwały klucz operacji i wiarygodny odczyt wyniku; wynik nieznany pozostaje blokadą.
+Nie ma skonfigurowanego hostingu produkcyjnego. System jest pojedynczą instalacją na lokalnym dysku; nie używa klastrów, współdzielonego filesystemu ani produkcyjnych baz innych aplikacji.

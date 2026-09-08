@@ -1,7 +1,5 @@
 # Eksploatacja lokalnego JARVIS
 
-Zakres wydania fundamentu: moduły diagnostyki i blokady danych są przygotowane do podłączenia. Ten PR nie zmienia serwera ani endpointów; serwer v0.1 nie korzysta jeszcze z nowej blokady. Przed użyciem CLI backupu należy zatrzymać serwer i potwierdzić zakończenie procesu. Odmowa backupu na podstawie blokady chroni wyłącznie procesy, które już używają `acquireDataLock`; integracja w serwerze należy do kolejnego PR produktu.
-
 JARVIS działa natywnie w Node.js 22.23, bez Dockera. Pliki danych i kopie są prywatne: katalogi `0700`, pliki `0600`. Nie uruchamiaj dwóch procesów na tym samym katalogu danych. Nie edytuj baz przez zewnętrzny program podczas pracy aplikacji.
 
 ## Stan procesu i workera
