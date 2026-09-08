@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.data/
+.env
+.env.*
+!.env.example
+coverage/
+*.log
+.DS_Store
+JARVIS-rekomendacje-planu-2026-09-07.md
+
