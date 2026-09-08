@@ -2,8 +2,10 @@ import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import { migrateDatabase } from "./migrations.js";
 import {
   DomainError,
+  hasToolAccess,
   planSchema,
   type Evidence,
   type Json,
@@ -84,6 +86,7 @@ interface EngineOptions {
   leaseMs?: number;
   maxAttempts?: number;
   workerId?: string;
+  onEvent?: (event: string, details: JsonObject) => void;
 }
 
 export class Engine {
@@ -97,6 +100,7 @@ export class Engine {
   private workerId: string;
   private busy = false;
   private closed = false;
+  private onEvent?: (event: string, details: JsonObject) => void;
   constructor(options: EngineOptions) {
     if (options.dbPath !== ":memory:")
       mkdirSync(dirname(options.dbPath), { recursive: true, mode: 0o700 });
@@ -105,7 +109,15 @@ export class Engine {
     this.db.exec(
       "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;",
     );
-    this.db.exec(`
+    this.onEvent = options.onEvent;
+    migrateDatabase(this.db, {
+      namespace: "core",
+      migrations: [
+        {
+          version: 1,
+          name: "durable execution core",
+          up: (db) =>
+            db.exec(`
       CREATE TABLE IF NOT EXISTS schema_versions (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS runs (
         id TEXT PRIMARY KEY, tenant_id TEXT NOT NULL, requested_by TEXT NOT NULL,
@@ -133,8 +145,24 @@ export class Engine {
       );
       CREATE INDEX IF NOT EXISTS runs_tenant_created ON runs(tenant_id,created_at);
       CREATE INDEX IF NOT EXISTS steps_status ON steps(status,lease_until);
-      INSERT OR IGNORE INTO schema_versions VALUES(1,datetime('now'));
-    `);
+    `),
+        },
+        {
+          version: 2,
+          name: "execution history indexes",
+          up: (db) =>
+            db.exec(
+              "CREATE INDEX IF NOT EXISTS events_run_id ON events(run_id,id); CREATE INDEX IF NOT EXISTS runs_status_updated ON runs(status,updated_at);",
+            ),
+        },
+        {
+          version: 3,
+          name: "requester authority snapshot",
+          up: (db) =>
+            db.exec("ALTER TABLE runs ADD COLUMN requester_authority TEXT;"),
+        },
+      ],
+    });
     this.tools = new Map(options.tools.map((t) => [t.id, t]));
     if (this.tools.size !== options.tools.length)
       throw new Error("Duplicate tool registration");
@@ -167,6 +195,11 @@ export class Engine {
         "INSERT INTO events(run_id,type,created_at,details_json) VALUES(?,?,?,?)",
       )
       .run(runId, type, this.now(), canonical(details));
+    try {
+      this.onEvent?.(type, { runId, ...details });
+    } catch {
+      /* diagnostics must not interrupt effects */
+    }
   }
   private actor(principal: Principal, role?: "operator" | "approver") {
     const configured = this.principals.get(
@@ -180,6 +213,18 @@ export class Engine {
       );
     return configured;
   }
+  setPrincipals(principals: Principal[]) {
+    this.principals = new Map(
+      principals.map((p) => [`${p.tenantId}:${p.id}`, p]),
+    );
+  }
+  private canUse(
+    principal: Principal,
+    tool: ToolDefinition,
+    input?: JsonObject,
+  ) {
+    return hasToolAccess(principal, tool, input);
+  }
   private policy(tenantId: string) {
     const policy = this.policies.get(tenantId);
     if (!policy)
@@ -187,12 +232,49 @@ export class Engine {
     return policy;
   }
   private runRow(principal: Principal, id: string): Row {
-    this.actor(principal);
+    const actor = this.actor(principal);
     const run = this.db
       .prepare("SELECT * FROM runs WHERE id=? AND tenant_id=?")
       .get(id, principal.tenantId) as Row | undefined;
     if (!run)
       throw new DomainError("NOT_FOUND", "Nie znaleziono zadania.", 404);
+    const plan = parse<Plan>(run.plan_json);
+    if (
+      plan.steps.some((step) => {
+        const tool = this.tools.get(step.toolId);
+        if (!tool) return true;
+        const persisted = this.db
+          .prepare("SELECT resolved_input FROM steps WHERE run_id=? AND id=?")
+          .get(String(run.id), step.id) as Row | undefined;
+        if (persisted?.resolved_input)
+          return !this.canUse(
+            actor,
+            tool,
+            parse<JsonObject>(persisted.resolved_input),
+          );
+        if (this.hasRefs(step.input))
+          return (
+            Boolean(
+              tool.requiredScopesForInput &&
+              !actor.scopes?.includes("*") &&
+              !(
+                run.requested_by === actor.id &&
+                run.requester_authority ===
+                  hash({
+                    roles: [...actor.roles].sort(),
+                    scopes: [...(actor.scopes ?? [])].sort(),
+                  })
+              ),
+            ) || !this.canUse(actor, tool)
+          );
+        return !this.canUse(actor, tool, step.input);
+      })
+    )
+      throw new DomainError(
+        "FORBIDDEN",
+        "Brak dostępu do obszaru tej sprawy.",
+        403,
+      );
     return run;
   }
   private setStatus(id: string, status: RunStatus) {
@@ -228,14 +310,30 @@ export class Engine {
           "Identyfikatory kroków muszą być unikalne.",
         );
       const tool = this.tools.get(step.toolId);
-      if (!tool || !policy.allowedTools.includes(tool.id))
+      if (
+        !tool ||
+        !policy.allowedTools.includes(tool.id) ||
+        !this.canUse(actor, tool)
+      )
         throw new DomainError(
           "FORBIDDEN_TOOL",
           "Plan zawiera niedozwoloną operację.",
           403,
         );
       this.validateRefs(step.input, seen);
-      if (!this.hasRefs(step.input)) tool.inputSchema.parse(step.input);
+      if (tool.prepareInput) {
+        step.input = tool.prepareInput(step.input, actor.tenantId);
+        this.validateRefs(step.input, seen);
+      }
+      if (!this.hasRefs(step.input)) {
+        tool.inputSchema.parse(step.input);
+        if (!this.canUse(actor, tool, step.input))
+          throw new DomainError(
+            "FORBIDDEN_TOOL",
+            "Brak dostępu do danych operacji.",
+            403,
+          );
+      }
       seen.add(step.id);
       versions[tool.id] = tool.version;
     }
@@ -278,6 +376,13 @@ export class Engine {
           this.now(),
           this.now(),
         );
+      this.db.prepare("UPDATE runs SET requester_authority=? WHERE id=?").run(
+        hash({
+          roles: [...actor.roles].sort(),
+          scopes: [...(actor.scopes ?? [])].sort(),
+        }),
+        id,
+      );
       plan.steps.forEach((step, i) =>
         this.db
           .prepare(
@@ -426,15 +531,29 @@ export class Engine {
       })),
     };
   }
-  listRuns(principal: Principal) {
+  listRuns(
+    principal: Principal,
+    options: { limit?: number; offset?: number } = {},
+  ) {
     this.actor(principal);
     return (
       this.db
         .prepare(
-          "SELECT id FROM runs WHERE tenant_id=? ORDER BY created_at DESC LIMIT 100",
+          "SELECT id FROM runs WHERE tenant_id=? ORDER BY created_at DESC LIMIT ? OFFSET ?",
         )
-        .all(principal.tenantId) as Row[]
-    ).map((r) => this.getRun(principal, String(r.id)));
+        .all(
+          principal.tenantId,
+          Math.max(1, Math.min(100, options.limit ?? 50)),
+          Math.max(0, options.offset ?? 0),
+        ) as Row[]
+    ).flatMap((r) => {
+      try {
+        return [this.getRun(principal, String(r.id))];
+      } catch (e) {
+        if (e instanceof DomainError && e.statusCode === 403) return [];
+        throw e;
+      }
+    });
   }
   replayRun(
     principal: Principal,
@@ -490,6 +609,7 @@ export class Engine {
     if (
       tool &&
       (!policy.allowedTools.includes(tool.id) ||
+        !this.canUse(requester, tool) ||
         parse<Record<string, string>>(run.tool_versions)[tool.id] !==
           tool.version)
     )
@@ -529,6 +649,15 @@ export class Engine {
       .prepare("SELECT * FROM runs WHERE id=?")
       .get(runId) as Row;
     const policy = this.checkPolicy(run, tool);
+    const requester = this.principals.get(
+      `${run.tenant_id}:${run.requested_by}`,
+    )!;
+    if (!this.canUse(requester, tool, input))
+      throw new DomainError(
+        "AUTHORITY_REVOKED",
+        "Brak uprawnienia do danych operacji.",
+        403,
+      );
     if (run.cancellation_requested || !this.owns(runId, String(step.id), token))
       throw new DomainError(
         "EXECUTION_STOPPED",
@@ -547,6 +676,7 @@ export class Engine {
         : undefined;
       if (
         !actor?.roles.includes("approver") ||
+        !this.canUse(actor, tool, input) ||
         (!policy.allowSelfApproval && actor.id === run.requested_by)
       )
         throw new DomainError(
@@ -606,6 +736,12 @@ export class Engine {
           409,
         );
       this.checkPolicy(run, tool);
+      if (!this.canUse(actor, tool, parse<JsonObject>(step.resolved_input)))
+        throw new DomainError(
+          "FORBIDDEN",
+          "Brak uprawnienia do tego obszaru.",
+          403,
+        );
       if (
         this.binding(
           run,
@@ -943,8 +1079,18 @@ export class Engine {
           controller.signal.removeEventListener("abort", abort);
         }
       };
+      const boundApproval = this.db
+        .prepare(
+          "SELECT decided_by FROM approvals WHERE run_id=? AND step_id=? AND binding_hash=? AND status='approved'",
+        )
+        .get(runId, stepId, this.binding(run, step, tool, input)) as
+        Row | undefined;
       const ctx: ToolContext = {
         tenantId: String(run.tenant_id),
+        actorId: String(run.requested_by),
+        ...(boundApproval?.decided_by
+          ? { approvedBy: String(boundApproval.decided_by) }
+          : {}),
         runId,
         stepId,
         operationKey: String(step.operation_key),
@@ -1136,6 +1282,27 @@ export class Engine {
       if (this.owns(runId, stepId, token))
         this.block(runId, stepId, message, true);
     });
+  }
+  queue(tenantId?: string) {
+    const rows = this.db
+      .prepare(
+        "SELECT status,COUNT(*) AS n,MIN(updated_at) AS oldest FROM runs WHERE (? IS NULL OR tenant_id=?) GROUP BY status",
+      )
+      .all(tenantId ?? null, tenantId ?? null) as Row[];
+    const count = (status: string) =>
+      Number(rows.find((r) => r.status === status)?.n ?? 0);
+    const oldest = rows.find((r) => r.status === "running")?.oldest;
+    return {
+      queued: count("planned"),
+      running: count("running"),
+      waitingApproval: count("waiting_approval"),
+      blocked: count("blocked"),
+      failed: count("failed"),
+      needsReconciliation: count("needs_reconciliation"),
+      oldestPendingAgeMs: oldest
+        ? Math.max(0, this.clock() - Date.parse(String(oldest)))
+        : null,
+    };
   }
   health() {
     this.db.prepare("SELECT 1").get();
