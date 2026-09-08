@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import {
@@ -24,6 +24,11 @@ import { LaboratoryPanel } from "./LaboratoryPanel";
 import { DocumentTemplate } from "./DocumentTemplate";
 import { CaseReadiness } from "./CaseReadiness";
 import { HumanTasks } from "./HumanTasks";
+import {
+  RequirementEditor,
+  cloneRequirementDefinitions,
+  type RequirementDefinition,
+} from "./RequirementEditor";
 
 type FormSpec = {
   title: string;
@@ -60,6 +65,22 @@ function CommandForm({
     ...spec.initialValues,
   }));
   const refs = useReferences(spec.fields, spec.entity);
+  const editRequirements = module.id === "cases" && spec.action === "revise";
+  const definitions = useResource<{
+    readiness: { definitions?: RequirementDefinition[] };
+  }>(
+    editRequirements && spec.entity
+      ? `/api/cases/${encodeURIComponent(spec.entity.id)}/readiness`
+      : null,
+  );
+  const [requirementsEdited, setRequirementsEdited] = useState(false);
+  useEffect(() => {
+    if (!editRequirements || requirementsEdited) return;
+    const loaded = cloneRequirementDefinitions(
+      definitions.data?.readiness.definitions,
+    );
+    if (loaded) setValues((current) => ({ ...current, requirements: loaded }));
+  }, [definitions.data, editRequirements, requirementsEdited]);
   const assignees = useResource<{
     assignees: { id: string; label: string }[];
   }>(
@@ -72,6 +93,12 @@ function CommandForm({
   const [idempotencyKey] = useState(requestKey);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (editRequirements && !Array.isArray(values.requirements)) {
+      setError(
+        "Pobierz pełne definicje warunków odbioru przed przygotowaniem rewizji.",
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     const data: Record<string, unknown> = {};
@@ -264,6 +291,9 @@ function CommandForm({
         <div className="sheet-body">
           {error && <Notice tone="error">{error}</Notice>}
           {assignees.error && <Notice tone="error">{assignees.error}</Notice>}
+          {definitions.error && (
+            <Notice tone="error">{definitions.error}</Notice>
+          )}
           {refs.errors.map((error) => (
             <Notice key={error}>{error}</Notice>
           ))}
@@ -286,21 +316,44 @@ function CommandForm({
                 />
               </label>
             )}
-            {spec.fields.map((field) => (
-              <div
-                className={
-                  field.type === "textarea" ||
-                  field.type === "boolean" ||
-                  field.key === "dependsOn"
-                    ? "wide"
-                    : ""
-                }
-                key={field.key}
-              >
-                {fieldInput(field)}
-              </div>
-            ))}
+            {spec.fields
+              .filter(
+                (field) => !(editRequirements && field.key === "requirements"),
+              )
+              .map((field) => (
+                <div
+                  className={
+                    field.type === "textarea" ||
+                    field.type === "boolean" ||
+                    field.key === "dependsOn"
+                      ? "wide"
+                      : ""
+                  }
+                  key={field.key}
+                >
+                  {fieldInput(field)}
+                </div>
+              ))}
           </div>
+          {editRequirements &&
+            (Array.isArray(values.requirements) ? (
+              <RequirementEditor
+                value={values.requirements as RequirementDefinition[]}
+                disabled={busy}
+                onboarding={spec.entity?.data.caseType === "onboarding"}
+                onChange={(requirements) => {
+                  setRequirementsEdited(true);
+                  setValues((current) => ({ ...current, requirements }));
+                }}
+              />
+            ) : definitions.loading ? (
+              <Loading />
+            ) : (
+              <Notice tone="error">
+                Brak pełnych definicji warunków odbioru. Odśwież sprawę;
+                przygotowanie rewizji jest wstrzymane.
+              </Notice>
+            ))}
           <Notice>
             Przygotujesz plan operacji. Przed zapisem zobaczysz dokładny zakres
             zmiany i przejdziesz do jej zatwierdzenia.
@@ -321,7 +374,13 @@ function CommandForm({
           >
             Anuluj
           </button>
-          <button type="submit" className="button primary" disabled={busy}>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={
+              busy || (editRequirements && !Array.isArray(values.requirements))
+            }
+          >
             {busy ? (
               <span className="spinner" />
             ) : (

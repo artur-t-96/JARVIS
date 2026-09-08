@@ -26,6 +26,114 @@ const { isHumanTaskOperation } = await tsImport(
   "../web/src/RunPage.tsx",
   options,
 );
+const {
+  RequirementEditor,
+  cloneRequirementDefinitions,
+  newRequirement,
+  updateRequirementExpected,
+} = await tsImport("../web/src/RequirementEditor.tsx", options);
+const { caseRequirementDefinitionsSchema, onboardingRequirements } =
+  await import("../src/case-readiness.js");
+
+test("revision requirement editor submits every supported kind and preserves pinned source constraints without manual IDs", () => {
+  const saved = onboardingRequirements("internal");
+  saved[1]!.expected = {
+    documentType: "contract",
+    currentVersionRequired: true,
+    documentId: "d9f1499d-ed09-4f7f-9498-174b2a2bb329",
+    documentRevision: 7,
+    contentHash: "a".repeat(64),
+  };
+  const draft = cloneRequirementDefinitions(saved);
+  assert.ok(draft);
+  const document = draft.find(
+    (item: { kind: string }) => item.kind === "document_approved",
+  );
+  const edited = updateRequirementExpected(document, "documentType", "report");
+  assert.equal(edited.expected.documentId, saved[1]!.expected.documentId);
+  assert.equal(edited.expected.documentRevision, 7);
+  assert.equal(edited.expected.contentHash, "a".repeat(64));
+  assert.equal(edited.expected.currentVersionRequired, true);
+  assert.equal(
+    saved[1]!.expected.documentType,
+    "contract",
+    "draft editing must not mutate saved requirements",
+  );
+  const everyKind: any[] = [];
+  for (const kind of [
+    "asset_issued",
+    "document_approved",
+    "access_attested",
+    "delivery_received",
+    "test_passed",
+  ])
+    everyKind.push(newRequirement(kind, everyKind));
+  assert.equal(
+    caseRequirementDefinitionsSchema.safeParse(everyKind).success,
+    true,
+  );
+  assert.equal(new Set(everyKind.map((item) => item.key)).size, 5);
+  assert.equal(
+    caseRequirementDefinitionsSchema.safeParse([edited]).success,
+    true,
+  );
+  const html = renderToStaticMarkup(
+    createElement(RequirementEditor, {
+      value: [...draft, ...everyKind],
+      onChange: () => {},
+      onboarding: true,
+    }),
+  );
+  for (const label of [
+    "Rodzaj rezultatu",
+    "Klucz warunku",
+    "Nazwa warunku",
+    "Oczekiwany rodzaj sprzętu",
+    "Oczekiwany rodzaj dokumentu",
+    "Wymagany dostęp",
+    "Wymagany test",
+    "Dodaj warunek odbioru",
+  ])
+    assert.ok(html.includes(label), label);
+  assert.ok(!html.includes("d9f1499d-ed09-4f7f-9498-174b2a2bb329"));
+  assert.ok(!html.includes("a".repeat(64)));
+  assert.ok(!html.includes('type="text" name="requirements"'));
+  assert.ok(html.includes("zapisane ograniczenie do konkretnego źródła"));
+  for (const match of html.matchAll(/pattern="([^"]+)"/g)) {
+    const pattern = new RegExp(`^(?:${match[1]})$`, "v");
+    assert.equal(pattern.test("employee-workspace"), true);
+    assert.equal(pattern.test("Invalid Key"), false);
+  }
+});
+
+test("revision editing refuses incomplete assessments rather than inventing expected values", () => {
+  assert.equal(cloneRequirementDefinitions(undefined), null);
+  assert.equal(
+    cloneRequirementDefinitions([
+      {
+        key: "asset",
+        kind: "asset_issued",
+        title: "Sprzęt",
+        required: true,
+        status: "missing",
+      },
+    ]),
+    null,
+  );
+  assert.equal(
+    cloneRequirementDefinitions([
+      {
+        key: "document",
+        kind: "document_approved",
+        title: "Umowa",
+        required: true,
+        expected: {},
+      },
+    ]),
+    null,
+  );
+  assert.deepEqual(cloneRequirementDefinitions([]), []);
+});
 
 test("human task results lead back to the narrow task view rather than a full HR case", () => {
   for (const action of [

@@ -273,6 +273,7 @@ export class WorkspaceStore {
     );
     return {
       ...result,
+      definitions: this.readinessStore.definitions(principal.tenantId, e),
       requirements: result.requirements.map((requirement) => {
         if (!requirement.source) return requirement;
         try {

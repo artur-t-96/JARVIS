@@ -3245,3 +3245,26 @@ tbody tr:hover {
   margin-top: 15px;
   border-top: 1px solid var(--line);
 }
+.requirement-editor {
+  display: grid;
+  gap: 16px;
+  margin: 24px 0;
+}
+.requirement-editor h3,
+.requirement-editor p {
+  margin: 0;
+}
+.requirement-editor-row {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  min-width: 0;
+  padding: 16px;
+}
+.requirement-editor-row legend {
+  padding: 0 7px;
+  color: var(--ink);
+  font-weight: 600;
+}
+.requirement-remove {
+  margin-top: 16px;
+}
