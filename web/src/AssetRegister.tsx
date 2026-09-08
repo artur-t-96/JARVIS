@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useResource } from "./hooks";
+import { navigate, useResource } from "./hooks";
 import { dateLabel, type Entity } from "./types";
 import { Empty, Loading, Notice } from "./ui";
 interface RegisterEvent {
@@ -31,6 +31,7 @@ interface RegisterHistory {
 }
 const labels: Record<string, string> = {
   create: "Rejestracja urządzenia",
+  registerDeliveredAssets: "Rejestracja z poświadczonej dostawy",
   assignCustodian: "Wyznaczenie opiekuna ewidencji",
   update: "Zmiana danych ewidencji",
   reserve: "Rezerwacja",
@@ -46,7 +47,13 @@ const labels: Record<string, string> = {
   markRepaired: "Poświadczenie naprawy",
   retire: "Wycofanie z użytkowania",
 };
-export function AssetRegister({ item }: { item: Entity }) {
+export function AssetRegister({
+  item,
+  canReadPurchases = false,
+}: {
+  item: Entity;
+  canReadPurchases?: boolean;
+}) {
   const [offset, setOffset] = useState(0);
   const resource = useResource<{ register: RegisterHistory }>(
     `/api/assets/${encodeURIComponent(item.id)}/register?limit=20&offset=${offset}`,
@@ -70,6 +77,24 @@ export function AssetRegister({ item }: { item: Entity }) {
         Rejestr zmian i odpowiedzialności. Poświadczenia fizycznego wydania i
         zwrotu znajdują się w historii przekazań.
       </p>
+      {Boolean(item.data.purchaseOrigin) &&
+        typeof item.data.purchaseOrigin === "object" && (
+          <p>
+            Urządzenie pochodzi z poświadczonego przyjęcia dostawy.{" "}
+            {canReadPurchases && (
+              <button
+                className="text-button"
+                onClick={() =>
+                  navigate(
+                    `module/purchases/${(item.data.purchaseOrigin as Record<string, unknown>).orderId}`,
+                  )
+                }
+              >
+                Otwórz dostawę i pochodzenie
+              </button>
+            )}
+          </p>
+        )}
       {resource.loading ? (
         <Loading />
       ) : resource.error ? (

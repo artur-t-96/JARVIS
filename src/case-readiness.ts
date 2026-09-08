@@ -6,6 +6,8 @@ import type { Entity } from "./workspace.js";
 import { readIssuedAllocationProof } from "./asset-custody.js";
 import { AccessRegister } from "./access-register.js";
 import { DocumentSources } from "./document-sources.js";
+import { PurchaseDeliveries } from "./purchase-deliveries.js";
+import { equipmentType } from "./purchase-delivery-models.js";
 import type { DocumentFiles } from "./document-files.js";
 import {
   laboratoryTest,
@@ -28,7 +30,7 @@ export const caseRequirementDefinitionSchema = z.discriminatedUnion("kind", [
       kind: z.literal("asset_issued"),
       expected: z
         .object({
-          assetType: z.enum(["laptop", "phone", "monitor", "other"]).optional(),
+          assetType: equipmentType.optional(),
           assetId: uuid.optional(),
         })
         .strict(),
@@ -443,6 +445,25 @@ export class CaseReadinessStore {
     assetPin: { allocationId?: string; issueEventId?: string } | undefined,
     now: string,
   ) {
+    if (requirement.kind === "delivery_received" && module === "purchases") {
+      const view = new PurchaseDeliveries(this.db).projection(tenant, id),
+        proof = view.proof,
+        value = proof.identity;
+      if (
+        view.order.data.procurementVersion !== 1 ||
+        !value.costDecisionHash ||
+        value.caseId !== requirement.caseId ||
+        value.caseScopeRevision !== requirement.scopeRevision ||
+        (requirement.expected.purchaseId
+          ? requirement.expected.purchaseId !== id
+          : value.caseRequirementId !== requirement.id)
+      )
+        error(
+          "EVIDENCE_DELIVERY_MISMATCH",
+          "Zamówienie nie odpowiada zatwierdzonej potrzebie, warunkowi i rewizji tej sprawy.",
+        );
+      return proof;
+    }
     if (requirement.kind === "test_passed" && module === "laboratory") {
       if (
         ![laboratoryTest, laboratoryTlsTest].some(
@@ -605,6 +626,15 @@ export class CaseReadinessStore {
       error(
         "SOURCE_VERSION_CHANGED",
         "Źródło zmieniło wersję. Odczytaj je przed przygotowaniem nowego planu.",
+      );
+    if (
+      requirement.kind === "delivery_received" &&
+      (input.sourceProofHash !== source.hash ||
+        source.identity.current !== true)
+    )
+      error(
+        "DELIVERY_PROOF_CHANGED",
+        "Wymagane kompletne poświadczone przyjęcie, rozliczone rozbieżności i zgoda na aktualny dowód.",
       );
     if (
       requirement.kind === "test_passed" &&
@@ -785,19 +815,15 @@ export class CaseReadinessStore {
             nextAction: "Przygotuj prawidłową rewizję zakresu.",
           };
         if (
-          requirement.kind === "delivery_received" ||
-          (requirement.kind === "test_passed" &&
-            ![laboratoryTest, laboratoryTlsTest].some(
-              (key) => key === requirement.expected.testKey,
-            ))
+          requirement.kind === "test_passed" &&
+          ![laboratoryTest, laboratoryTlsTest].some(
+            (key) => key === requirement.expected.testKey,
+          )
         )
           return {
             ...result,
             reason: "Właściwy odczyt źródła nie jest jeszcze dostępny.",
-            nextAction:
-              requirement.kind === "delivery_received"
-                ? "Wymagane potwierdzenie odbioru we właściwym rejestrze dostaw."
-                : "Wymagany niezależny wynik testu.",
+            nextAction: "Wymagany niezależny wynik testu.",
           };
         const binding = bindings.find(
           (item) => item.requirementId === requirement.id,
@@ -869,6 +895,15 @@ export class CaseReadinessStore {
           };
         const expected = requirement.expected,
           value = source.identity;
+        if (requirement.kind === "delivery_received" && value.current !== true)
+          return {
+            ...result,
+            status: "failed",
+            reason:
+              "Dostawa jest niepełna, ma nierozstrzygnięte różnice lub brakuje poświadczeń historycznych ilości.",
+            nextAction:
+              "Uzupełnij właściwe przyjęcia i rozstrzygnij rozbieżności, a następnie odczytaj dowód nowej rewizji.",
+          };
         if (requirement.kind === "access_attested" && value.current !== true)
           return {
             ...result,

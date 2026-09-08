@@ -106,6 +106,8 @@ const missingLabels: Record<string, string> = {
 };
 const assetLabels: Record<string, string> = {
   laptop: "Laptop",
+  desktop: "Komputer stacjonarny",
+  accessory: "Akcesorium",
   phone: "Telefon",
   monitor: "Monitor",
   other: "Inny sprzęt",

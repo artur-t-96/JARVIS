@@ -325,6 +325,11 @@ export function changePurchase(
         "PURCHASE_SOURCE_REQUIRED",
         "Powiązane zapotrzebowanie wymaga bieżącej rewizji sprawy.",
       );
+    if (data.caseRequirementId && !e.data.caseId)
+      fail(
+        "PURCHASE_SOURCE_REQUIRED",
+        "Warunek odbioru wymaga powiązanej sprawy.",
+      );
     delete e.data.assetType;
     e.data = {
       ...e.data,

@@ -59,6 +59,10 @@ export function registerWorkspaceApi(
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { purchasing: workspace.purchasing(principal(req), id) };
   });
+  app.get("/api/purchases/:id/deliveries", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { deliveries: workspace.purchaseDeliveries(principal(req), id) };
+  });
   app.get("/api/company/templates", async (req) => {
     const actor = principal(req);
     if (!(actor.scopes?.includes("*") || actor.scopes?.includes("company")))

@@ -9,6 +9,8 @@ import {
   type Run,
 } from "./types";
 import { Empty, Icon, Loading, Notice, Sheet } from "./ui";
+import { PurchaseForm } from "./Purchasing";
+import type { DeliveryView } from "./PurchaseDeliveries";
 
 export type RequirementKind =
   | "asset_issued"
@@ -55,7 +57,11 @@ const kinds: Record<
     module: "documents",
   },
   access_attested: { label: "Potwierdzony dostęp", icon: "licenses" },
-  delivery_received: { label: "Przyjęta dostawa", icon: "purchases" },
+  delivery_received: {
+    label: "Przyjęta dostawa",
+    icon: "purchases",
+    module: "purchases",
+  },
   test_passed: { label: "Potwierdzony wynik testu", icon: "pulse" },
 };
 const states = {
@@ -70,10 +76,12 @@ export function ReadinessCard({
   readiness,
   onBind,
   historical = false,
+  onPurchase,
 }: {
   readiness: Readiness;
   onBind?: (requirement: CaseRequirement) => void;
   historical?: boolean;
+  onPurchase?: (requirement: CaseRequirement) => void;
 }) {
   const sorted = [...readiness.requirements].sort(
     (a, b) =>
@@ -205,6 +213,19 @@ export function ReadinessCard({
                       <Icon name="arrow" size={15} />
                     </button>
                   )}
+                  {!historical &&
+                    onPurchase &&
+                    ["asset_issued", "delivery_received"].includes(
+                      requirement.kind,
+                    ) &&
+                    requirement.status !== "satisfied" && (
+                      <button
+                        className="button secondary"
+                        onClick={() => onPurchase(requirement)}
+                      >
+                        Przygotuj zapotrzebowanie
+                      </button>
+                    )}
                 </div>
               </article>
             );
@@ -265,11 +286,27 @@ function BindingForm({
   const source = resource.data?.items.find(
     (candidate) => candidate.id === sourceId,
   );
+  const delivery = useResource<{ deliveries: DeliveryView }>(
+    module === "purchases" && source
+      ? `/api/purchases/${source.id}/deliveries`
+      : null,
+  );
+  const deliveryProof = delivery.data?.deliveries.proof;
+  const deliveryMatches =
+    deliveryProof?.identity.current === true &&
+    deliveryProof.identity.caseId === item.id &&
+    deliveryProof.identity.caseScopeRevision === item.data.scopeRevision;
   const issueChoices = issuedProofChoices(item, source);
   const issue = issueChoices.find((entry) => entry.id === allocationId);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!source || !module || (module === "assets" && !issue)) return;
+    if (
+      !source ||
+      !module ||
+      (module === "assets" && !issue) ||
+      (module === "purchases" && !deliveryMatches)
+    )
+      return;
     setBusy(true);
     setError("");
     try {
@@ -281,7 +318,11 @@ function BindingForm({
           requirementId: requirement.id,
           sourceModule: module,
           sourceId: source.id,
-          sourceVersion: source.version,
+          sourceVersion:
+            module === "purchases" ? deliveryProof!.version : source.version,
+          ...(module === "purchases"
+            ? { sourceProofHash: deliveryProof!.hash }
+            : {}),
           ...(module === "assets" && issue
             ? { allocationId: issue.id, issueEventId: issue.issueEventId }
             : {}),
@@ -311,7 +352,13 @@ function BindingForm({
             rzeczywisty stan, osobę, współpracę i wersję.
           </p>
           <label className="field">
-            <span>{module === "assets" ? "Sprzęt" : "Dokument"}</span>
+            <span>
+              {module === "assets"
+                ? "Sprzęt"
+                : module === "purchases"
+                  ? "Zamówienie z poświadczoną dostawą"
+                  : "Dokument"}
+            </span>
             <select
               required
               disabled={busy || resource.loading || !!resource.error}
@@ -322,14 +369,29 @@ function BindingForm({
               }}
             >
               <option value="">Wybierz dostępny rekord…</option>
-              {resource.data?.items.map((entry) => (
-                <option key={entry.id} value={entry.id}>
-                  {entry.title} · {statusLabel(entry.status)} · wersja{" "}
-                  {entry.version}
-                </option>
-              ))}
+              {resource.data?.items
+                .filter(
+                  (entry) =>
+                    module !== "purchases" || entry.data.kind === "order",
+                )
+                .map((entry) => (
+                  <option key={entry.id} value={entry.id}>
+                    {entry.title} · {statusLabel(entry.status)} · wersja{" "}
+                    {entry.version}
+                  </option>
+                ))}
             </select>
           </label>
+          {module === "purchases" && source && (
+            <Notice>
+              {delivery.error ??
+                (delivery.loading
+                  ? "Sprawdzam przyjęcie dostawy…"
+                  : deliveryMatches
+                    ? "Właściwa dostawa jest kompletna i nie ma otwartych rozbieżności."
+                    : "Brak kompletnego poświadczenia dla bieżącego zakresu tej sprawy.")}
+            </Notice>
+          )}
           {module === "assets" && source && (
             <label className="field">
               <span>Poświadczone wydanie dla tej sprawy</span>
@@ -385,7 +447,8 @@ function BindingForm({
               busy ||
               !source ||
               !!resource.error ||
-              (module === "assets" && !issue)
+              (module === "assets" && !issue) ||
+              (module === "purchases" && !deliveryMatches)
             }
           >
             {busy ? "Przygotowywanie…" : "Przygotuj powiązanie"}
@@ -411,6 +474,7 @@ export function CaseReadiness({
     7000,
   );
   const [binding, setBinding] = useState<CaseRequirement | null>(null);
+  const [purchase, setPurchase] = useState<CaseRequirement | null>(null);
   const allowed =
     item.status !== "cancelled" &&
     context.principal.roles.includes("operator") &&
@@ -424,6 +488,15 @@ export function CaseReadiness({
   if (!resource.data) return <Loading />;
   return (
     <>
+      {purchase && (
+        <PurchaseForm
+          mode="create"
+          context={context}
+          sourceCase={item}
+          sourceRequirementId={purchase.id}
+          onClose={() => setPurchase(null)}
+        />
+      )}
       {binding && (
         <BindingForm
           item={item}
@@ -435,6 +508,13 @@ export function CaseReadiness({
         readiness={resource.data.readiness}
         historical={item.status === "cancelled"}
         onBind={allowed ? setBinding : undefined}
+        onPurchase={
+          allowed &&
+          ["open", "needs_changes"].includes(item.status) &&
+          context.tools.some((t) => t.id === "ops.purchases.create")
+            ? setPurchase
+            : undefined
+        }
       />
     </>
   );

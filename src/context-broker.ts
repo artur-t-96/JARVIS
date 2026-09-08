@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { equipmentType } from "./purchase-delivery-models.js";
 import { DomainError, type JsonObject, type Principal } from "./contracts.js";
 import { migrateDatabase } from "./migrations.js";
 import { date } from "./workspace-models.js";
@@ -36,7 +37,7 @@ export const contextSchemas = {
     .strict(),
   "context.availableAssets": z
     .object({
-      assetType: z.enum(["laptop", "phone", "monitor", "other"]),
+      assetType: equipmentType,
       readyOn: date,
       episodeRef: opaque,
       limit,

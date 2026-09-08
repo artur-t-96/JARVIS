@@ -378,6 +378,9 @@ test("all nine domain APIs execute through Core approvals; asset handover is ten
     });
     purchase = await f.action(purchase, "recordDelivery", {
       quantityReceived: 1,
+      quantityAccepted: 1,
+      documentNumber: "SYNTHETIC-DELIVERY-1",
+      documentLine: 1,
       receivedOn: today,
       deliveryNote: "Człowiek",
       humanConfirmed: true,

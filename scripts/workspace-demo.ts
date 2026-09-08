@@ -347,6 +347,9 @@ try {
   assert.equal(purchase.data.receivedQuantity, 0);
   purchase = await action(purchase, "recordDelivery", {
     quantityReceived: 1,
+    quantityAccepted: 1,
+    documentNumber: "SYNTHETIC-DELIVERY-1",
+    documentLine: 1,
     receivedOn: today,
     deliveryNote: "Syntetyczne poświadczenie",
     humanConfirmed: true,

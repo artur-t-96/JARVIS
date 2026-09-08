@@ -84,7 +84,7 @@ test("v13 rolls back a partial migration and preserves historical orders without
       assert.equal(view.request, null);
       assert.equal(
         store.tools().find((t) => t.id === "ops.purchases.placeOrder")!.version,
-        "5",
+        "6",
       );
     } finally {
       store.close();
@@ -100,7 +100,7 @@ test("v13 rolls back a partial migration and preserves historical orders without
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      13,
+      14,
     );
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
     const insert = (tenant: string, id: string, data: object) =>

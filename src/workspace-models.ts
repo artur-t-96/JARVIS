@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { deliveryActions, equipmentType } from "./purchase-delivery-models.js";
 import { documentSourceSchema } from "./document-sources.js";
 export { documentSourceSchema } from "./document-sources.js";
 import {
@@ -277,7 +278,7 @@ export const createDataSchemas = {
     .strict(),
   assets: z
     .object({
-      assetType: z.enum(["laptop", "phone", "monitor", "other"]),
+      assetType: equipmentType,
       serial: short,
       location: short,
       condition: z.enum(["good", "repair"]),
@@ -784,15 +785,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         humanConfirmed: yes,
       })
       .strict(),
-    recordDelivery: z
-      .object({
-        ...base,
-        quantityReceived: integer,
-        receivedOn: date,
-        deliveryNote: text,
-        humanConfirmed: yes,
-      })
-      .strict(),
+    ...deliveryActions,
     cancel: z.object({ ...base, reason: text }).strict(),
     deactivate: z.object({ ...base, reason: text }).strict(),
   },
@@ -983,8 +976,10 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
   assets: [
     f("assetType", "Typ sprzętu", "select", true, [
       "laptop",
+      "desktop",
       "phone",
       "monitor",
+      "accessory",
       "other",
     ]),
     f("serial", "Numer seryjny"),
@@ -1133,6 +1128,8 @@ const actionLabels: Record<string, string> = {
   placeOrder: "Zarejestruj zatwierdzone zamówienie",
   acknowledge: "Zarejestruj potwierdzenie dostawcy",
   recordDelivery: "Potwierdź odbiór dostawy",
+  returnRejectedDelivery: "Potwierdź zwrot odrzuconych sztuk",
+  registerDeliveredAssets: "Zarejestruj przyjęte wyposażenie",
   deactivate: "Wyłącz dostawcę",
   assign: "Zapisz przydział stanowiska",
   revoke: "Zakończ przydział stanowiska",

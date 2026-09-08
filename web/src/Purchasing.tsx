@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Entity, type Run } from "./types";
@@ -52,8 +52,6 @@ export function purchasingSidebarAction(item: Entity, action: string) {
   if (item.data.kind === "order")
     return (
       (action === "acknowledge" && item.status === "ordered") ||
-      (action === "recordDelivery" &&
-        ["acknowledged", "part_received"].includes(item.status)) ||
       (action === "cancel" &&
         ["draft", "ordered", "acknowledged"].includes(item.status))
     );
@@ -86,6 +84,8 @@ export function PurchaseForm({
   quote,
   context,
   onClose,
+  sourceCase,
+  sourceRequirementId,
 }: {
   mode: FormMode;
   item?: Entity;
@@ -93,6 +93,8 @@ export function PurchaseForm({
   quote?: Entity;
   context: Context;
   onClose: () => void;
+  sourceCase?: Entity;
+  sourceRequirementId?: string;
 }) {
   const [idempotencyKey] = useState(requestKey);
   const plan = (toolId: string, input: Record<string, unknown>) =>
@@ -106,8 +108,11 @@ export function PurchaseForm({
   const data = source?.data ?? {};
   const [v, set] = useState<Record<string, string>>(() => ({
     kind: "request",
-    title: source?.title ?? "",
-    description: value(data, "description"),
+    title:
+      source?.title ?? (sourceCase ? `Wyposażenie: ${sourceCase.title}` : ""),
+    description:
+      value(data, "description") ||
+      (sourceCase ? `Zakup dla sprawy: ${sourceCase.title}` : ""),
     quantity:
       value(data, "quantity") || value(request?.data ?? {}, "quantity") || "1",
     budget: editMoney(data.budgetMinor),
@@ -119,10 +124,13 @@ export function PurchaseForm({
       value(data, "priceBasis") ||
       value(request?.data ?? {}, "priceBasis") ||
       "gross",
-    requiredBy: value(data, "requiredBy"),
+    requiredBy:
+      value(data, "requiredBy") || value(sourceCase?.data ?? {}, "dueDate"),
     assetType: value(data, "assetType"),
     supplierEmail: value(data, "supplierEmail"),
-    caseId: value(data, "caseId"),
+    caseId: value(data, "caseId") || sourceCase?.id || "",
+    caseRequirementId:
+      value(data, "caseRequirementId") || sourceRequirementId || "",
     supplierId: value(data, "supplierId"),
     quoteReference: value(data, "quoteReference"),
     unitPrice: editMoney(data.unitPriceMinor),
@@ -150,6 +158,23 @@ export function PurchaseForm({
     requestMode && canCases ? "/api/workspace/cases" : null,
   );
   const caseItem = cases.data?.items.find((x) => x.id === v.caseId);
+  const caseRequirements = useResource<{
+    readiness: {
+      requirements: { id: string; key: string; title: string; kind: string }[];
+      definitions: { key: string; expected: { assetType?: string } }[];
+    };
+  }>(requestMode && caseItem ? `/api/cases/${caseItem.id}/readiness` : null);
+  const selectedRequirement =
+    caseRequirements.data?.readiness.requirements.find(
+      (r) => r.id === v.caseRequirementId,
+    );
+  const expectedType = caseRequirements.data?.readiness.definitions.find(
+    (d) => d.key === selectedRequirement?.key,
+  )?.expected.assetType;
+  useEffect(() => {
+    if (expectedType)
+      set((current) => ({ ...current, assetType: expectedType }));
+  }, [expectedType]);
   const supplier = suppliers.data?.items.find(
     (x) =>
       x.id === v.supplierId &&
@@ -178,7 +203,13 @@ export function PurchaseForm({
           required={required}
           value={v[key]}
           disabled={busy}
-          onChange={(e) => set((c) => ({ ...c, [key]: e.target.value }))}
+          onChange={(e) =>
+            set((c) => ({
+              ...c,
+              [key]: e.target.value,
+              ...(key === "caseId" ? { caseRequirementId: "" } : {}),
+            }))
+          }
         />
       ) : (
         <input
@@ -188,7 +219,13 @@ export function PurchaseForm({
           min={type === "number" ? 1 : undefined}
           step={type === "number" ? 1 : undefined}
           disabled={busy}
-          onChange={(e) => set((c) => ({ ...c, [key]: e.target.value }))}
+          onChange={(e) =>
+            set((c) => ({
+              ...c,
+              [key]: e.target.value,
+              ...(key === "caseId" ? { caseRequirementId: "" } : {}),
+            }))
+          }
         />
       )}
     </label>
@@ -205,7 +242,13 @@ export function PurchaseForm({
         value={v[key]}
         required={required}
         disabled={busy}
-        onChange={(e) => set((c) => ({ ...c, [key]: e.target.value }))}
+        onChange={(e) =>
+          set((c) => ({
+            ...c,
+            [key]: e.target.value,
+            ...(key === "caseId" ? { caseRequirementId: "" } : {}),
+          }))
+        }
       >
         {options.map(([id, text]) => (
           <option key={id} value={id}>
@@ -276,6 +319,8 @@ export function PurchaseForm({
       } else if (requestMode) {
         if (v.caseId && !caseItem)
           throw Error("Brak dostępu do bieżącej sprawy. Odśwież dane.");
+        if (v.caseRequirementId && !selectedRequirement)
+          throw Error("Odczytaj warunki bieżącej rewizji sprawy.");
         const fields = {
           description: v.description,
           quantity: Number(v.quantity),
@@ -295,6 +340,9 @@ export function PurchaseForm({
               kind: "request",
               ...fields,
               ...(caseItem ? { caseId: caseItem.id } : {}),
+              ...(v.caseRequirementId
+                ? { caseRequirementId: v.caseRequirementId }
+                : {}),
             },
           });
         else if (item)
@@ -302,6 +350,7 @@ export function PurchaseForm({
             id: item.id,
             expectedVersion: item.version,
             ...fields,
+            caseRequirementId: v.caseRequirementId || null,
             reason: v.reason,
           });
       } else
@@ -385,6 +434,32 @@ export function PurchaseForm({
                   Powiązana sprawa pozostaje ta sama. Nowa rewizja przypnie jej
                   bieżący zakres.
                 </p>
+              )}
+              {caseItem && (
+                <label className="field">
+                  <span>Warunek sprawy powiązany z zakupem</span>
+                  <select
+                    disabled={busy || caseRequirements.loading}
+                    value={v.caseRequirementId}
+                    onChange={(e) =>
+                      set((c) => ({ ...c, caseRequirementId: e.target.value }))
+                    }
+                  >
+                    <option value="">Zakup ogólny dla sprawy</option>
+                    {caseRequirements.data?.readiness.requirements
+                      .filter((r) =>
+                        ["asset_issued", "delivery_received"].includes(r.kind),
+                      )
+                      .map((r) => (
+                        <option key={r.id} value={r.id}>
+                          {r.title}
+                        </option>
+                      ))}
+                  </select>
+                </label>
+              )}
+              {caseRequirements.error && (
+                <Notice tone="error">{caseRequirements.error}</Notice>
               )}
               {cases.error && <Notice tone="error">{cases.error}</Notice>}
             </>
@@ -785,7 +860,7 @@ export function PurchaseWorkflow({
             Zarejestruj zatwierdzone zamówienie
           </button>
         )}
-      {Boolean(request.data.orderId) && (
+      {Boolean(request.data.orderId) && item.data.kind !== "order" && (
         <p>
           <Badge status="ordered" />{" "}
           <button

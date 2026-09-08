@@ -24,6 +24,8 @@ type DocumentType = Extract<
 type TaskRole = OnboardingVariant["tasks"][number]["assigneeRole"];
 const assetLabels = {
   laptop: "Laptop",
+  desktop: "Komputer stacjonarny",
+  accessory: "Akcesorium",
   phone: "Telefon",
   monitor: "Monitor",
   other: "Inny sprzęt",
