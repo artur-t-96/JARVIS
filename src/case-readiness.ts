@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { DomainError, type JsonObject, type ToolContext } from "./contracts.js";
 import type { Entity } from "./workspace.js";
+import { readIssuedAllocationProof } from "./asset-custody.js";
 
 const uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -359,6 +360,7 @@ export class CaseReadinessStore {
     requirement: CaseRequirement,
     module: string,
     id: string,
+    assetPin?: { allocationId?: string; issueEventId?: string },
   ) {
     const r = this.db
       .prepare(
@@ -371,27 +373,16 @@ export class CaseReadinessStore {
     let identity: JsonObject;
     let revision: number | null = null;
     if (requirement.kind === "asset_issued" && module === "assets") {
-      const allocation = this.db
-        .prepare(
-          "SELECT * FROM ops_allocations WHERE tenant_id=? AND asset_id=? ORDER BY rowid DESC LIMIT 1",
-        )
-        .get(tenant, id) as Row | undefined;
-      identity = {
+      if (!assetPin?.allocationId || !assetPin.issueEventId)
+        error(
+          "EVIDENCE_SOURCE_UNVERIFIED",
+          "Wymagane dokładne poświadczone wydanie: alokacja i niezmienne zdarzenie. Historyczne powiązanie nie zyskuje nowego dowodu.",
+        );
+      return readIssuedAllocationProof(this.db, tenant, {
         assetId: id,
-        assetType: data.assetType ?? null,
-        assetStatus: String(r.status),
-        allocationId: allocation ? String(allocation.id) : null,
-        personId: allocation?.person_id ? String(allocation.person_id) : null,
-        employmentEpisodeId: allocation?.employment_episode_id
-          ? String(allocation.employment_episode_id)
-          : null,
-        caseId: allocation?.case_id ? String(allocation.case_id) : null,
-        status: allocation?.status ? String(allocation.status) : null,
-        issuedOn: allocation?.issued_on ? String(allocation.issued_on) : null,
-        returnedOn: allocation?.returned_on
-          ? String(allocation.returned_on)
-          : null,
-      };
+        allocationId: assetPin.allocationId,
+        issueEventId: assetPin.issueEventId,
+      });
     } else if (
       requirement.kind === "document_approved" &&
       module === "documents"
@@ -479,6 +470,8 @@ export class CaseReadinessStore {
       sourceModule: string;
       sourceId: string;
       sourceVersion: number;
+      allocationId?: string;
+      issueEventId?: string;
     },
     now: string,
   ) {
@@ -497,12 +490,35 @@ export class CaseReadinessStore {
       requirement,
       input.sourceModule,
       input.sourceId,
+      input,
     );
     if (source.version !== input.sourceVersion)
       error(
         "SOURCE_VERSION_CHANGED",
         "Źródło zmieniło wersję. Odczytaj je przed przygotowaniem nowego planu.",
       );
+    if (requirement.kind === "asset_issued") {
+      const value = source.identity,
+        expected = requirement.expected;
+      if (
+        value.status !== "issued" ||
+        value.assetStatus !== "issued" ||
+        !value.issuedOn ||
+        !value.issueEventId ||
+        !value.performedBy ||
+        value.currentCondition !== "good" ||
+        value.caseId !== e.id ||
+        (requirement.personId && value.personId !== requirement.personId) ||
+        (requirement.employmentEpisodeId &&
+          value.employmentEpisodeId !== requirement.employmentEpisodeId) ||
+        (expected.assetId && value.assetId !== expected.assetId) ||
+        (expected.assetType && value.assetType !== expected.assetType)
+      )
+        error(
+          "EVIDENCE_ASSET_MISMATCH",
+          "Poświadczone wydanie nie spełnia warunku właściwej osoby, współpracy, sprawy i stanu urządzenia.",
+        );
+    }
     const existing = this.bindings(
       ctx.tenantId,
       e.id,
@@ -648,6 +664,16 @@ export class CaseReadinessStore {
             requirement,
             binding.sourceModule,
             binding.sourceId,
+            {
+              allocationId:
+                typeof binding.sourceIdentity.allocationId === "string"
+                  ? binding.sourceIdentity.allocationId
+                  : undefined,
+              issueEventId:
+                typeof binding.sourceIdentity.issueEventId === "string"
+                  ? binding.sourceIdentity.issueEventId
+                  : undefined,
+            },
           );
         } catch {
           return {
@@ -683,7 +709,10 @@ export class CaseReadinessStore {
           if (
             value.status !== "issued" ||
             value.assetStatus !== "issued" ||
-            !value.issuedOn
+            !value.issuedOn ||
+            !value.issueEventId ||
+            !value.performedBy ||
+            value.currentCondition !== "good"
           )
             return {
               ...result,
@@ -695,9 +724,9 @@ export class CaseReadinessStore {
             };
           if (
             (requirement.personId && value.personId !== requirement.personId) ||
-            (onboarding &&
-              (value.employmentEpisodeId !== requirement.employmentEpisodeId ||
-                value.caseId !== e.id))
+            (requirement.employmentEpisodeId &&
+              value.employmentEpisodeId !== requirement.employmentEpisodeId) ||
+            value.caseId !== e.id
           )
             return {
               ...result,

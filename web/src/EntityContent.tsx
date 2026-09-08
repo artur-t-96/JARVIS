@@ -9,6 +9,7 @@ import {
   useReferences,
 } from "./references";
 import { Badge, Empty, Icon, Notice } from "./ui";
+import { AssetCustody } from "./AssetCustody";
 
 const sectionLabels: Record<string, string> = {
   worklogs: "Zgłoszona praca i koszty",
@@ -155,6 +156,14 @@ export function EntityContent({
   ].filter((key) => typeof item.data[key] === "string");
   return (
     <div className="record-content">
+      {item.module === "assets" && (
+        <AssetCustody
+          key={item.id}
+          item={item}
+          onAction={onAction}
+          allowedTool={allowedTool}
+        />
+      )}
       {item.data.settlementDraft != null &&
         typeof item.data.settlementDraft === "object" && (
           <SettlementDraft
@@ -307,6 +316,7 @@ export function EntityContent({
         </section>
       )}
       {Object.entries(sectionLabels).map(([key, title]) => {
+        if (item.module === "assets" && key === "allocations") return null;
         const entries = rows(item.data[key]);
         if (!entries.length) return null;
         return (

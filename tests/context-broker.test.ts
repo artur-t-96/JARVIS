@@ -721,6 +721,7 @@ test("explicit employment episode and available-now assets are resolved independ
     personId: person.id,
     employmentEpisodeId: actual.id,
     expectedEpisodeVersion: actual.version,
+    caseId: actual.onboardingCaseId!,
     purpose: "Synthetic reservation",
     until: "2099-01-01",
   });

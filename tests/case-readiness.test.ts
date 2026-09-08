@@ -96,6 +96,28 @@ function setup(t: TestContext) {
       assert.ok(episode, "case must explicitly identify its period");
       raw = { expectedEpisodeVersion: episode.version, ...raw };
     }
+    if (
+      module === "assets" &&
+      ["issue", "return", "release", "expireReservation"].includes(action)
+    ) {
+      const existing = store.get(manager, "assets", String(raw.id));
+      const allocations = (existing.data.allocations as JsonObject[]).filter(
+        (a) => ["reserved", "issued"].includes(String(a.status)),
+      );
+      assert.equal(
+        allocations.length,
+        1,
+        "fixture must select exactly one active allocation",
+      );
+      raw = {
+        allocationId: allocations[0]!.id,
+        expectedAllocationVersion: allocations[0]!.version,
+        ...(["issue", "return"].includes(action)
+          ? { location: "Synthetic handover location", condition: "good" }
+          : {}),
+        ...raw,
+      };
+    }
     const adapter = tool(module, action),
       input = adapter.prepareInput?.(raw, ctx.tenantId) ?? raw;
     const result = await adapter.execute(ctx, input);
@@ -165,12 +187,16 @@ function setup(t: TestContext) {
     }
     return e;
   };
-  const caseWith = async (requirements: JsonObject[]) => {
+  const caseWith = async (
+    requirements: JsonObject[],
+    data: JsonObject = {},
+  ) => {
     let e = await create("cases", "Synthetic typed case", {
       caseType: "general",
       brief: "Complete bounded test scope",
       acceptanceCriteria: "Independent source proof",
       requirements,
+      ...data,
     });
     e = await action(e, "addTask", {
       title: "Read and assess",
@@ -207,6 +233,16 @@ function setup(t: TestContext) {
       sourceModule: source.module,
       sourceId: source.id,
       sourceVersion: source.version,
+      ...(source.module === "assets"
+        ? (() => {
+            const issued = (source.data.allocations as JsonObject[]).find(
+              (a) => a.status === "issued",
+            );
+            return issued?.issueEventId
+              ? { allocationId: issued.id, issueEventId: issued.issueEventId }
+              : {};
+          })()
+        : {}),
     });
   };
   const revise = (e: Entity, more: JsonObject = {}) =>
@@ -430,9 +466,14 @@ test("same-case mutable document source cannot form circular proof; unauthorized
   );
 });
 
-test("reserved asset fails; generic actual issuance can pass, but return invalidates accepted binding", async (t) => {
+test("reservation cannot be bound as proof; exact actual issuance passes and return invalidates acceptance", async (t) => {
   const h = setup(t),
-    person = await h.person();
+    person = await h.person(),
+    episode = h.store.listEmploymentEpisodes(manager, person.id)[0]!;
+  let e = await h.caseWith([assetRequirement], {
+    personId: person.id,
+    employmentEpisodeId: episode.id,
+  });
   let asset = await h.create("assets", "Synthetic laptop", {
     assetType: "laptop",
     serial: randomUUID(),
@@ -441,26 +482,21 @@ test("reserved asset fails; generic actual issuance can pass, but return invalid
   });
   asset = await h.action(asset, "reserve", {
     personId: person.id,
+    caseId: e.id,
     purpose: "Test",
     until: "2026-09-10",
   });
-  let e = await h.caseWith([assetRequirement]);
-  e = await h.bind(e, asset, "asset_issued");
-  assert.equal(
-    h.store.readiness(manager, e.id).requirements[0]!.status,
-    "failed",
+  await assert.rejects(
+    h.bind(e, asset, "asset_issued"),
+    failure("EVIDENCE_SOURCE_UNVERIFIED"),
   );
   asset = await h.action(asset, "issue", {
     personId: person.id,
+    caseId: e.id,
     issuedOn: "2026-09-08",
-    handoverNote: "Test physical handover",
+    handoverNote: "Synthetic physical handover attestation",
     humanConfirmed: true,
   });
-  assert.equal(
-    h.store.readiness(manager, e.id).requirements[0]!.status,
-    "stale",
-  );
-  e = await h.complete(await h.revise(e));
   e = await h.bind(e, asset, "asset_issued");
   assert.equal(h.store.readiness(manager, e.id).ready, true);
   e = await h.action(e, "submit");
@@ -472,17 +508,17 @@ test("reserved asset fails; generic actual issuance can pass, but return invalid
   await h.action(asset, "return", {
     returnedOn: "2026-09-08",
     condition: "good",
-    receiptNote: "Returned after acceptance",
+    receiptNote: "Synthetic returned after acceptance",
     humanConfirmed: true,
   });
   assert.equal(h.store.readiness(manager, e.id).acceptanceCurrent, false);
 });
 
-test("onboarding asset proof rejects another person and a missing case link", async (t) => {
+test("onboarding rejects another person's issuance and a different case before freezing a binding", async (t) => {
   const h = setup(t),
     person = await h.person(),
-    other = await h.person();
-  let e = h.get(String(person.data.onboardingCaseId));
+    other = await h.person(),
+    e = h.get(String(person.data.onboardingCaseId));
   let asset = await h.create("assets", "Other person's laptop", {
     assetType: "laptop",
     serial: randomUUID(),
@@ -491,24 +527,27 @@ test("onboarding asset proof rejects another person and a missing case link", as
   });
   asset = await h.action(asset, "reserve", {
     personId: other.id,
-    purpose: "Test allocation",
+    caseId: String(other.data.onboardingCaseId),
+    purpose: "Test",
     until: "2026-09-10",
   });
   asset = await h.action(asset, "issue", {
     personId: other.id,
+    caseId: String(other.data.onboardingCaseId),
     issuedOn: "2026-09-08",
-    handoverNote: "Issued to another test person",
+    handoverNote: "Synthetic other recipient",
     humanConfirmed: true,
   });
-  e = await h.bind(e, asset, "asset_issued");
-  assert.equal(
-    h.store
-      .readiness(manager, e.id)
-      .requirements.find((r) => r.kind === "asset_issued")!.status,
-    "failed",
+  await assert.rejects(
+    h.bind(e, asset, "asset_issued"),
+    failure("EVIDENCE_ASSET_MISMATCH"),
   );
-  e = await h.revise(e);
-  let correctPerson = await h.create("assets", "Laptop without a case link", {
+  const episode = h.store.listEmploymentEpisodes(manager, person.id)[0]!,
+    differentCase = await h.caseWith([assetRequirement], {
+      personId: person.id,
+      employmentEpisodeId: episode.id,
+    });
+  let correctPerson = await h.create("assets", "Different case laptop", {
     assetType: "laptop",
     serial: randomUUID(),
     condition: "good",
@@ -516,22 +555,34 @@ test("onboarding asset proof rejects another person and a missing case link", as
   });
   correctPerson = await h.action(correctPerson, "reserve", {
     personId: person.id,
-    purpose: "Test allocation",
+    caseId: differentCase.id,
+    purpose: "Test",
     until: "2026-09-10",
   });
   correctPerson = await h.action(correctPerson, "issue", {
     personId: person.id,
+    caseId: differentCase.id,
     issuedOn: "2026-09-08",
-    handoverNote: "Test issuance without a case link",
+    handoverNote: "Synthetic different case",
     humanConfirmed: true,
   });
-  e = await h.bind(e, correctPerson, "asset_issued");
-  assert.equal(
-    h.store
-      .readiness(manager, e.id)
-      .requirements.find((r) => r.kind === "asset_issued")!.status,
-    "failed",
+  await assert.rejects(
+    h.bind(e, correctPerson, "asset_issued"),
+    failure("EVIDENCE_ASSET_MISMATCH"),
   );
+  const probe = new DatabaseSync(h.path, { readOnly: true });
+  try {
+    assert.equal(
+      probe
+        .prepare(
+          "SELECT COUNT(*) AS n FROM ops_requirement_bindings WHERE tenant_id=? AND case_id=?",
+        )
+        .get(manager.tenantId, e.id)!.n,
+      0,
+    );
+  } finally {
+    probe.close();
+  }
 });
 
 test("lost transfer response reconciles after database restart, but independent task-row tampering fails verification", async (t) => {

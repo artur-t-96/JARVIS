@@ -1,3 +1,4 @@
+import { custodyPins } from "./helpers/custody-pins.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import test from "node:test";
@@ -104,6 +105,8 @@ function fixture() {
         ...input,
       };
     }
+    if (module === "assets")
+      input = custodyPins(workspace, principal, action, input);
     const before = workspace.list(principal, module);
     const created = await post(
       "/api/commands",

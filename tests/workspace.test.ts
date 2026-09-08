@@ -1,3 +1,4 @@
+import { custodyPins } from "./helpers/custody-pins.js";
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -85,6 +86,8 @@ function helper(store: WorkspaceStore, tenantId = "tenant-a") {
         .find((episode) => episode.id === record.data.employmentEpisodeId)!;
       input = { ...input, expectedEpisodeVersion: episode.version };
     }
+    if (module === "assets")
+      input = custodyPins(store, principal(tenantId), action, input);
     input =
       input.profileVersion === undefined
         ? (tool.prepareInput?.(input, tenantId) ?? input)
@@ -942,6 +945,7 @@ test("asset reservation serializes concurrent writers and requires actual human 
       h.tools.get("ops.assets.reserve")!.execute(ctx(), {
         ...input,
         personId: p.id,
+        caseId: String(p.data.onboardingCaseId),
         employmentEpisodeId: a.listEmploymentEpisodes(principal(), p.id)[0]!.id,
         expectedEpisodeVersion: a.listEmploymentEpisodes(principal(), p.id)[0]!
           .version,
@@ -949,6 +953,7 @@ test("asset reservation serializes concurrent writers and requires actual human 
       second.tools.get("ops.assets.reserve")!.execute(ctx(), {
         ...input,
         personId: q.id,
+        caseId: String(q.data.onboardingCaseId),
         employmentEpisodeId: b.listEmploymentEpisodes(principal(), q.id)[0]!.id,
         expectedEpisodeVersion: b.listEmploymentEpisodes(principal(), q.id)[0]!
           .version,

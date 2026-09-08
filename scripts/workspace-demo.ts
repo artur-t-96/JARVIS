@@ -106,8 +106,30 @@ async function command(module: string, action: string, input: JsonObject) {
       "demo must select exactly one open employment period",
     );
     input = {
+      ...(module === "assets"
+        ? { caseId: episodes[0]!.onboardingCaseId! }
+        : {}),
       employmentEpisodeId: episodes[0]!.id,
       expectedEpisodeVersion: episodes[0]!.version,
+      ...input,
+    };
+  }
+  if (
+    module === "assets" &&
+    ["issue", "return", "release", "expireReservation"].includes(action)
+  ) {
+    const active = (
+      workspace.get(operator, "assets", String(input.id)).data
+        .allocations as JsonObject[]
+    ).filter((item) => ["reserved", "issued"].includes(String(item.status)));
+    assert.equal(
+      active.length,
+      1,
+      "demo must select exactly one current allocation",
+    );
+    input = {
+      allocationId: active[0]!.id!,
+      expectedAllocationVersion: active[0]!.version!,
       ...input,
     };
   }
@@ -190,7 +212,7 @@ try {
     role: "Rola demonstracyjna",
     humanDecision: true,
   });
-  const onboardingReadiness = workspace.readiness(
+  let onboardingReadiness = workspace.readiness(
     operator,
     String(person.data.onboardingCaseId),
   );
@@ -217,12 +239,52 @@ try {
     purpose: "Demonstracja",
     until: "2099-01-01",
   });
-  asset = await action(asset, "issue", {
-    personId: person.id,
-    issuedOn: today,
-    handoverNote: "Syntetyczny protokół",
+  const onboardingCase = workspace.get(
+    operator,
+    "cases",
+    String(person.data.onboardingCaseId),
+  );
+  const equipmentTask = (onboardingCase.data.tasks as JsonObject[]).find(
+    (task) =>
+      Array.isArray(task.requirementKeys) &&
+      task.requirementKeys.length === 1 &&
+      task.requirementKeys[0] === "equipment",
+  );
+  assert.ok(equipmentTask);
+  await action(onboardingCase, "acceptTask", {
+    taskId: equipmentTask.id!,
+    expectedTaskVersion: equipmentTask.version!,
     humanConfirmed: true,
   });
+  let equipment = workspace.taskEquipment(operator, String(equipmentTask.id));
+  const issueInput = equipment.allocations[0]!.commandBindings.issueForTask;
+  assert.ok(issueInput);
+  await approved("ops.assets.issueForTask", {
+    ...issueInput,
+    issuedOn: today,
+    location: "Syntetyczna lokalizacja odbiorcy",
+    condition: "good",
+    handoverNote: "Syntetyczny protokół demonstracyjny",
+    humanConfirmed: true,
+  });
+  equipment = workspace.taskEquipment(operator, String(equipmentTask.id));
+  const bindingInput =
+    equipment.allocations[0]!.commandBindings.bindAssetForTask;
+  assert.ok(bindingInput);
+  await approved("ops.assets.bindAssetForTask", bindingInput);
+  onboardingReadiness = workspace.readiness(operator, onboardingCase.id);
+  assert.equal(
+    onboardingReadiness.requirements.find(
+      (requirement) => requirement.key === "equipment",
+    )?.status,
+    "satisfied",
+  );
+  assert.equal(
+    onboardingReadiness.ready,
+    false,
+    "document and access are separate required proofs",
+  );
+  asset = workspace.get(operator, "assets", asset.id);
   const supplier = await create("purchases", "Dostawca", {
     kind: "supplier",
     description: "Syntetyczny dostawca — bez wysyłki",
@@ -389,6 +451,7 @@ try {
     returnedOn: today,
     condition: "good",
     receiptNote: "Syntetyczny zwrot",
+    location: "Syntetyczny magazyn zwrotów",
     humanConfirmed: true,
   });
   license = await action(license, "revoke", {
@@ -406,7 +469,7 @@ try {
   assert.equal(person.status, "exited");
   assert.equal(asset.status, "available");
   process.stdout.write(
-    `${JSON.stringify({ synthetic: true, storage: "temporary databases removed after demonstration", modules: summary.modules, completedCommands, explicitApprovals: approvals, independentlyVerifiedSteps: verifiedSteps, acceptanceProof: { status: delivery.status, decidedBy: (delivery.data.currentAcceptance as JsonObject).decidedBy, settlementDraft: delivery.data.settlementDraft }, onboarding: { status: "blocked", requirements: onboardingReadiness.requirements }, offboarding: person.status, asset: asset.status, purchase: purchase.status, recruitment: application.status, document: document.status, incident: incident.status, externalActionsPerformed: false }, null, 2)}\n`,
+    `${JSON.stringify({ synthetic: true, storage: "temporary databases removed after demonstration", modules: summary.modules, completedCommands, explicitApprovals: approvals, independentlyVerifiedSteps: verifiedSteps, acceptanceProof: { status: delivery.status, decidedBy: (delivery.data.currentAcceptance as JsonObject).decidedBy, settlementDraft: delivery.data.settlementDraft }, onboarding: { status: "blocked", requirementsBeforeOffboarding: onboardingReadiness.requirements }, offboarding: person.status, asset: asset.status, purchase: purchase.status, recruitment: application.status, document: document.status, incident: incident.status, externalActionsPerformed: false }, null, 2)}\n`,
   );
 } finally {
   engine.close();

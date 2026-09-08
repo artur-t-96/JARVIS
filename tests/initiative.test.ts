@@ -68,6 +68,9 @@ function fixture(durable = false) {
         assert.equal(episodes.length, 1);
         input = {
           ...input,
+          ...(module === "assets"
+            ? { caseId: episodes[0]!.onboardingCaseId! }
+            : {}),
           employmentEpisodeId: episodes[0]!.id,
           expectedEpisodeVersion: episodes[0]!.version,
         };

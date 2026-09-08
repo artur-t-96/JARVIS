@@ -109,6 +109,21 @@ export function registerWorkspaceApi(
   app.get("/api/tasks", async (req) => ({
     tasks: workspace.listTasks(principal(req)),
   }));
+  app.get("/api/tasks/:id/equipment", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { equipment: workspace.taskEquipment(principal(req), id) };
+  });
+  app.get("/api/assets/:id/custody", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+      })
+      .strict()
+      .parse(req.query);
+    return { custody: workspace.assetCustody(principal(req), id, page) };
+  });
   app.get("/api/task-assignees", async (req) => {
     const actor = principal(req);
     const { taskId } = z

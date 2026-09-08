@@ -5,6 +5,11 @@ import { dirname } from "node:path";
 import { z } from "zod";
 import { migrateDatabase } from "./migrations.js";
 import {
+  AssetCustody,
+  migrateAssetCustody,
+  type CustodyEvent,
+} from "./asset-custody.js";
+import {
   DomainError,
   type Json,
   type JsonObject,
@@ -37,6 +42,8 @@ import {
 } from "./case-readiness.js";
 import {
   WorkspaceTasks,
+  migrateTaskCustody,
+  type AssetTaskAction,
   taskTablesSql,
   roleScopes,
   type TaskAction,
@@ -112,6 +119,7 @@ interface Command {
   now: string;
   toolId: string;
   changes: Entity[];
+  custodyEvent?: CustodyEvent;
 }
 function fail(code: string, message: string, status = 409): never {
   throw new DomainError(code, message, status);
@@ -159,6 +167,7 @@ export class WorkspaceStore {
   private principalProvider?: (tenantId: string) => Principal[];
   private readonly taskStore: WorkspaceTasks;
   private readonly readinessStore: CaseReadinessStore;
+  private readonly custodyStore: AssetCustody;
   constructor(
     dbPath: string,
     private readonly options: { clock?: () => number } = {},
@@ -284,8 +293,17 @@ export class WorkspaceStore {
               CREATE UNIQUE INDEX ops_unique_legacy_seat ON ops_license_seats(tenant_id,license_id,person_id) WHERE status='assigned' AND employment_episode_id IS NULL;`);
           },
         },
+        {
+          version: 5,
+          name: "Versioned asset custody and authentic handover events",
+          up: (db) => {
+            migrateAssetCustody(db);
+            migrateTaskCustody(db);
+          },
+        },
       ],
     });
+    this.custodyStore = new AssetCustody(this.db);
     this.readinessStore = new CaseReadinessStore(this.db, (tenant, e) => {
       const owner = this.livePrincipal(
         tenant,
@@ -299,6 +317,13 @@ export class WorkspaceStore {
       this.db,
       undefined,
       (principal, caseId) => this.canManageCase(principal, caseId),
+      (tenant, caseId) =>
+        this.readinessStore.evaluate(
+          tenant,
+          this.read(tenant, "cases", caseId),
+          new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+        ).scopeHash,
+      (tenant) => this.currentProfile(tenant)?.version ?? 0,
     );
   }
   setPrincipalProvider(provider: (tenantId: string) => Principal[]) {
@@ -319,6 +344,13 @@ export class WorkspaceStore {
     } catch {
       return false;
     }
+  }
+  taskEquipment(principal: Principal, taskId: string) {
+    return this.taskStore.assetProjection(
+      principal,
+      taskId,
+      new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+    );
   }
   listTasks(principal: Principal) {
     const today = this.companyDate({
@@ -512,13 +544,66 @@ export class WorkspaceStore {
     return entity;
   }
   private allocations(tenant: string, assetId: string): JsonObject[] {
-    return (
-      this.db
-        .prepare(
-          "SELECT id,person_id AS personId,employment_episode_id AS employmentEpisodeId,case_id AS caseId,status,reserved_until AS reservedUntil,issued_on AS issuedOn,returned_on AS returnedOn FROM ops_allocations WHERE tenant_id=? AND asset_id=? ORDER BY rowid",
-        )
-        .all(tenant, assetId) as Row[]
-    ).map(asJson);
+    return this.custodyStore.rows(tenant, assetId).map(asJson);
+  }
+  assetCustody(
+    principal: Principal,
+    assetId: string,
+    page: { limit?: number; offset?: number } = {},
+  ) {
+    this.get(principal, "assets", assetId);
+    const now = this.options.clock?.() ?? Date.now();
+    return {
+      assetId,
+      allocations: this.custodyStore
+        .rows(principal.tenantId, assetId)
+        .map((a) => {
+          let recipientLabel: string | undefined,
+            engagementLabel: string | undefined;
+          try {
+            recipientLabel = this.get(principal, "people", a.personId).title;
+            const episode = this.listEmploymentEpisodes(
+              principal,
+              a.personId,
+            ).find((e) => e.id === a.employmentEpisodeId);
+            if (episode) {
+              engagementLabel = `${episode.kind === "internal" ? "Współpraca wewnętrzna" : "Współpraca konsultanta"} · ${episode.startDate}`;
+              if (episode.engagementRef) {
+                try {
+                  engagementLabel = `${this.get(principal, episode.engagementRef.module, episode.engagementRef.id).title} · ${episode.startDate}`;
+                } catch (error) {
+                  if (
+                    !(error instanceof DomainError) ||
+                    ![403, 404].includes(error.statusCode)
+                  )
+                    throw error;
+                }
+              }
+            }
+          } catch (error) {
+            if (
+              !(error instanceof DomainError) ||
+              ![403, 404].includes(error.statusCode)
+            )
+              throw error;
+          }
+          return {
+            ...a,
+            ...(recipientLabel ? { recipientLabel } : {}),
+            ...(engagementLabel ? { engagementLabel } : {}),
+            expired:
+              a.status === "reserved" &&
+              a.expiresAt !== null &&
+              now >= Date.parse(a.expiresAt),
+          };
+        }),
+      ...this.custodyStore.history(
+        principal.tenantId,
+        assetId,
+        page.limit ?? 50,
+        page.offset ?? 0,
+      ),
+    };
   }
   private licenseAssignments(tenant: string, licenseId: string): JsonObject[] {
     return (
@@ -542,7 +627,8 @@ export class WorkspaceStore {
     if (entity.module === "assets")
       return (
         canonical(entity.data.allocations) ===
-        canonical(this.allocations(tenant, entity.id))
+          canonical(this.allocations(tenant, entity.id)) &&
+        this.custodyStore.verify(tenant, entity.id)
       );
     if (entity.module === "licenses")
       return (
@@ -1393,6 +1479,7 @@ export class WorkspaceStore {
         { ctx: cmd.ctx, now: cmd.now, caseId: c.id, scopeRevision: 1 },
         {
           id: taskId,
+          templateKey: task.key,
           title: task.title,
           required: task.required,
           kind: task.kind,
@@ -1877,6 +1964,7 @@ export class WorkspaceStore {
         for (const task of previousTasks)
           this.taskStore.insert(this.taskContext(cmd, e), {
             id: ids.get(task.id)!,
+            templateKey: task.templateKey ?? undefined,
             title: task.title,
             required: task.required,
             kind: task.kind,
@@ -2092,33 +2180,23 @@ export class WorkspaceStore {
       }
     }
     if (e.module === "assets") {
+      const actor = this.livePrincipal(cmd.ctx.tenantId, cmd.ctx.actorId);
+      if (!actor?.roles.includes("operator"))
+        fail(
+          "ASSET_ACTOR_FORBIDDEN",
+          "Brak aktywnego konta operatora sprzętu.",
+          403,
+        );
       if (action === "reserve") {
-        this.state(e, "available");
-        if (String(input.until) < this.companyDate(cmd))
-          fail("RESERVATION_EXPIRED", "Data rezerwacji jest w przeszłości.");
-        const episode = this.resourceEpisode(cmd, input, [
-          "onboarding",
-          "active",
-        ]);
-        const allocation = randomUUID();
-        this.db
-          .prepare(
-            "INSERT INTO ops_allocations(tenant_id,id,asset_id,person_id,status,reserved_until,issued_on,returned_on,employment_episode_id,case_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
-          )
-          .run(
-            cmd.ctx.tenantId,
-            allocation,
-            e.id,
-            String(input.personId),
-            "reserved",
-            String(input.until),
-            null,
-            null,
-            String(episode.id),
-            typeof input.caseId === "string" ? input.caseId : null,
-          );
-        e.status = "reserved";
-        d.reservationPurpose = String(input.purpose);
+        this.resourceEpisode(cmd, input, ["onboarding", "active"]);
+        cmd.custodyEvent = this.custodyStore.reserve(
+          cmd.ctx,
+          e,
+          input as JsonObject,
+          cmd.now,
+          cmd.profile?.timezone ?? "UTC",
+          cmd.profile?.version ?? null,
+        );
       } else if (action === "markRepaired") {
         this.state(e, "maintenance");
         this.human(cmd, input);
@@ -2126,103 +2204,18 @@ export class WorkspaceStore {
         d.condition = "good";
         d.repairNote = String(input.note);
       } else {
-        const allocation = this.db
-          .prepare(
-            "SELECT * FROM ops_allocations WHERE tenant_id=? AND asset_id=? AND status IN ('reserved','issued')",
-          )
-          .get(cmd.ctx.tenantId, e.id) as Row | undefined;
-        if (!allocation) fail("ALLOCATION_REQUIRED", "Brak aktywnej alokacji.");
-        if (action === "issue") {
-          this.state(e, "reserved");
-          this.human(cmd, input);
-          if (allocation.person_id !== input.personId)
-            fail(
-              "WRONG_RECIPIENT",
-              "Wydanie musi dotyczyć osoby z rezerwacji.",
-            );
-          if (String(input.issuedOn) > this.companyDate(cmd))
-            fail(
-              "FUTURE_HANDOVER",
-              "Nie można potwierdzić przyszłego wydania.",
-            );
-          const episode = this.resourceEpisode(cmd, input, [
-            "onboarding",
-            "active",
-          ]);
-          if (!allocation.employment_episode_id)
-            fail(
-              "LEGACY_ALLOCATION_UNRESOLVED",
-              "Rezerwacja nie ma ustalonego okresu współpracy. Zwolnij ją i przygotuj jawną nową rezerwację.",
-            );
-          if (
-            allocation.employment_episode_id !== episode.id ||
-            (input.caseId &&
-              allocation.case_id &&
-              allocation.case_id !== input.caseId)
-          )
-            fail(
-              "RESOURCE_EPISODE_MISMATCH",
-              "Wydanie musi dotyczyć okresu i sprawy wskazanych w rezerwacji.",
-            );
-          if (
-            this.companyDate(cmd) > String(allocation.reserved_until) ||
-            String(input.issuedOn) > String(allocation.reserved_until)
-          )
-            fail(
-              "RESERVATION_EXPIRED",
-              "Rezerwacja wygasła; zwolnij ją i utwórz nową.",
-            );
-          this.db
-            .prepare(
-              "UPDATE ops_allocations SET status='issued',issued_on=?,case_id=COALESCE(case_id,?) WHERE tenant_id=? AND id=?",
-            )
-            .run(
-              String(input.issuedOn),
-              typeof input.caseId === "string" ? input.caseId : null,
-              cmd.ctx.tenantId,
-              String(allocation.id),
-            );
-          e.status = "issued";
-          d.handover = {
-            note: String(input.handoverNote),
-            confirmedBy: cmd.actor,
-            confirmedAt: cmd.now,
-          };
-        }
-        if (action === "return") {
-          this.state(e, "issued");
-          this.human(cmd, input);
-          if (String(input.returnedOn) > this.companyDate(cmd))
-            fail("FUTURE_RETURN", "Nie można potwierdzić przyszłego zwrotu.");
-          if (String(input.returnedOn) < String(allocation.issued_on))
-            fail("INVALID_RETURN_DATE", "Zwrot nie może poprzedzać wydania.");
-          this.db
-            .prepare(
-              "UPDATE ops_allocations SET status='returned',returned_on=? WHERE tenant_id=? AND id=?",
-            )
-            .run(
-              String(input.returnedOn),
-              cmd.ctx.tenantId,
-              String(allocation.id),
-            );
-          d.condition = String(input.condition);
-          e.status = input.condition === "good" ? "available" : "maintenance";
-          d.returnReceipt = {
-            note: String(input.receiptNote),
-            confirmedBy: cmd.actor,
-            confirmedAt: cmd.now,
-          };
-        }
-        if (action === "release") {
-          this.state(e, "reserved");
-          this.db
-            .prepare(
-              "UPDATE ops_allocations SET status='released' WHERE tenant_id=? AND id=?",
-            )
-            .run(cmd.ctx.tenantId, String(allocation.id));
-          e.status = "available";
-          d.releaseReason = String(input.reason);
-        }
+        if (action === "issue")
+          this.resourceEpisode(cmd, input, ["onboarding", "active"]);
+        cmd.custodyEvent = this.custodyStore.transition(
+          cmd.ctx,
+          e,
+          action === "expireReservation"
+            ? "expire"
+            : (action as "issue" | "return" | "release"),
+          input as JsonObject,
+          cmd.now,
+          cmd.profile?.timezone ?? "UTC",
+        );
       }
       d.allocations = this.allocations(cmd.ctx.tenantId, e.id);
     }
@@ -2721,6 +2714,22 @@ export class WorkspaceStore {
             "completeTask",
             "cancelTask",
           ].includes(action);
+        const taskCustody =
+          module === "assets" &&
+          ["issueForTask", "returnForTask", "bindAssetForTask"].includes(
+            action,
+          );
+        const custodyMutation =
+          module === "assets" &&
+          [
+            "reserve",
+            "issue",
+            "return",
+            "release",
+            "expireReservation",
+            "issueForTask",
+            "returnForTask",
+          ].includes(action);
         const usesProfile =
           lifecycle ||
           (module === "cases" && ["addTask", "revise"].includes(action)) ||
@@ -2730,7 +2739,7 @@ export class WorkspaceStore {
           ctx: ToolContext,
           input: JsonObject,
         ): boolean => {
-          if (!taskTransition) return true;
+          if (!taskTransition && !taskCustody) return true;
           try {
             const current = this.taskStore.get(
               ctx.tenantId,
@@ -2760,7 +2769,11 @@ export class WorkspaceStore {
               event.taskVersion === current.version &&
               event.toStatus === current.status &&
               event.assigneePrincipalId === current.assigneePrincipalId &&
-              event.performedBy === current.performedBy
+              (["issueForTask", "returnForTask"].includes(event.action)
+                ? current.status === "accepted" &&
+                  current.performedBy === null &&
+                  event.performedBy === event.requestedBy
+                : event.performedBy === current.performedBy)
             );
           } catch {
             return false;
@@ -2768,8 +2781,14 @@ export class WorkspaceStore {
         };
         const requireCommittedTask = (ctx: ToolContext, input: JsonObject) => {
           if (
-            taskTransition &&
-            !this.taskStore.verifyCommitted(ctx, String(input.taskId))
+            (taskTransition &&
+              !this.taskStore.verifyCommitted(ctx, String(input.taskId))) ||
+            (taskCustody &&
+              !this.taskStore.verifyCommittedAsset(
+                ctx,
+                input,
+                action as AssetTaskAction,
+              ))
           )
             fail(
               "TASK_RECEIPT_FORBIDDEN",
@@ -2777,8 +2796,22 @@ export class WorkspaceStore {
               403,
             );
         };
-        const requiredScopes =
-          module === "people" && action !== "create" && action !== "update"
+        const requireCommittedCustody = (
+          ctx: ToolContext,
+          input: JsonObject,
+        ) => {
+          if (
+            custodyMutation &&
+            !this.custodyStore.verifyCommitted(ctx, String(input.id))
+          )
+            fail(
+              "CUSTODY_STATE_INCONSISTENT",
+              "Brak spójnego zdarzenia przekazania sprzętu.",
+            );
+        };
+        const requiredScopes = taskCustody
+          ? ["it"]
+          : module === "people" && action !== "create" && action !== "update"
             ? ["cases"]
             : module === "recruitment" && action === "hire"
               ? ["people", "cases"]
@@ -2800,24 +2833,48 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version: "4",
-          ...(taskTransition
+          version:
+            module === "assets" ||
+            (module === "cases" && action === "bindEvidence")
+              ? "5"
+              : "4",
+          ...(taskCustody
             ? {
                 canAccess: (
                   principal: Principal,
                   input: JsonObject,
                   context?: import("./contracts.js").ToolAccessContext,
                 ) =>
-                  this.taskStore.canAccess(
+                  this.taskStore.canAccessAsset(
                     principal,
                     input,
                     context,
-                    action as TaskAction,
+                    action as AssetTaskAction,
                   ),
               }
-            : { scope: module }),
+            : taskTransition
+              ? {
+                  canAccess: (
+                    principal: Principal,
+                    input: JsonObject,
+                    context?: import("./contracts.js").ToolAccessContext,
+                  ) =>
+                    this.taskStore.canAccess(
+                      principal,
+                      input,
+                      context,
+                      action as TaskAction,
+                    ),
+                }
+              : { scope: module }),
           requiredScopes,
           requiredScopesForInput: (input: JsonObject, tenantId: string) => {
+            if (taskCustody)
+              return [
+                "it",
+                ...this.taskStore.get(tenantId, String(input.taskId))
+                  .requiredScopes,
+              ];
             if (!taskTransition)
               return this.inputScopes(module, action, input, tenantId);
             const task = this.taskStore.get(tenantId, String(input.taskId));
@@ -2837,9 +2894,15 @@ export class WorkspaceStore {
           recovery: "reconcile",
           description: `${definition.label}: ${actionLabel}.${["people.startEmployment", "people.beginOffboarding", "recruitment.hire"].includes(`${module}.${action}`) ? " Tworzy powiązaną sprawę i obowiązkowe zadania człowieka." : module === "sales" && action === "handoff" ? " Tworzy sprawę realizacji oraz zamyka powiązaną szansę jako wygraną." : ""} Zmienia wyłącznie lokalne dane JARVIS.`,
           inputSchema,
-          ...(usesProfile
+          ...(usesProfile || taskCustody
             ? {
                 prepareInput: (input: JsonObject, tenantId: string) => {
+                  if (taskCustody)
+                    return this.taskStore.prepareAssetInput(
+                      tenantId,
+                      input,
+                      action as AssetTaskAction,
+                    );
                   const profile = this.currentProfile(tenantId);
                   const prepared: JsonObject =
                     profile && input.profileVersion === undefined
@@ -2874,12 +2937,16 @@ export class WorkspaceStore {
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
             try {
-              const profile = usesProfile
-                ? this.pinnedProfile(ctx.tenantId, input)
-                : this.currentProfile(ctx.tenantId);
               const existing = this.ledger(ctx, toolId, input);
+              // A committed custody receipt is reconciled from its pinned event;
+              // elapsed expiry or a later profile cannot turn it into another effect.
+              const profile =
+                usesProfile && !(existing && custodyMutation)
+                  ? this.pinnedProfile(ctx.tenantId, input)
+                  : this.currentProfile(ctx.tenantId);
               if (existing) {
                 requireCommittedTask(ctx, input);
+                requireCommittedCustody(ctx, input);
                 if (!taskConsistent(ctx, input))
                   fail(
                     "TASK_STATE_INCONSISTENT",
@@ -2952,11 +3019,57 @@ export class WorkspaceStore {
                       e.id,
                     );
                   e = this.save(cmd, e);
+                } else if (taskCustody) {
+                  this.taskStore.authorizeAsset(
+                    ctx,
+                    input,
+                    action as AssetTaskAction,
+                  );
+                  const c = this.read(
+                    ctx.tenantId,
+                    "cases",
+                    String(input.caseId),
+                  );
+                  if (action === "bindAssetForTask") {
+                    this.readinessStore.bind(
+                      ctx,
+                      c,
+                      {
+                        requirementId: String(input.requirementId),
+                        sourceModule: "assets",
+                        sourceId: e.id,
+                        sourceVersion: e.version,
+                        allocationId: String(input.allocationId),
+                        issueEventId: String(input.issueEventId),
+                      },
+                      cmd.now,
+                    );
+                  } else
+                    e = this.change(
+                      cmd,
+                      e,
+                      action === "issueForTask" ? "issue" : "return",
+                      p,
+                    );
+                  this.taskStore.recordAssetEvent(
+                    ctx,
+                    input,
+                    action as AssetTaskAction,
+                    {
+                      allocationId: String(input.allocationId),
+                      eventId:
+                        cmd.custodyEvent?.id ?? String(input.issueEventId),
+                    },
+                    cmd.now,
+                  );
+                  this.caseState(cmd, c);
+                  this.save(cmd, c);
                 } else e = this.change(cmd, e, action, p);
               }
-              const task = taskTransition
-                ? this.taskStore.get(ctx.tenantId, String(input.taskId))
-                : undefined;
+              const task =
+                taskTransition || taskCustody
+                  ? this.taskStore.get(ctx.tenantId, String(input.taskId))
+                  : undefined;
               const receipt: ToolResult = {
                 data: task
                   ? {
@@ -2966,6 +3079,19 @@ export class WorkspaceStore {
                       taskId: task.id,
                       taskVersion: task.version,
                       status: task.status,
+                      ...(taskCustody
+                        ? {
+                            allocationId: String(input.allocationId),
+                            allocationVersion: this.custodyStore.get(
+                              ctx.tenantId,
+                              e.id,
+                              String(input.allocationId),
+                            ).version,
+                            eventId:
+                              cmd.custodyEvent?.id ??
+                              String(input.issueEventId),
+                          }
+                        : {}),
                     }
                   : {
                       entityId: e.id,
@@ -2973,6 +3099,14 @@ export class WorkspaceStore {
                       version: e.version,
                       status: e.status,
                       title: e.title,
+                      ...(cmd.custodyEvent
+                        ? {
+                            allocationId: cmd.custodyEvent.allocationId,
+                            allocationVersion:
+                              cmd.custodyEvent.allocationVersion,
+                            eventId: cmd.custodyEvent.id,
+                          }
+                        : {}),
                     },
               };
               const changes = cmd.changes.map((v) => ({
@@ -3026,6 +3160,7 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
+              requireCommittedCustody(ctx, asJson(parsed.data));
               if (!taskConsistent(ctx, asJson(parsed.data)))
                 fail(
                   "TASK_STATE_INCONSISTENT",
@@ -3045,10 +3180,17 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
-            if (row) requireCommittedTask(ctx, asJson(parsed.data));
+            if (row) {
+              requireCommittedTask(ctx, asJson(parsed.data));
+            }
             let ok = Boolean(
               row &&
               canonical(result) === row.receipt_json &&
+              (!custodyMutation ||
+                this.custodyStore.verifyCommitted(
+                  ctx,
+                  String(asJson(parsed.data).id),
+                )) &&
               taskConsistent(ctx, asJson(parsed.data)),
             );
             const observed: JsonObject[] = [];
@@ -3096,14 +3238,15 @@ export class WorkspaceStore {
                   ),
                 );
                 ok = ok && valid;
-                observed.push({
-                  entityId: change.id,
-                  module: change.module,
-                  committedVersion: change.version,
-                  currentVersion: entity ? Number(entity.version) : null,
-                  currentStatus: entity ? String(entity.status) : null,
-                  versionConfirmed: valid,
-                });
+                if (!taskCustody || change.module === "assets")
+                  observed.push({
+                    entityId: change.id,
+                    module: change.module,
+                    committedVersion: change.version,
+                    currentVersion: entity ? Number(entity.version) : null,
+                    currentStatus: entity ? String(entity.status) : null,
+                    versionConfirmed: valid,
+                  });
               }
               if (!changes.length) ok = false;
             }

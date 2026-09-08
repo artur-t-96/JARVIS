@@ -555,7 +555,13 @@ test("a registered plan with live opaque refs remains only a proposal; UUID and 
     "equipment_request",
   ).items[0]!.ref;
   const episode = f.store.listEmploymentEpisodes(principal, employed.id)[0]!;
+  const caseRef = f.broker.reference(
+    prior,
+    { module: "cases", id: episode.onboardingCaseId! },
+    "equipment_request",
+  ).items[0]!.ref;
   const input = {
+    caseId: caseRef,
     id: assetRef,
     expectedVersion: asset.version,
     personId: personRef,
@@ -582,7 +588,12 @@ test("a registered plan with live opaque refs remains only a proposal; UUID and 
       assetType: "laptop",
       readyOn: "2099-01-01",
       reservationUntil: "2099-01-01",
-      selectedRefs: { person: personRef, episode: episodeRef, asset: assetRef },
+      selectedRefs: {
+        person: personRef,
+        episode: episodeRef,
+        asset: assetRef,
+        case: caseRef,
+      },
     },
     async () =>
       new Response(
@@ -630,6 +641,7 @@ test("a registered plan with live opaque refs remains only a proposal; UUID and 
         task: {
           intent: "equipment_request",
           selectedRefs: {
+            case: caseRef,
             person: personRef,
             episode: episodeRef,
             asset: assetRef,

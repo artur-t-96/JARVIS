@@ -3,6 +3,7 @@ import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
 import { Empty, Icon, Loading, Notice, Sheet } from "./ui";
+import { TaskEquipment } from "./TaskEquipment";
 
 export type TaskAction =
   "acceptTask" | "declineTask" | "transferTask" | "completeTask" | "cancelTask";
@@ -25,6 +26,11 @@ export interface HumanTask {
   performedBy: string | null;
   performedByLabel?: string;
   evidenceNote: string | null;
+  operationalContext?: {
+    recipientLabel: string;
+    engagementLabel: string;
+    equipment: true;
+  };
   events: {
     action: string;
     requestedBy: string | null;
@@ -66,6 +72,9 @@ const eventLabels: Record<string, string> = {
   cancelTask: "Anulowanie zadania",
   created: "Utworzenie zadania",
   assigned: "Przypisanie wykonawcy",
+  issueForTask: "Poświadczenie wydania sprzętu",
+  returnForTask: "Poświadczenie zwrotu sprzętu",
+  bindAssetForTask: "Powiązanie dowodu wydania",
   accepted: "Przyjęcie zadania",
   declined: "Odmowa wykonania",
   transferred: "Przekazanie zadania",
@@ -109,10 +118,12 @@ export function HumanTaskCard({
   task,
   onAction,
   actions = task.allowedActions,
+  onEquipment,
 }: {
   task: HumanTask;
   onAction: (action: TaskAction) => void;
   actions?: TaskAction[];
+  onEquipment?: () => void;
 }) {
   const blocked = task.dependsOn.filter((dependency) => !dependency.completed);
   return (
@@ -128,6 +139,18 @@ export function HumanTaskCard({
           {taskStates[task.status] ?? "Stan do sprawdzenia"}
         </span>
       </div>
+      {task.operationalContext && (
+        <dl className="equipment-context">
+          <div>
+            <dt>Odbiorca</dt>
+            <dd>{task.operationalContext.recipientLabel}</dd>
+          </div>
+          <div>
+            <dt>Współpraca</dt>
+            <dd>{task.operationalContext.engagementLabel}</dd>
+          </div>
+        </dl>
+      )}
       <dl className="human-task-meta">
         <div>
           <dt>Wykonawca</dt>
@@ -193,6 +216,15 @@ export function HumanTaskCard({
           ))}
         </div>
       )}
+      {task.operationalContext?.equipment && onEquipment && (
+        <button
+          className="button secondary equipment-open"
+          onClick={onEquipment}
+        >
+          <Icon name="assets" size={16} />
+          Sprzęt i przekazanie
+        </button>
+      )}
       {task.events.length > 0 && (
         <details className="task-history">
           <summary>Historia zadania ({task.events.length})</summary>
@@ -201,7 +233,12 @@ export function HumanTaskCard({
               <li key={`${entry.taskVersion}-${index}`}>
                 <strong>{eventLabels[entry.action] ?? "Zmiana zadania"}</strong>
                 <time>{dateLabel(entry.createdAt, true)}</time>
-                {entry.reason && <p>{entry.reason}</p>}
+                {entry.reason &&
+                  ![
+                    "issueForTask",
+                    "returnForTask",
+                    "bindAssetForTask",
+                  ].includes(entry.action) && <p>{entry.reason}</p>}
                 <span className="small muted">
                   Wersja zadania {entry.taskVersion}
                   {entry.requestedBy ? ` · zlecono: ${entry.requestedBy}` : ""}
@@ -423,6 +460,7 @@ export function HumanTasks({
   );
   const [filter, setFilter] = useState("current");
   const [kind, setKind] = useState("");
+  const [equipmentTask, setEquipmentTask] = useState<HumanTask | null>(null);
   const [selected, setSelected] = useState<{
     task: HumanTask;
     action: TaskAction;
@@ -445,6 +483,14 @@ export function HumanTasks({
     );
   return (
     <>
+      {equipmentTask && (
+        <TaskEquipment
+          key={equipmentTask.id}
+          taskId={equipmentTask.id}
+          title={equipmentTask.title}
+          onClose={() => setEquipmentTask(null)}
+        />
+      )}
       {selected && (
         <TaskActionForm
           task={selected.task}
@@ -522,6 +568,7 @@ export function HumanTasks({
                     : []
                 }
                 onAction={(action) => setSelected({ task, action })}
+                onEquipment={() => setEquipmentTask(task)}
               />
             ))}
           </div>

@@ -1,3 +1,4 @@
+import { custodyPins } from "./helpers/custody-pins.js";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -74,6 +75,8 @@ function fixture(t: TestContext) {
     input: JsonObject,
     context = ctx(),
   ) => {
+    if (module === "assets")
+      input = custodyPins(workspace, principal, action, input);
     const adapter = tool(module, action),
       prepared = adapter.prepareInput?.(input, principal.tenantId) ?? input;
     const result = await adapter.execute(context, prepared);
@@ -528,6 +531,7 @@ test("independent verification reads actual episode and allocation rows, not onl
         expectedVersion: asset.version,
         personId: person.id,
         ...episodeInput(episode),
+        caseId: episode.onboardingCaseId!,
         purpose: "Explicit allocation",
         until: "2026-09-09",
       },
@@ -555,6 +559,22 @@ test("v3 migration pins only unambiguous lifecycle cases and preserves unresolve
     path = join(directory, "workspace.db");
   new WorkspaceStore(path).close();
   let db = new DatabaseSync(path);
+  db.exec(
+    "DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version=5",
+  );
+  for (const column of [
+    "version",
+    "expires_at",
+    "timezone",
+    "profile_version",
+    "created_at",
+    "updated_at",
+    "provenance",
+    "issue_event_id",
+    "return_event_id",
+    "last_event_id",
+  ])
+    db.exec(`ALTER TABLE ops_allocations DROP COLUMN ${column}`);
   db.exec(
     "DROP INDEX ops_one_open_engagement; DROP INDEX ops_one_open_internal; DROP INDEX ops_unique_episode_seat; DROP INDEX ops_unique_legacy_seat; CREATE UNIQUE INDEX ops_one_open_employment ON ops_employment(tenant_id,person_id) WHERE status!='ended'; CREATE UNIQUE INDEX ops_unique_seat ON ops_license_seats(tenant_id,license_id,person_id) WHERE status='assigned'; DELETE FROM schema_versions_operations WHERE version=4;",
   );
@@ -714,7 +734,7 @@ test("v3 migration pins only unambiguous lifecycle cases and preserves unresolve
       db
         .prepare("SELECT max(version) AS n FROM schema_versions_operations")
         .get()!.n,
-      4,
+      5,
     );
   } finally {
     db.close();

@@ -210,6 +210,26 @@ export function ReadinessCard({
   );
 }
 
+export function issuedProofChoices(item: Entity, asset?: Entity) {
+  const rows = Array.isArray(asset?.data.allocations)
+    ? asset.data.allocations
+    : [];
+  return rows.filter(
+    (row): row is Record<string, unknown> =>
+      !!row &&
+      typeof row === "object" &&
+      !Array.isArray(row) &&
+      row.status === "issued" &&
+      row.provenance === "p05" &&
+      typeof row.id === "string" &&
+      typeof row.issueEventId === "string" &&
+      row.caseId === item.id &&
+      (!item.data.personId || row.personId === item.data.personId) &&
+      (!item.data.employmentEpisodeId ||
+        row.employmentEpisodeId === item.data.employmentEpisodeId),
+  );
+}
+
 function BindingForm({
   item,
   requirement,
@@ -224,15 +244,18 @@ function BindingForm({
     module ? `/api/workspace/${module}` : null,
   );
   const [sourceId, setSourceId] = useState("");
+  const [allocationId, setAllocationId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [key] = useState(requestKey);
   const source = resource.data?.items.find(
     (candidate) => candidate.id === sourceId,
   );
+  const issueChoices = issuedProofChoices(item, source);
+  const issue = issueChoices.find((entry) => entry.id === allocationId);
   async function submit(event: FormEvent) {
     event.preventDefault();
-    if (!source || !module) return;
+    if (!source || !module || (module === "assets" && !issue)) return;
     setBusy(true);
     setError("");
     try {
@@ -245,6 +268,9 @@ function BindingForm({
           sourceModule: module,
           sourceId: source.id,
           sourceVersion: source.version,
+          ...(module === "assets" && issue
+            ? { allocationId: issue.id, issueEventId: issue.issueEventId }
+            : {}),
         },
         idempotencyKey: key,
       });
@@ -276,7 +302,10 @@ function BindingForm({
               required
               disabled={busy || resource.loading || !!resource.error}
               value={sourceId}
-              onChange={(event) => setSourceId(event.target.value)}
+              onChange={(event) => {
+                setSourceId(event.target.value);
+                setAllocationId("");
+              }}
             >
               <option value="">Wybierz dostępny rekord…</option>
               {resource.data?.items.map((entry) => (
@@ -287,6 +316,32 @@ function BindingForm({
               ))}
             </select>
           </label>
+          {module === "assets" && source && (
+            <label className="field">
+              <span>Poświadczone wydanie dla tej sprawy</span>
+              <select
+                required
+                disabled={busy || !issueChoices.length}
+                value={allocationId}
+                onChange={(event) => setAllocationId(event.target.value)}
+              >
+                <option value="">Wybierz konkretne wydanie…</option>
+                {issueChoices.map((entry) => (
+                  <option key={String(entry.id)} value={String(entry.id)}>
+                    Wydano {dateLabel(String(entry.issuedOn))} ·{" "}
+                    {String(source.data.serial ?? source.title)}
+                  </option>
+                ))}
+              </select>
+              {!issueChoices.length && (
+                <Notice>
+                  Brak aktualnego poświadczenia wydania tego sprzętu dla osoby,
+                  współpracy i zakresu tej sprawy. Rezerwacja oraz historyczny
+                  wpis bez autora nie są dowodem wydania.
+                </Notice>
+              )}
+            </label>
+          )}
           {!resource.loading &&
             !resource.error &&
             !resource.data?.items.length && (
@@ -312,7 +367,12 @@ function BindingForm({
           <button
             className="button primary"
             type="submit"
-            disabled={busy || !source || !!resource.error}
+            disabled={
+              busy ||
+              !source ||
+              !!resource.error ||
+              (module === "assets" && !issue)
+            }
           >
             {busy ? "Przygotowywanie…" : "Przygotuj powiązanie"}
           </button>
