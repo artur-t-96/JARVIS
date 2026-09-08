@@ -5,6 +5,10 @@ import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Entity, type Run } from "./types";
 import { Badge, Icon, Loading, Notice, Sheet } from "./ui";
 import { humanTaskStateLabel } from "./HumanTasks";
+import {
+  StartCancellationSummary,
+  StartCancellationDecision,
+} from "./StartCancellation";
 
 const actionLabels = {
   submit: "Przekaż do odbioru",
@@ -14,9 +18,11 @@ const actionLabels = {
 export function OnboardingCard({
   overview,
   onPrepare,
+  onCancel,
 }: {
   overview: OnboardingOverview;
   onPrepare?: () => void;
+  onCancel?: () => void;
 }) {
   const activeTasks = overview.tasks.filter(
     (t) => !["completed", "cancelled"].includes(t.status),
@@ -87,7 +93,11 @@ export function OnboardingCard({
           <dd>{overview.episode.role}</dd>
         </div>
         <div>
-          <dt>Data rozpoczęcia</dt>
+          <dt>
+            {overview.episode.status === "cancelled"
+              ? "Planowana data rozpoczęcia"
+              : "Data rozpoczęcia"}
+          </dt>
           <dd>{dateLabel(overview.episode.startDate)}</dd>
         </div>
         <div>
@@ -99,9 +109,7 @@ export function OnboardingCard({
         {activeTasks.length ? (
           <h3>Praca do dokończenia</h3>
         ) : (
-          <summary>
-            Potwierdzenia wykonanej pracy ({overview.tasks.length})
-          </summary>
+          <summary>Historia zadań ({overview.tasks.length})</summary>
         )}
         <ul>
           {(activeTasks.length ? activeTasks : overview.tasks).map((t) => (
@@ -133,6 +141,7 @@ export function OnboardingCard({
           ))}
         </ul>
       </WorkContainer>
+      <StartCancellationSummary overview={overview} onPrepare={onCancel} />
       <div className="onboarding-footer">
         <p className="small muted">
           Sprawdzono {dateLabel(overview.evaluatedAt, true)} · dzień firmy{" "}
@@ -284,6 +293,9 @@ export function Onboarding({
     7000,
   );
   const [selection, setSelection] = useState<OnboardingOverview | null>(null);
+  const [cancellation, setCancellation] = useState<OnboardingOverview | null>(
+    null,
+  );
   if (resource.error)
     return (
       <Notice tone="error">
@@ -297,6 +309,12 @@ export function Onboarding({
       context.tools.some((t) => t.id === overview.command!.toolId);
   return (
     <>
+      {cancellation && (
+        <StartCancellationDecision
+          overview={cancellation}
+          onClose={() => setCancellation(null)}
+        />
+      )}
       {selection && (
         <OnboardingDecision
           overview={selection}
@@ -306,6 +324,12 @@ export function Onboarding({
       <OnboardingCard
         overview={overview}
         onPrepare={canPrepare ? () => setSelection(overview) : undefined}
+        onCancel={
+          overview.cancellation?.command &&
+          context.tools.some((t) => t.id === "ops.people.cancelStart")
+            ? () => setCancellation(overview)
+            : undefined
+        }
       />
     </>
   );
@@ -336,7 +360,7 @@ export function PersonOnboardings({
     );
   if (resource.loading || !resource.data) return <Loading />;
   const episodes = resource.data.episodes.filter((e) =>
-    ["onboarding", "active"].includes(e.status),
+    ["onboarding", "active", "cancelled"].includes(e.status),
   );
   if (!episodes.length) return null;
   return (
@@ -361,7 +385,10 @@ export function PersonOnboardings({
                     ? "Współpraca wewnętrzna"
                     : "Współpraca konsultanta")}
               </strong>
-              <p className="small muted">Start {dateLabel(e.startDate)}</p>
+              <p className="small muted">
+                {e.status === "cancelled" ? "Planowany start" : "Start"}{" "}
+                {dateLabel(e.startDate)}
+              </p>
             </div>
             <Badge status={e.status} />
             {e.onboardingCaseId && (
@@ -369,7 +396,10 @@ export function PersonOnboardings({
                 className="button secondary"
                 onClick={() => navigate(`module/cases/${e.onboardingCaseId}`)}
               >
-                Otwórz onboarding <Icon name="arrow" size={16} />
+                {e.status === "cancelled"
+                  ? "Otwórz historię"
+                  : "Otwórz onboarding"}{" "}
+                <Icon name="arrow" size={16} />
               </button>
             )}
           </li>

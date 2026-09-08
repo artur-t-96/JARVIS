@@ -29,7 +29,13 @@ Starszy profil v3 działa ze wspólnym szablonem do jawnej aktualizacji. `initia
 
 Nowa sprawa zapisuje wybrany wariant, wersję profilu i wymagania. Późniejszy profil nie zmienia sprawy. Zmiana daty w jawnej rewizji zachowuje te wymagania, przesuwa terminy, tworzy nowe zadania i wymaga nowych powiązań dowodów oraz odbioru. Trwały receipt wykonanego startu rozstrzyga odzyskanie także po późniejszej zmianie profilu; brak receipt nadal wymaga aktualnej wersji konfiguracji przed wykonaniem.
 
-**P06b2 — anulowanie przed startem.** Osobna dostawa z migracją stanu okresu, decyzją człowieka i sprawdzeniem rezerwacji, wydań, dostępów i licencji. P06b1 nie zamyka tej części ani całego K03.
+**P06b2 — anulowanie rozpoczęcia.** `ops.people.cancelStart` v1 zamyka wyłącznie okres `onboarding`. Właściciel sprawy jawnie potwierdza, że praca nie została rozpoczęta, i podaje powód; osobny zatwierdzający akceptuje konkretny plan Core. Obie osoby muszą mieć aktywne uprawnienia do ludzi, spraw, sprzętu, licencji i IT. Upływ planowanej daty sam nie rozstrzyga, czy człowiek zaczął pracę. Okres aktywny albo w offboardingu wymaga procesu odejścia.
+
+Plan wiąże wersje osoby, okresu i sprawy, rewizję zakresu oraz skrót rozliczenia zasobów. Przed zapisem transakcja ponownie sprawdza właściciela, uprawnienia, historię zadań i zasobów. Rezerwacje trzeba zwolnić, sprzęt zwrócić z poświadczeniem, miejsce licencji odwołać, a cofnięcie dostępu potwierdzić. Wygasła obserwacja dostępu nie dowodzi jego odebrania. Niejednoznaczne historyczne przydziały bez okresu oraz rozbieżności relacji z niezmiennym obrazem rekordu blokują decyzję. Zmiana któregokolwiek z przypiętych danych wymaga nowego planu. Przydziały innego projektu tej samej osoby pozostają niezależne.
+
+Zapis zachowuje planowaną datę, dowody, ukończoną pracę i historię decyzji; anuluje pozostałe zadania bieżącego zakresu i sprawę. Okres otrzymuje `cancelled`, uzasadnienie, autora i zatwierdzającego, bez fikcyjnej daty zakończenia pracy. Osoba bez innych okresów wraca do `registered`. Nowy start, także w tym samym dniu i projekcie, dostaje nowy okres, zadania i warunki; dawny odbiór nie przechodzi automatycznie.
+
+Operations v11 przebudowuje tabelę okresów z nowym stanem i kontrolą decyzji. Zachowuje stare kolumny, wartości, wersje i odniesienia dostępu. Sterownik migracji stosuje [procedurę SQLite](https://www.sqlite.org/lang_altertable.html): wyłączenie kontroli FK przed transakcją tylko dla oczekującej przebudowy, kopiowanie, podmiana, kontrola FK przed wspólnym commit z ledgerem i przywrócenie kontroli także po błędzie. Stare nieanulowane projekcje nie dostają dopisanych pustych decyzji. Przyjęty skutek jest weryfikowany z trwałego receipt, stanu okresu, historii zadań i rozliczenia zasobów; nie wykonujemy go ponownie po utracie odpowiedzi.
 
 ## Macierz odbioru
 

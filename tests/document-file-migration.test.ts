@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { WorkspaceStore } from "../src/workspace.js";
 import { migrateDatabase } from "../src/migrations.js";
-test("v10 preserves frozen v9 records and schemas and rejects a file-unaware runtime", () => {
+test("File migration chain preserves frozen v9 records and unrelated schemas and rejects a file-unaware runtime", () => {
   const dir = mkdtempSync(join(tmpdir(), "jarvis-document-files-v9-")),
     path = join(dir, "operations.sqlite"),
     db = new DatabaseSync(path);
@@ -28,7 +28,7 @@ test("v10 preserves frozen v9 records and schemas and rejects a file-unaware run
     );
     const schema = db
         .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name",
+          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement') ORDER BY name",
         )
         .all(),
       records = db.prepare("SELECT * FROM ops_entities").all();
@@ -37,7 +37,7 @@ test("v10 preserves frozen v9 records and schemas and rejects a file-unaware run
     assert.deepEqual(
       db
         .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name",
+          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement') ORDER BY name",
         )
         .all(),
       schema,
@@ -46,7 +46,7 @@ test("v10 preserves frozen v9 records and schemas and rejects a file-unaware run
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      10,
+      11,
     );
     assert.throws(
       () =>
@@ -60,7 +60,7 @@ test("v10 preserves frozen v9 records and schemas and rejects a file-unaware run
             },
           })),
         }),
-      /v10 is newer than supported v9/,
+      /v11 is newer than supported v9/,
     );
     assert.deepEqual(db.prepare("SELECT * FROM ops_entities").all(), records);
   } finally {
