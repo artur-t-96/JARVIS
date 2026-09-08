@@ -5,6 +5,12 @@ import {
 } from "./task-access.js";
 import { DocumentSources, migrateDocumentContext } from "./document-sources.js";
 import { DocumentFiles, MAX_DOCUMENT_FILES } from "./document-files.js";
+import type { LocalLaboratory } from "./laboratory.js";
+import {
+  laboratoryCaseInputSchema,
+  laboratoryScopeSchema,
+  laboratoryTarget,
+} from "./laboratory-contract.js";
 import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
 import { AccessRegister, migrateAccessRegister } from "./access-register.js";
 import {
@@ -55,6 +61,7 @@ import {
   CaseReadinessStore,
   migrateReadiness,
   type AcceptanceReadiness,
+  type RequirementAssessment,
 } from "./case-readiness.js";
 import {
   WorkspaceTasks,
@@ -212,6 +219,7 @@ export class WorkspaceStore {
   private readonly taskAccessStore: TaskAccess;
   private readonly fileStore: DocumentFiles;
   private readonly documentSources: DocumentSources;
+  private laboratory?: LocalLaboratory;
   constructor(
     dbPath: string,
     private readonly options: { clock?: () => number } = {},
@@ -377,6 +385,15 @@ export class WorkspaceStore {
           rebuildTables: true,
           up: migrateEmploymentCancellation,
         },
+        {
+          version: 12,
+          name: "Scoped laboratory cases and typed test evidence",
+          up: (db) =>
+            db.exec(`CREATE UNIQUE INDEX ops_open_laboratory_case ON ops_entities(
+            tenant_id,json_extract(data_json,'$.laboratoryContext.targetId'))
+            WHERE module='cases' AND json_extract(data_json,'$.laboratoryContext.targetId') IS NOT NULL
+            AND status IN ('open','needs_changes','awaiting_acceptance');`),
+        },
       ],
     });
     this.fileStore = new DocumentFiles(
@@ -429,6 +446,138 @@ export class WorkspaceStore {
   setPrincipalProvider(provider: (tenantId: string) => Principal[]) {
     this.principalProvider = provider;
     this.taskStore.setPrincipalProvider(provider);
+  }
+  setLaboratory(laboratory: LocalLaboratory) {
+    this.laboratory = laboratory;
+    this.readinessStore.setLaboratoryProofReader(
+      (tenant, id, caseId, revision, now) =>
+        laboratory.proof(tenant, id, caseId, revision, now),
+    );
+    laboratory.setCasePolicy({
+      canAccess: (principal, input) => {
+        try {
+          this.get(principal, "cases", String(input.caseId));
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      authorize: (ctx, input, purpose) => {
+        const pins = laboratoryCaseInputSchema.parse(input);
+        const actor = this.livePrincipal(ctx.tenantId, ctx.actorId),
+          approver = this.livePrincipal(ctx.tenantId, ctx.approvedBy);
+        if (
+          !actor?.roles.includes("operator") ||
+          !approver?.roles.includes("approver")
+        )
+          fail(
+            "LAB_AUTHORITY_REVOKED",
+            "Brak aktywnego operatora lub zatwierdzającego naprawę.",
+            403,
+          );
+        this.get(actor, "cases", pins.caseId);
+        this.get(approver, "cases", pins.caseId);
+        const c = this.read(ctx.tenantId, "cases", pins.caseId);
+        for (const p of [actor, approver])
+          if (
+            !["cases", "it"].every(
+              (scope) => p.scopes?.includes("*") || p.scopes?.includes(scope),
+            )
+          )
+            fail(
+              "LAB_SCOPE_REQUIRED",
+              "Naprawa wymaga dostępu do spraw oraz IT.",
+              403,
+            );
+        if (purpose === "reconcile") return;
+        this.state(c, "open", "needs_changes");
+        const scope = c.data.laboratoryContext as JsonObject | undefined,
+          readiness = this.readinessStore.evaluate(
+            ctx.tenantId,
+            c,
+            new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+          ),
+          owner = this.livePrincipal(
+            ctx.tenantId,
+            String(c.data.ownerPrincipalId),
+          );
+        if (
+          !scope ||
+          scope.targetId !== pins.targetId ||
+          scope.procedureId !== "lab.repairCase" ||
+          scope.procedureVersion !== "1" ||
+          !this.entityConsistent(ctx.tenantId, c) ||
+          c.version !== pins.expectedCaseVersion ||
+          readiness.scopeRevision !== pins.scopeRevision ||
+          readiness.scopeHash !== pins.scopeHash
+        )
+          fail(
+            "LAB_CASE_CHANGED",
+            "Sprawa lub zakres naprawy zmieniły się. Przygotuj nowy plan.",
+          );
+        if (!owner || !this.canManageCase(owner, c.id))
+          fail(
+            "CASE_OWNER_UNAVAILABLE",
+            "Właściciel sprawy IT nie ma aktywnego dostępu.",
+            403,
+          );
+      },
+    });
+  }
+  laboratoryOverview(principal: Principal) {
+    if (!(principal.scopes?.includes("*") || principal.scopes?.includes("it")))
+      fail("SCOPE_REQUIRED", "Brak dostępu do IT.", 403);
+    if (!this.laboratory)
+      fail("LAB_UNAVAILABLE", "Laboratorium nie jest uruchomione.", 503);
+    const row = this.db
+      .prepare(
+        "SELECT id FROM ops_entities WHERE tenant_id=? AND module='cases' AND json_extract(data_json,'$.laboratoryContext.targetId')=? AND status IN ('open','needs_changes','awaiting_acceptance')",
+      )
+      .get(principal.tenantId, laboratoryTarget) as { id: string } | undefined;
+    let activeCase: { id: string; title: string } | null = null;
+    if (row) {
+      try {
+        const c = this.get(principal, "cases", row.id);
+        activeCase = { id: c.id, title: c.title };
+      } catch {
+        /* Do not disclose an inaccessible case. */
+      }
+    }
+    return {
+      ...this.laboratory.view(
+        principal.tenantId,
+        new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      ),
+      activeCase,
+    };
+  }
+  laboratoryCase(principal: Principal, caseId: string) {
+    const item = this.get(principal, "cases", caseId);
+    if (!item.data.laboratoryContext)
+      fail("LAB_CASE_REQUIRED", "Sprawa nie dotyczy laboratorium.", 409);
+    const laboratory = this.laboratoryOverview(principal),
+      readiness = this.readiness(principal, caseId),
+      now = new Date(this.options.clock?.() ?? Date.now()).toISOString();
+    return {
+      laboratory,
+      context: item.data.laboratoryContext as JsonObject,
+      readiness,
+      repairInput: {
+        caseId,
+        expectedCaseVersion: item.version,
+        scopeRevision: readiness.scopeRevision,
+        scopeHash: readiness.scopeHash,
+        targetId: laboratoryTarget,
+        expectedVersion: laboratory.observed?.version ?? null,
+      },
+      proofs: this.laboratory!.proofs(
+        principal.tenantId,
+        caseId,
+        readiness.scopeRevision,
+        now,
+      ),
+      testHistory: this.laboratory!.testHistory(principal.tenantId, caseId),
+    };
   }
   private livePrincipal(tenant: string, id?: string): Principal | undefined {
     const matches = (this.principalProvider?.(tenant) ?? []).filter(
@@ -545,16 +694,26 @@ export class WorkspaceStore {
     return {
       ...result,
       definitions: this.readinessStore.definitions(principal.tenantId, e),
-      requirements: result.requirements.map((requirement) => {
-        if (!requirement.source) return requirement;
-        try {
-          this.get(principal, requirement.source.module, requirement.source.id);
-          return requirement;
-        } catch {
-          const { source: _source, ...safe } = requirement;
-          return safe;
-        }
-      }),
+      requirements: result.requirements.map(
+        (requirement): RequirementAssessment => {
+          if (!requirement.source) return requirement;
+          try {
+            if (requirement.source.module === "laboratory") {
+              this.laboratoryOverview(principal);
+              return requirement;
+            }
+            this.get(
+              principal,
+              requirement.source.module,
+              requirement.source.id,
+            );
+            return requirement;
+          } catch {
+            const { source: _source, ...safe } = requirement;
+            return safe;
+          }
+        },
+      ),
     };
   }
   onboarding(principal: Principal, caseId: string): OnboardingOverview {
@@ -1307,12 +1466,15 @@ export class WorkspaceStore {
     if (module === "cases" && action === "addTask" && input.assigneeId)
       scopes.push("people");
     if (module === "cases" && action === "bindEvidence") {
-      const sourceModule = this.module(String(input.sourceModule));
-      const source = this.read(tenant, sourceModule, String(input.sourceId));
-      scopes.push(
-        sourceModule,
-        ...this.entityScopes(sourceModule, source.data, tenant),
-      );
+      if (input.sourceModule === "laboratory") scopes.push("it");
+      else {
+        const sourceModule = this.module(String(input.sourceModule));
+        const source = this.read(tenant, sourceModule, String(input.sourceId));
+        scopes.push(
+          sourceModule,
+          ...this.entityScopes(sourceModule, source.data, tenant),
+        );
+      }
     }
     if (module === "cases" && (action === "create" || action === "revise")) {
       const definitions = (
@@ -1509,6 +1671,45 @@ export class WorkspaceStore {
       data.employmentEpisodes = [];
     }
     if (module === "cases") {
+      if (data.laboratory) {
+        if (
+          data.caseType !== "it" ||
+          !this.laboratory ||
+          !cmd.ctx.actorId ||
+          !cmd.ctx.approvedBy
+        )
+          fail(
+            "LAB_CASE_REQUIRED",
+            "Obserwacja laboratorium wymaga zatwierdzonej sprawy IT.",
+          );
+        const scope = laboratoryScopeSchema.parse(data.laboratory);
+        if (!data.dueDate)
+          fail(
+            "LAB_DEADLINE_REQUIRED",
+            "Ustal termin sprawy IT przed zatwierdzeniem zakresu.",
+          );
+        const existing = this.db
+          .prepare(
+            "SELECT id FROM ops_entities WHERE tenant_id=? AND module='cases' AND json_extract(data_json,'$.laboratoryContext.targetId')=? AND status IN ('open','needs_changes','awaiting_acceptance')",
+          )
+          .get(cmd.ctx.tenantId, scope.targetId);
+        if (existing)
+          fail(
+            "LAB_CASE_EXISTS",
+            "Ta usługa ma już otwartą sprawę. Kontynuuj ją zamiast tworzyć duplikat.",
+          );
+        data.laboratoryContext = {
+          ...scope,
+          observation: this.laboratory.diagnosis(
+            cmd.ctx.tenantId,
+            scope.observationId,
+            scope.observationHash,
+            cmd.now,
+          ),
+        };
+        data.ownerPrincipalId = cmd.ctx.actorId;
+        delete data.laboratory;
+      }
       this.optionalRef(cmd, "people", data.ownerId);
       this.optionalRef(cmd, "people", data.personId);
       if (data.caseType === "onboarding" || data.caseType === "offboarding") {
@@ -4253,8 +4454,10 @@ export class WorkspaceStore {
                         ? "7"
                         : "6"
                       : module === "cases" && action === "bindEvidence"
-                        ? "6"
-                        : "4",
+                        ? "7"
+                        : module === "cases" && action === "create"
+                          ? "5"
+                          : "4",
           ...(taskAccess
             ? {
                 canAccess: (

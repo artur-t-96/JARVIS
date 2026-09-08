@@ -68,6 +68,18 @@ export interface Verification {
   summary: string;
   evidence: Evidence[];
 }
+/** Minimal internal receipt for an independently verified source adapter. */
+export interface StepEvidenceReceipt {
+  toolId: string;
+  toolVersion: string;
+  inputHash: string;
+  outputHash: string | null;
+  verificationHash: string | null;
+  succeeded: boolean;
+  requestedBy: string;
+  approvedBy: string | null;
+  operationKey: string;
+}
 export interface ToolContext {
   tenantId: string;
   actorId?: string;

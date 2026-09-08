@@ -18,6 +18,7 @@ export function custodyFixture(
     wrap?: (tool: ToolDefinition) => ToolDefinition;
     clock?: () => number;
     domainClock?: () => number;
+    extraTools?: (workspace: WorkspaceStore) => ToolDefinition[];
   } = {},
 ) {
   const principals: Principal[] = ["synthetic-a", "synthetic-b"].flatMap(
@@ -43,9 +44,12 @@ export function custodyFixture(
   workspace.setProfileProvider((tenant) =>
     initiatives.profileForTenant(tenant),
   );
-  const tools = [...workspace.tools(), ...initiatives.tools()].map(
-    (tool) => options.wrap?.(tool) ?? tool,
-  );
+  const extraTools = options.extraTools?.(workspace) ?? [];
+  const tools = [
+    ...workspace.tools(),
+    ...initiatives.tools(),
+    ...extraTools,
+  ].map((tool) => options.wrap?.(tool) ?? tool);
   const config: AppConfig = {
     mode: "authenticated",
     host: "127.0.0.1",

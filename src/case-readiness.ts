@@ -7,6 +7,10 @@ import { readIssuedAllocationProof } from "./asset-custody.js";
 import { AccessRegister } from "./access-register.js";
 import { DocumentSources } from "./document-sources.js";
 import type { DocumentFiles } from "./document-files.js";
+import {
+  laboratoryTest,
+  type LaboratoryProofReader,
+} from "./laboratory-contract.js";
 
 const uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -148,6 +152,7 @@ export interface RequirementAssessment {
     version: number;
     hash: string;
     observedAt: string;
+    runId?: string;
   };
 }
 export interface AcceptanceReadiness {
@@ -236,6 +241,7 @@ export function onboardingRequirements(
 }
 
 export class CaseReadinessStore {
+  private laboratoryProof?: LaboratoryProofReader;
   constructor(
     private readonly db: DatabaseSync,
     private readonly authorizedOwner?: (
@@ -244,6 +250,9 @@ export class CaseReadinessStore {
     ) => boolean,
     private readonly documentFiles?: DocumentFiles,
   ) {}
+  setLaboratoryProofReader(reader: LaboratoryProofReader) {
+    this.laboratoryProof = reader;
+  }
   requirements(
     tenant: string,
     caseId: string,
@@ -299,8 +308,31 @@ export class CaseReadinessStore {
       definitions ??
         (e.data.caseType === "onboarding"
           ? onboardingRequirements(String(e.data.employmentKind))
-          : []),
+          : e.data.laboratoryContext
+            ? [
+                {
+                  key: "service_http",
+                  title: "Niezależny test HTTP po zatwierdzonej naprawie",
+                  kind: "test_passed",
+                  required: true,
+                  expected: { testKey: laboratoryTest },
+                },
+              ]
+            : []),
     );
+    if (
+      e.data.laboratoryContext &&
+      !proposed.some(
+        (item) =>
+          item.kind === "test_passed" &&
+          item.required &&
+          item.expected.testKey === laboratoryTest,
+      )
+    )
+      error(
+        "LAB_TEST_REQUIRED",
+        "Sprawa laboratorium wymaga niezależnego testu własnej usługi w każdej rewizji.",
+      );
     if (e.data.caseType === "onboarding") {
       if (!e.data.personId || !e.data.employmentEpisodeId)
         error(
@@ -395,6 +427,23 @@ export class CaseReadinessStore {
     assetPin: { allocationId?: string; issueEventId?: string } | undefined,
     now: string,
   ) {
+    if (requirement.kind === "test_passed" && module === "laboratory") {
+      if (
+        requirement.expected.testKey !== laboratoryTest ||
+        !this.laboratoryProof
+      )
+        error(
+          "EVIDENCE_SOURCE_UNSUPPORTED",
+          "Brak czytnika tego testu. Wybierz właściwy test w nowej rewizji.",
+        );
+      return this.laboratoryProof(
+        tenant,
+        id,
+        requirement.caseId,
+        requirement.scopeRevision,
+        now,
+      );
+    }
     const r = this.db
       .prepare(
         "SELECT * FROM ops_entities WHERE tenant_id=? AND module=? AND id=?",
@@ -512,6 +561,7 @@ export class CaseReadinessStore {
       allocationId?: string;
       issueEventId?: string;
       accessProofHash?: string;
+      sourceProofHash?: string;
     },
     now: string,
   ) {
@@ -537,6 +587,18 @@ export class CaseReadinessStore {
       error(
         "SOURCE_VERSION_CHANGED",
         "Źródło zmieniło wersję. Odczytaj je przed przygotowaniem nowego planu.",
+      );
+    if (
+      requirement.kind === "test_passed" &&
+      (input.sourceProofHash !== source.hash ||
+        source.identity.current !== true ||
+        source.identity.scopeHash !==
+          this.evaluate(ctx.tenantId, e, now).scopeHash ||
+        !e.data.laboratoryContext)
+    )
+      error(
+        "LAB_PROOF_CHANGED",
+        "Wymagany aktualny pozytywny test dokładnej naprawy i rewizji sprawy.",
       );
     if (requirement.kind === "asset_issued") {
       const value = source.identity,
@@ -614,12 +676,25 @@ export class CaseReadinessStore {
       )
       .all(tenant, e.id, revision) as Row[];
     const taskBlockers: string[] = [];
-    if (!tasks.length)
+    if (!tasks.length && !e.data.laboratoryContext)
       taskBlockers.push("Dodaj wymagane zadania bieżącej rewizji.");
     for (const task of tasks)
       if (task.required && task.status !== "completed")
         taskBlockers.push(`Ukończ zadanie: ${String(task.title)}`);
     const onboarding = e.data.caseType === "onboarding";
+    if (
+      e.data.laboratoryContext &&
+      (!this.authorizedOwner?.(tenant, e) ||
+        !requirements.some(
+          (r) =>
+            r.kind === "test_passed" &&
+            r.required &&
+            r.expected.testKey === laboratoryTest,
+        ))
+    )
+      taskBlockers.push(
+        "Sprawa IT wymaga aktywnego właściciela i obowiązkowego niezależnego testu usługi.",
+      );
     if (onboarding) {
       if (!e.data.ownerPrincipalId || !this.authorizedOwner?.(tenant, e))
         taskBlockers.push(
@@ -685,7 +760,11 @@ export class CaseReadinessStore {
             reason: "Warunek wskazuje inną osobę lub współpracę.",
             nextAction: "Przygotuj prawidłową rewizję zakresu.",
           };
-        if (["delivery_received", "test_passed"].includes(requirement.kind))
+        if (
+          requirement.kind === "delivery_received" ||
+          (requirement.kind === "test_passed" &&
+            requirement.expected.testKey !== laboratoryTest)
+        )
           return {
             ...result,
             reason: "Właściwy odczyt źródła nie jest jeszcze dostępny.",
@@ -732,8 +811,25 @@ export class CaseReadinessStore {
           title: source.title,
           version: binding.sourceVersion,
           hash: binding.sourceHash,
-          observedAt: binding.observedAt,
+          observedAt:
+            requirement.kind === "test_passed"
+              ? String(source.identity.observedAt)
+              : binding.observedAt,
+          ...(requirement.kind === "test_passed"
+            ? { runId: String(source.identity.runId) }
+            : {}),
         };
+        if (
+          requirement.kind === "test_passed" &&
+          (!e.data.laboratoryContext || source.identity.current !== true)
+        )
+          return {
+            ...result,
+            status: "stale",
+            reason: "Test wygasł albo stan usługi zmienił się od naprawy.",
+            nextAction:
+              "Odczytaj aktualny stan; przygotuj nową rewizję, naprawę i dowód.",
+          };
         if (
           source.version !== binding.sourceVersion ||
           source.hash !== binding.sourceHash ||
@@ -910,6 +1006,9 @@ export class CaseReadinessStore {
       profileVersion: e.data.profileVersion ?? null,
       ownerPrincipalId: e.data.ownerPrincipalId ?? null,
       processTemplateSnapshot: e.data.processTemplateSnapshot ?? null,
+      ...(e.data.laboratoryContext
+        ? { laboratoryContext: e.data.laboratoryContext }
+        : {}),
       requirements: requirements.map(
         ({
           id,
