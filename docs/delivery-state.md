@@ -20,7 +20,7 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P03    | odebrane           | Minimalne kontrakty zadań, uprawnień i typowanych bramek; PR #7, 169 testów oraz odbiór głównej instalacji.                                                                                   |
 | P04    | blokada zewnętrzna | Lokalny przepływ odebrany w PR #8; rzeczywisty dostawca Claude pozostaje osobnym, niepotwierdzonym odbiorem.                                                                                  |
 | P05    | w toku             | P05a odebrane w PR #9; P05b domyka ewidencję, serwis i rozbieżności.                                                                                                                          |
-| P06    | do wykonania       | Pełny onboarding po P08a/P09a i bazowych profilach z P03.                                                                                                                                     |
+| P06    | w toku             | P06a łączy dokument, sprzęt, dostępy, odbiór i aktywację; P06b obejmuje konfiguracje obu rodzajów współpracy i anulowanie startu.                                                             |
 | P07    | do wykonania       | Pełny proces IT, certyfikat i niezależna weryfikacja.                                                                                                                                         |
 | P08    | w toku             | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
 | P09    | w toku             | P09a1: kontekst rewizji i źródła; następnie dowody plikowe i gotowe dokumenty.                                                                                                                |
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P09a2: pliki i praktyczny eksport dokumentu.** Baza: odebrany lokalnie PR #16, `91e737a06e11773858d732c326c58d1bca1d18b2`. Worktree `/private/tmp/jarvis-document-files`, gałąź `codex/document-files`. Własne pliki, manifesty i kontrola każdej rewizji oraz eksporty OSS rozwijają [P09a](p09a-design.md). Następnie pełny onboarding P06. Spis z natury oraz import P05b pozostają otwarte.
+**P06a: pełny onboarding i wspólny widok.** Baza: odebrany lokalnie PR #17, `0a566dbc99e29c675b7572b0a60597359d490fa3`. Worktree `/private/tmp/jarvis-full-onboarding`, gałąź `codex/full-onboarding`. [Projekt i macierz P06](p06-design.md). Następnie konfiguracje, zmiany terminu i anulowanie przed startem w P06b. Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -267,3 +267,19 @@ Podgląd zatrzymano przed kopią: `/private/tmp/jarvis-p09a2-backup-20260908T172
 Dowody i skrypty: `/private/tmp/jarvis-document-files/.data/p09a2-preview/ui-proof.json`, `render-final/`, `restore-proof.ts`. Końcowe scalenie i odbiór głównej instalacji są kolejnym krokiem. Automatyczne sprzątanie niewykorzystanych wygasłych materiałów wejściowych pozostaje w utrzymaniu P14; obowiązują limity liczby/rozmiaru i 7-dniowa ważność do wykonania. P06 jest następną paczką produktową; K08 nadal wymaga pozostałych szablonów i raportów z P09.
 
 Przegląd instalacji dodał `assets/` (czcionki i licencje) do manifestu lokalnego buildu. Celowany test potwierdził odmowę po zmianie, usunięciu albo dodaniu nieznanego fontu. CI `34257047516` ponownie ujawniło wyścig obserwacji końca supervisora; poprawiono rzeczywisty `processAlive`: po zniknięciu wyniku `ps` ponownie sprawdza PID, a brak uprawnienia nie oznacza zakończenia. Test SIGKILL pozostaje niezmieniony; osobny test potwierdza rozróżnienie EPERM/ESRCH. Końcowe CI tych poprawek i odbiór lokalny pozostają wymagane przed dostarczeniem.
+
+## P09a2 — dostarczone lokalnie
+
+[PR #17](https://github.com/artur-t-96/JARVIS/pull/17) scalono jako `0a566dbc99e29c675b7572b0a60597359d490fa3`. Końcowe [CI PR 34257461072](https://github.com/artur-t-96/JARVIS/actions/runs/34257461072) dla `bd8d0db` oraz [CI main 34257850754](https://github.com/artur-t-96/JARVIS/actions/runs/34257850754) są zielone: **338 testów i pełne bramki**, z niezmienionym rzeczywistym testem SIGKILL supervisora. Instalacja z 8.09.2026 17:34:21 UTC, Node22.23.0; oba tryby serwują dokładnie scalony SHA, provider pozostaje wyłączony. Manifest obejmuje cztery pliki fontów/licencji.
+
+Chrome głównego lab4310: wybór oryginału, plan, start i zgoda `e12104b8-e002-4b2e-baf1-829e2fe62a9e` — jedna próba i pozytywna weryfikacja. Dokument `7fe41239-e748-4c55-9d73-bd7cbea40cd6` po osobnym odbiorze jest v4/rev2; sprawa `dfdeba5c-db4f-41de-8442-c55c4cca2cdf` z wymaganym plikiem została odebrana. PDF i DOCX pobrane w Chrome mają identyczne SHA jak API, odpowiednio `b6dcbd480184103f49de5952b9e7d494f274fdbd6bb62e781a5efa1bd1118d6c` i `6bf0cd29c2363ca66cb80bc89a557324463a49ecb967ca1cfc37545572064424`. Trzy strony końcowego raportu sprawdzono wizualnie. Poprzednia rezerwacja P05b2, dostęp P08a2 i dokument P09a1 zachowały stan. Dowód: `.data/local-product/p09a2-verification.json`.
+
+OSS obu trybów: Grafana13.2.1, po 14 paneli i trzy źródła OK, metryki workera oraz dopasowane logi/ślady nowego SHA. Lab `31b6620338a326b4a0225752b5113a5b`, operational `63842b680ae65ef0463ce25e4a0d300d`; `.data/local-product/p09a2-oss-verification.json`.
+
+Kopie przed aktualizacją, po zatrzymaniu obu procesów: lab `/private/tmp/jarvis-before-p09a2-lab-20260908T1734`, 8 plików, manifest `2a7befe91607754bffc47e019b1cb476eb4126c238ddfa1fd966d54f15a84ba8`; operational `/private/tmp/jarvis-before-p09a2-operational-20260908T1734`, 6 plików, manifest `43e3f994478475589cba5a88397160b7e75de713dc3ba0e2df77239b7809e475`. Rzeczywisty restore podglądu opisano powyżej. Minimalna zależność P09a jest dostarczona; pełny K08 i onboarding K03/P06 pozostają otwarte.
+
+## P06a — wspólny przebieg onboardingu, w odbiorze
+
+Gałąź `codex/full-onboarding` dodaje widok konkretnej współpracy: projekt, data według strefy firmy, właściciel, zadania z zależnościami oraz następna decyzja. Gotowość wynika z aktualnych bramek dokumentu, wydania i dostępów. Przekazanie do odbioru, decyzja właściciela i aktywacja przygotowują osobne operacje Core. Zmieniony plik lub wygasły dostęp blokuje także wcześniej przygotowaną aktywację. Widok nie udostępnia danych HR kontu wykonawcy IT ani innemu tenantowi.
+
+Siedem krótkich testów lokalnych przeszło pełny pozytywny obieg z oryginałem i restartem baz, brakujące warunki, zmianę pliku po odbiorze, strefę dnia startu, wygasły dostęp, odmowę właściciela, dwa profile firm i dwa równoległe projekty konsultanta oraz API/UI. Nowy rzeczywisty test SIGKILL zatrzymuje proces po zatwierdzonym zapisie aktywacji; jego odbiór odbywa się w hosted CI. CI, Chrome, restore i scalona instalacja pozostają do weryfikacji. P06b — konfiguracje obu rodzajów w jednym profilu oraz jawne anulowanie przyszłego startu — pozostaje otwarte.
