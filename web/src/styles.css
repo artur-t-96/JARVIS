@@ -3538,3 +3538,15 @@ tbody tr:hover {
   gap: 10px;
   margin: 20px 0;
 }
+.purchase-terms {
+  margin-top: 8px;
+  max-width: 340px;
+}
+.purchase-terms summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+.purchase-terms p {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}

@@ -446,11 +446,20 @@ export function PurchaseForm({
               "textarea",
             )}
           {(mode === "selectQuote" || mode === "decideCost") && (
-            <p>
-              <strong>{quote?.title}</strong> ·{" "}
-              {purchaseMoney(quote?.data.totalMinor, quote?.data.currency)} ·{" "}
-              {quote?.data.priceBasis === "net" ? "netto" : "brutto"}
-            </p>
+            <div>
+              <p>
+                <strong>{quote?.title}</strong> ·{" "}
+                {purchaseMoney(quote?.data.totalMinor, quote?.data.currency)} ·{" "}
+                {quote?.data.priceBasis === "net" ? "netto" : "brutto"}
+              </p>
+              <p>
+                Wersja {quote?.version} · dostawa{" "}
+                {dateLabel(String(quote?.data.expectedDelivery))} · oferta ważna
+                do {dateLabel(String(quote?.data.validUntil))}
+              </p>
+              <p>{String(quote?.data.description)}</p>
+              <p>{String(quote?.data.terms)}</p>
+            </div>
           )}
           {mode === "decideCost" && (
             <>
@@ -534,6 +543,11 @@ export function PurchaseComparison({
                 <div>
                   {String(quote.data.quoteReference)} · wersja {quote.version}
                 </div>
+                <details className="purchase-terms">
+                  <summary>Opis i warunki</summary>
+                  <p>{String(quote.data.description)}</p>
+                  <p>{String(quote.data.terms)}</p>
+                </details>
               </td>
               <td>
                 {String(quote.data.quantity)} szt. ×{" "}
@@ -558,11 +572,7 @@ export function PurchaseComparison({
                 </div>
               </td>
               <td>
-                {problem ? (
-                  <span>{problem}</span>
-                ) : (
-                  <span>Spełnia warunki</span>
-                )}
+                {problem ? <div>{problem}</div> : <div>Spełnia warunki</div>}
                 {onSelect && (
                   <button
                     className="button secondary"

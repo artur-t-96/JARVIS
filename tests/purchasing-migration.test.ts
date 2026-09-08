@@ -72,6 +72,7 @@ test("v13 rolls back a partial migration and preserves historical orders without
     try {
       const view = store.purchasing(
         {
+          tenantId: "legacy",
           id: "reader",
           roles: ["viewer"],
           scopes: ["purchases"],
