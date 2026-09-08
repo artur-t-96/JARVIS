@@ -66,6 +66,10 @@ import {
   type TaskTransition,
 } from "./workspace-tasks.js";
 import { onboardingStage, type OnboardingOverview } from "./onboarding.js";
+import {
+  onboardingVariantsSchema,
+  type OnboardingVariants,
+} from "./onboarding-profile.js";
 export type { ModuleDefinition } from "./workspace-models.js";
 
 export interface Entity {
@@ -106,12 +110,13 @@ export interface LifecycleProfile {
   timezone?: string;
   roleBindings: RoleBindings;
   processTemplates: z.infer<typeof processTemplatesSchema>;
+  onboardingVariants?: OnboardingVariants;
   employmentPolicy?: EmploymentPolicy;
 }
 const lifecycleProfileSchema = z
   .object({
     version: z.number().int().min(0),
-    definitionVersion: z.enum(["2", "3"]),
+    definitionVersion: z.enum(["2", "3", "4"]),
     timezone: z
       .string()
       .min(1)
@@ -127,8 +132,13 @@ const lifecycleProfileSchema = z
     roleBindings: roleBindingsSchema,
     employmentPolicy: employmentPolicySchema,
     processTemplates: processTemplatesSchema,
+    onboardingVariants: onboardingVariantsSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine(
+    (p) => p.definitionVersion !== "4" || !!p.onboardingVariants,
+    "Profil v4 wymaga obu wariantów onboardingu.",
+  );
 interface Command {
   profile?: LifecycleProfile;
   ctx: ToolContext;
@@ -682,17 +692,20 @@ export class WorkspaceStore {
   private currentProfile(tenantId: string): LifecycleProfile | undefined {
     if (!this.profileProvider) return undefined;
     const profile = this.profileProvider(tenantId);
-    if (!["2", "3"].includes(profile.definitionVersion)) return undefined;
+    if (!["2", "3", "4"].includes(profile.definitionVersion)) return undefined;
     return lifecycleProfileSchema.parse({
       version: profile.version,
       definitionVersion: profile.definitionVersion,
       timezone: profile.timezone ?? "Europe/Warsaw",
       roleBindings: profile.roleBindings,
       processTemplates: profile.processTemplates,
-      employmentPolicy:
-        profile.definitionVersion === "3"
-          ? profile.employmentPolicy
-          : defaultEmploymentPolicy,
+      onboardingVariants:
+        profile.definitionVersion === "4"
+          ? profile.onboardingVariants
+          : undefined,
+      employmentPolicy: ["3", "4"].includes(profile.definitionVersion)
+        ? profile.employmentPolicy
+        : defaultEmploymentPolicy,
     });
   }
   private companyDate(cmd: Pick<Command, "now" | "profile">): string {
@@ -712,7 +725,9 @@ export class WorkspaceStore {
   ): LifecycleProfile | undefined {
     if (
       this.profileProvider &&
-      !["2", "3"].includes(this.profileProvider(tenantId).definitionVersion)
+      !["2", "3", "4"].includes(
+        this.profileProvider(tenantId).definitionVersion,
+      )
     )
       fail(
         "PROFILE_UPGRADE_REQUIRED",
@@ -725,6 +740,26 @@ export class WorkspaceStore {
         "Szablon firmy zmienił wersję. Przygotuj nowy plan i zatwierdź jego zakres.",
       );
     return profile;
+  }
+  validateOnboardingVariants(tenantId: string, variants: OnboardingVariants) {
+    for (const variant of Object.values(variants))
+      for (const r of variant.requirements)
+        if (
+          r.kind === "access_attested" &&
+          r.expected.bundleId &&
+          r.expected.bundleVersion
+        ) {
+          const bundle = this.accessStore.bundle(
+            tenantId,
+            r.expected.bundleId,
+            r.expected.bundleVersion,
+          );
+          if (bundle.data.accessKey !== r.expected.accessKey)
+            fail(
+              "ACCESS_BUNDLE_MISMATCH",
+              "Zestaw nie odpowiada kluczowi dostępu wariantu.",
+            );
+        }
   }
   audit(principal: Principal, module: string, id: string) {
     this.get(principal, module, id);
@@ -2049,6 +2084,12 @@ export class WorkspaceStore {
       .get(cmd.ctx.tenantId, episodeId, person.id) as Row | undefined;
     if (!episode)
       fail("EMPLOYMENT_REQUIRED", "Brak właściwego okresu współpracy.");
+    const variant =
+      type === "onboarding"
+        ? cmd.profile?.onboardingVariants?.[
+            episode.kind === "contractor" ? "contractor" : "internal"
+          ]
+        : undefined;
     const c = this.create(
       cmd,
       "cases",
@@ -2061,9 +2102,13 @@ export class WorkspaceStore {
         personId: person.id,
         employmentEpisodeId: episodeId,
         dueDate,
+        ...(variant
+          ? { requirements: asJson({ items: variant.requirements }).items }
+          : {}),
       },
     );
     const template =
+      variant?.tasks ??
       cmd.profile?.processTemplates[type] ??
       baselineProcessTemplates(
         episode.kind === "contractor" ? "contractor" : "internal",
@@ -2080,6 +2125,13 @@ export class WorkspaceStore {
         profileVersion: cmd.profile?.version ?? null,
         type,
         tasks: template,
+        ...(variant
+          ? {
+              employmentKind: episode.kind,
+              profileDefinitionVersion: "4",
+              requirements: variant.requirements,
+            }
+          : {}),
       }),
     ) as Json;
     const taskIds: Record<string, string> = {};
@@ -3825,8 +3877,9 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version:
-            module === "documents"
+          version: lifecycle
+            ? "5"
+            : module === "documents"
               ? "10"
               : taskAccess
                 ? "1"
@@ -4002,7 +4055,10 @@ export class WorkspaceStore {
                 usesProfile &&
                 !(
                   existing &&
-                  (custodyMutation || registerMutation || accessMutation)
+                  (lifecycle ||
+                    custodyMutation ||
+                    registerMutation ||
+                    accessMutation)
                 )
                   ? this.pinnedProfile(ctx.tenantId, input)
                   : this.currentProfile(ctx.tenantId);
@@ -4329,9 +4385,9 @@ export class WorkspaceStore {
             const parsed = inputSchema.safeParse(raw);
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
-            if (lifecycle)
-              this.pinnedProfile(ctx.tenantId, asJson(parsed.data));
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            if (lifecycle && !row)
+              this.pinnedProfile(ctx.tenantId, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));
             requireCommittedDocument(ctx, row);
             if (row) {

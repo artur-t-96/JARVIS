@@ -13,6 +13,7 @@ import { InitiativeStore } from "./initiative.js";
 import { Diagnostics } from "./diagnostics.js";
 import { exportDocument } from "./document-export.js";
 import { baselineProcessTemplates } from "./workspace-models.js";
+import { baselineOnboardingVariant } from "./onboarding-profile.js";
 import {
   fileHash,
   fileNameSchema,
@@ -67,6 +68,7 @@ export function registerWorkspaceApi(
         label:
           id === "internal" ? "Pracownik wewnętrzny" : "Konsultant klienta",
         processTemplates: baselineProcessTemplates(id),
+        onboardingVariant: baselineOnboardingVariant(id),
       })),
     };
   });

@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P06a: pełny onboarding i wspólny widok.** Baza: odebrany lokalnie PR #17, `0a566dbc99e29c675b7572b0a60597359d490fa3`. Worktree `/private/tmp/jarvis-full-onboarding`, gałąź `codex/full-onboarding`. [Projekt i macierz P06](p06-design.md). Następnie konfiguracje, zmiany terminu i anulowanie przed startem w P06b. Spis z natury oraz import P05b pozostają otwarte.
+**P06b1: dwa warianty onboardingu w jednej firmie.** Baza: odebrany lokalnie PR #18, `830675895c289aef276303ae27c176031f286e14`. Worktree `/private/tmp/jarvis-onboarding-variants`, gałąź `codex/onboarding-variants`. Wersjonowane zadania i wymagania pracownika/konsultanta, zgodność starszych profili, zmiana terminu bez dziedziczenia potwierdzeń. Następnie P06b2: jawne anulowanie przed startem i rozliczenie zasobów. [Projekt i macierz P06](p06-design.md). Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -295,3 +295,19 @@ Firma B: ten sam obieg przeszedł przez API dla projektu `c4fab923-3d94-4a0a-9fd
 Kopia po zatrzymaniu podglądu: `/private/tmp/jarvis-p06-backup-20260908T1800`, 10 plików, manifest `2ac3bd44c7e3ac13d6332df0e42eb06ba9417cda683eab372090b60f36c5e5bc`. Restore do `/private/tmp/jarvis-p06-restored-20260908T1800` zachował dwa oryginały, trzy okresy i dwa odbiory. Replay pięciu zapisanych poleceń nie zmienił danych. Oczekująca aktywacja wykonała się po zgodzie raz: jeden nowy obraz osoby, receipt, wpis audytu i outbox; liczba osób, okresów i odbiorów pozostała stała. Ponowne uzgodnienie sześciu poleceń nie zmieniło liczników. Kont nie kopiowano, serwera odtworzonych danych nie uruchamiano. Oryginalny podgląd niezależnie zachował oczekiwanie, a następnie dokończył tę aktywację w Chrome.
 
 Dowody: `/private/tmp/jarvis-full-onboarding/.data/p06-preview/ui-proof.json`, `http-proof.mjs`, `restore-proof.ts`. Końcowe CI po poprawce etykiet, scalenie i odbiór głównej instalacji pozostają następnymi bramkami. P06b i pełny K03 nadal pozostają otwarte.
+
+## P06a — dostarczone lokalnie
+
+[PR #18](https://github.com/artur-t-96/JARVIS/pull/18) scalono jako `830675895c289aef276303ae27c176031f286e14`. Końcowe [CI PR 34260857014](https://github.com/artur-t-96/JARVIS/actions/runs/34260857014), źródło `83db536f83cd35163f2cd618c4f7210ba09454ad`, oraz [CI main 34261187788](https://github.com/artur-t-96/JARVIS/actions/runs/34261187788) są zielone: 346 testów i pełne bramki. Oba zarządzane tryby uruchomiono na scalonym SHA po aktualizacji 8.09.2026 18:08:09 UTC, Node22.23.0, provider wyłączony.
+
+Chrome głównego lab4310: przekazanie `4105080e-54f5-4bf5-bc56-612e9584e24e`, odbiór `8e900683-d148-4e67-b21a-fabdb0da2394`, aktywacja `6d49378c-3d1c-499c-b735-bfe15ad7ce9d`. Każda operacja ma osobny plan, zgodę, jedną próbę i pozytywną weryfikację. Osoba `e7092fae-e591-4d59-8f13-39ebe896b3d8`, okres `3c8b7f7a-2cbe-44a0-aba8-f2438778490a` są aktywne; sprawa `eb8de6cd-2935-4406-956e-5a57f946151a` v23/scope2 ma aktualny odbiór. Cztery ukończone zadania, oryginał dokumentu, wydanie laptopa i dwa poświadczenia dostępu dają pełny pozytywny wynik. To syntetyczny scenariusz z lokalnym kontem laboratorium; oddzielne konta operatora i zatwierdzającego sprawdzono wcześniej w podglądzie. Widok obejrzano, konsola Chrome bez błędów i ostrzeżeń. Profil firmy oraz cztery wcześniejsze rekordy dowodowe zachowały stan. Prywatny dowód: `.data/local-product/p06a-verification.json` (35 komend, w tym trzy przez Chrome).
+
+OSS obu trybów: Grafana13.2.1, 14 paneli i trzy źródła OK, metryki workera oraz powiązany log/trace scalonego SHA. Lab `df992acc3a9307b0091017d85b30acd1`, operational `24895175cbfd88dd25eafb9506befbd1`; `.data/local-product/p06a-oss-verification.json`.
+
+Kopie przed aktualizacją po zatrzymaniu obu procesów: lab `/private/tmp/jarvis-before-p06a-lab-20260908T1808`, 18 plików, manifest `56afa57c57c624544a59402722978edc9db44cdd89c94f272485bab0c155fa78`; operational `/private/tmp/jarvis-before-p06a-operational-20260908T1808`, 6 plików, manifest `ba7cdc21b9e2514afbcc2857749be68efb6619661692df130033eeab9bf9e7f0`. Rzeczywisty restore podglądu opisano powyżej. Hosting produkcyjny nie jest skonfigurowany. P06b i pełny K03 pozostają otwarte.
+
+## P06b1 — implementacja wariantów onboardingu
+
+Nowy profil v4 zapisuje oba warianty, ich typowane wymagania i zadania. Starsze profile zachowują wspólny szablon do jawnej konfiguracji; starszy klient nie może usunąć już przyjętych wariantów. Formularz wczytuje je do szkicu i pozwala osobno ustawić dokument/oryginał, rodzaj sprzętu, zestaw dostępu oraz terminy i role. Nowa sprawa przypina właściwy wariant. Powtórzenie zapisanego startu uzgadnia receipt także po kolejnej zmianie profilu.
+
+Osiem celowanych testów lokalnych obejmuje reguły, oba rodzaje współpracy w jednej firmie, odmowę dostępu, obcy i nieaktualny zestaw, niedziedziczenie odbioru po zmianie daty, opóźnienie IT, restart i bezskutkowy replay. Typy i build przeszły. Dwa nowe rzeczywiste testy SIGKILL (konfiguracja i start) czekają na hosted CI. Chrome, odtworzenie kopii i odbiór scalonej instalacji pozostają wymagane. P06b2 — anulowanie zamiaru współpracy z rozliczeniem zasobów — jest kolejną dostawą.

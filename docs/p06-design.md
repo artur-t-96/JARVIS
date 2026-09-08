@@ -21,6 +21,16 @@ Baza: PR #17, `0a566dbc99e29c675b7572b0a60597359d490fa3`. Punkt odniesienia: [wi
 
 **P06b — konfiguracje i zmiany.** Osobne szablony i wymagania pracownika/konsultanta, związane z zatwierdzoną wersją profilu. Przesunięcie daty wymaga nowego zakresu; stare potwierdzenia pozostają historyczne. Anulowanie przed startem musi zamknąć zamiar zatrudnienia bez fikcyjnej daty przepracowania, po rozliczeniu zasobów właściwego okresu. Obecne `cancelCase` anuluje zadania, lecz zachowuje stan okresu `onboarding`; istniejący offboarding nie obsługuje pełnego zamknięcia przyszłego startu przed jego datą. Ten brak wymaga jawnego kontraktu i migracji, nie usunięcia historii.
 
+### Dostawy P06b
+
+**P06b1 — warianty onboardingu.** Profil v4 zawiera `onboardingVariants.internal` i `onboardingVariants.contractor`: zadania oraz typowane wymagania. Sprzęt, dokument i dostęp pozostają obowiązkowe; każdy obowiązkowy warunek ma zadanie HR lub IT. Profil określa rodzaj dokumentu/sprzętu i ewentualny zestaw dostępów z wersją. Konkretne dowody osoby należą do sprawy. Wybór zestawu wymaga dodatkowo uprawnień IT i zgodności organizacji, klucza i wersji źródła.
+
+Starszy profil v3 działa ze wspólnym szablonem do jawnej aktualizacji. `initiatives.configure` v4 przyjmuje taki starszy zakres, jeżeli nie usuwa już skonfigurowanych wariantów. Po zapisaniu obu wariantów ich pominięcie jest odrzucane. Formularz wczytuje nowe bazowe warianty wyłącznie na polecenie operatora i pokazuje oba przed przygotowaniem planu. `people.startEmployment`, `people.beginOffboarding` i `recruitment.hire` otrzymują wersję narzędzia 5; wcześniejsze zgody nie przenoszą się na zmienioną wersję. Offboarding zachowuje swój dotychczasowy szablon, a jego dalsze warianty należą do P11.
+
+Nowa sprawa zapisuje wybrany wariant, wersję profilu i wymagania. Późniejszy profil nie zmienia sprawy. Zmiana daty w jawnej rewizji zachowuje te wymagania, przesuwa terminy, tworzy nowe zadania i wymaga nowych powiązań dowodów oraz odbioru. Trwały receipt wykonanego startu rozstrzyga odzyskanie także po późniejszej zmianie profilu; brak receipt nadal wymaga aktualnej wersji konfiguracji przed wykonaniem.
+
+**P06b2 — anulowanie przed startem.** Osobna dostawa z migracją stanu okresu, decyzją człowieka i sprawdzeniem rezerwacji, wydań, dostępów i licencji. P06b1 nie zamyka tej części ani całego K03.
+
 ## Macierz odbioru
 
 - Wszystkie trzy typowane warunki spełnione, zadania zakończone i odebrane przez wskazanego właściciela; aktywacja dopiero w dacie startu według strefy firmy.

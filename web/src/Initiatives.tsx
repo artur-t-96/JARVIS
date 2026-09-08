@@ -4,6 +4,14 @@ import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
 import { Badge, Empty, Icon, Loading, Notice, Sheet } from "./ui";
 import {
+  OnboardingVariantsEditor,
+  OnboardingVariantsSummary,
+} from "./OnboardingVariants";
+import type {
+  OnboardingVariant,
+  OnboardingVariants,
+} from "../../src/onboarding-profile";
+import {
   EmploymentPolicyEditor,
   safeEmploymentPolicy,
   type EmploymentPolicy,
@@ -41,6 +49,7 @@ type CompanyProfile = {
   quietHours: { enabled: boolean; start: string; end: string };
   rules: Record<string, boolean>;
   processTemplates: { onboarding: TemplateTask[]; offboarding: TemplateTask[] };
+  onboardingVariants?: OnboardingVariants;
   roleBindings?: { hr?: string; it?: string; manager?: string };
   employmentPolicy?: EmploymentPolicy;
   updatedAt: string | null;
@@ -50,14 +59,43 @@ type CompanyTemplate = {
   id: "internal" | "contractor";
   label: string;
   processTemplates: CompanyProfile["processTemplates"];
+  onboardingVariant?: OnboardingVariant;
 };
 export function applyCompanyTemplate(
   profile: CompanyProfile,
   template: CompanyTemplate,
 ): CompanyProfile {
+  if (profile.onboardingVariants) {
+    if (!template.onboardingVariant)
+      throw new Error("Brak typowanego wariantu onboardingu.");
+    return {
+      ...profile,
+      onboardingVariants: {
+        ...profile.onboardingVariants,
+        [template.id]: structuredClone(template.onboardingVariant),
+      },
+    };
+  }
   return {
     ...profile,
     processTemplates: structuredClone(template.processTemplates),
+  };
+}
+export function applyOnboardingBaselines(
+  profile: CompanyProfile,
+  templates: CompanyTemplate[],
+): CompanyProfile {
+  const internal = templates.find(
+    (t) => t.id === "internal",
+  )?.onboardingVariant;
+  const contractor = templates.find(
+    (t) => t.id === "contractor",
+  )?.onboardingVariant;
+  if (!internal || !contractor)
+    throw new Error("Brak dwóch bazowych wariantów onboardingu.");
+  return {
+    ...profile,
+    onboardingVariants: structuredClone({ internal, contractor }),
   };
 }
 export function companyProfileInput(
@@ -81,6 +119,9 @@ export function companyProfileInput(
     rules,
     roleBindings: roleBindings ?? {},
     employmentPolicy: { ...(profile.employmentPolicy ?? safeEmploymentPolicy) },
+    ...(profile.onboardingVariants
+      ? { onboardingVariants: structuredClone(profile.onboardingVariants) }
+      : {}),
     processTemplates: {
       onboarding: profile.processTemplates.onboarding.map((task) => ({
         ...task,
@@ -444,26 +485,38 @@ export function CompanySettings({ context }: { context: Context }) {
           )}
           <details className="technical-details">
             <summary>Szablony onboardingu i offboardingu</summary>
-            {(["onboarding", "offboarding"] as const).map((kind) => (
-              <div key={kind}>
-                <h3>{kind === "onboarding" ? "Onboarding" : "Offboarding"}</h3>
-                <ol>
-                  {profile.processTemplates[kind].map((task) => (
-                    <li key={task.key}>
-                      {task.title} · {task.required ? "wymagane" : "opcjonalne"}{" "}
-                      · {task.offsetDays} dni od daty procesu
-                      {task.assigneeRole
-                        ? ` · ${responsibilityLabels[task.assigneeRole]}`
-                        : " · brak roli wykonawcy"}
-                      {task.kind ? ` · ${taskKindLabels[task.kind]}` : ""}
-                      {task.dependsOn.length
-                        ? ` · po: ${task.dependsOn.map((key) => profile.processTemplates[kind].find((item) => item.key === key)?.title ?? key).join(", ")}`
-                        : ""}
-                    </li>
-                  ))}
-                </ol>
-              </div>
-            ))}
+            {profile.onboardingVariants && (
+              <OnboardingVariantsSummary
+                variants={profile.onboardingVariants}
+              />
+            )}
+            {(["onboarding", "offboarding"] as const)
+              .filter(
+                (kind) => kind !== "onboarding" || !profile.onboardingVariants,
+              )
+              .map((kind) => (
+                <div key={kind}>
+                  <h3>
+                    {kind === "onboarding" ? "Onboarding" : "Offboarding"}
+                  </h3>
+                  <ol>
+                    {profile.processTemplates[kind].map((task) => (
+                      <li key={task.key}>
+                        {task.title} ·{" "}
+                        {task.required ? "wymagane" : "opcjonalne"} ·{" "}
+                        {task.offsetDays} dni od daty procesu
+                        {task.assigneeRole
+                          ? ` · ${responsibilityLabels[task.assigneeRole]}`
+                          : " · brak roli wykonawcy"}
+                        {task.kind ? ` · ${taskKindLabels[task.kind]}` : ""}
+                        {task.dependsOn.length
+                          ? ` · po: ${task.dependsOn.map((key) => profile.processTemplates[kind].find((item) => item.key === key)?.title ?? key).join(", ")}`
+                          : ""}
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+              ))}
           </details>
           <p className="small muted">
             Wersja ustawień: {profile.version}
@@ -472,7 +525,13 @@ export function CompanySettings({ context }: { context: Context }) {
               : " · ustawienia początkowe"}
           </p>
           {editing && (
-            <ProfileForm profile={profile} onClose={() => setEditing(false)} />
+            <ProfileForm
+              profile={profile}
+              canReadIT={
+                !!context.principal.scopes?.some((s) => s === "*" || s === "it")
+              }
+              onClose={() => setEditing(false)}
+            />
           )}
         </>
       )}
@@ -483,9 +542,11 @@ export function CompanySettings({ context }: { context: Context }) {
 function ProfileForm({
   profile,
   onClose,
+  canReadIT,
 }: {
   profile: CompanyProfile;
   onClose: () => void;
+  canReadIT: boolean;
 }) {
   const [values, setValues] = useState(() => structuredClone(profile));
   const [busy, setBusy] = useState(false);
@@ -702,10 +763,36 @@ function ProfileForm({
           </div>
           <h3>Bazowy wariant procesu</h3>
           <p className="small muted">
-            Wczytanie zastąpi szablony w tym formularzu. Zapisany profil firmy
-            zmieni się dopiero po zatwierdzeniu operacji.
+            {values.onboardingVariants
+              ? "Wczytanie zastąpi wyłącznie wybrany wariant onboardingu w formularzu."
+              : "Profil korzysta ze wspólnego szablonu. Możesz wczytać dwa osobne warianty onboardingu z wymaganiami i terminami."}{" "}
+            Zapisany profil firmy zmieni się dopiero po zatwierdzeniu operacji.
           </p>
           {templates.error && <Notice tone="error">{templates.error}</Notice>}
+          {!values.onboardingVariants && (
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy || !templates.data || !!templates.error}
+              onClick={() => {
+                try {
+                  setValues(
+                    applyOnboardingBaselines(
+                      values,
+                      templates.data?.templates ?? [],
+                    ),
+                  );
+                  setTemplateNotice(
+                    "Wczytano dwa bazowe warianty onboardingu. Sprawdź wymagania i terminy obu rodzajów współpracy. Offboarding i zapisane sprawy zachowają swój zakres.",
+                  );
+                } catch (cause) {
+                  setError(errorMessage(cause));
+                }
+              }}
+            >
+              Wczytaj dwa warianty onboardingu
+            </button>
+          )}
           <div className="task-filters">
             <label className="field">
               <span>Wariant</span>
@@ -744,135 +831,152 @@ function ProfileForm({
             </button>
           </div>
           {templateNotice && <Notice>{templateNotice}</Notice>}
-          {(["onboarding", "offboarding"] as const).map((kind) => (
-            <details className="template-editor" key={kind}>
-              <summary>
-                {kind === "onboarding"
-                  ? "Szablon onboardingu"
-                  : "Szablon offboardingu"}
-              </summary>
-              {values.processTemplates[kind].map((task, index) => (
-                <div className="nested-entry" key={task.key}>
-                  <label className="field">
-                    <span>Zadanie {index + 1}</span>
-                    <input
-                      required
-                      maxLength={200}
-                      value={task.title}
-                      onChange={(event) =>
-                        taskChange(kind, index, { title: event.target.value })
-                      }
-                    />
-                  </label>
-                  <div className="form-grid">
+          {values.onboardingVariants && (
+            <OnboardingVariantsEditor
+              variants={values.onboardingVariants}
+              onChange={(onboardingVariants) =>
+                setValues((current) => ({ ...current, onboardingVariants }))
+              }
+              canReadIT={canReadIT}
+              busy={busy}
+            />
+          )}
+          {(["onboarding", "offboarding"] as const)
+            .filter(
+              (kind) => kind !== "onboarding" || !values.onboardingVariants,
+            )
+            .map((kind) => (
+              <details className="template-editor" key={kind}>
+                <summary>
+                  {kind === "onboarding"
+                    ? "Szablon onboardingu"
+                    : "Szablon offboardingu"}
+                </summary>
+                {values.processTemplates[kind].map((task, index) => (
+                  <div className="nested-entry" key={task.key}>
                     <label className="field">
-                      <span>Rodzaj zadania</span>
-                      <select
-                        required
-                        disabled={busy}
-                        value={task.kind ?? ""}
-                        onChange={(event) =>
-                          taskChange(kind, index, {
-                            kind: event.target.value as TemplateTask["kind"],
-                          })
-                        }
-                      >
-                        <option value="">Wybierz rodzaj…</option>
-                        {Object.entries(taskKindLabels).map(
-                          ([value, label]) => (
-                            <option value={value} key={value}>
-                              {label}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Rola wykonawcy</span>
-                      <select
-                        required
-                        disabled={busy}
-                        value={task.assigneeRole ?? ""}
-                        onChange={(event) =>
-                          taskChange(kind, index, {
-                            assigneeRole: event.target
-                              .value as TemplateTask["assigneeRole"],
-                          })
-                        }
-                      >
-                        <option value="">Wybierz odpowiedzialność…</option>
-                        {Object.entries(responsibilityLabels).map(
-                          ([value, label]) => (
-                            <option value={value} key={value}>
-                              {label}
-                            </option>
-                          ),
-                        )}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span>Dni od daty procesu</span>
+                      <span>Zadanie {index + 1}</span>
                       <input
-                        type="number"
                         required
-                        min={-365}
-                        max={365}
-                        value={task.offsetDays}
+                        maxLength={200}
+                        value={task.title}
                         onChange={(event) =>
-                          taskChange(kind, index, {
-                            offsetDays: Number(event.target.value),
-                          })
+                          taskChange(kind, index, { title: event.target.value })
                         }
                       />
                     </label>
-                    <label className="checkbox-field">
-                      <input
-                        type="checkbox"
-                        checked={task.required}
-                        onChange={(event) =>
-                          taskChange(kind, index, {
-                            required: event.target.checked,
-                          })
-                        }
-                      />
-                      Wymagane do odbioru
-                    </label>
+                    <div className="form-grid">
+                      <label className="field">
+                        <span>Rodzaj zadania</span>
+                        <select
+                          required
+                          disabled={busy}
+                          value={task.kind ?? ""}
+                          onChange={(event) =>
+                            taskChange(kind, index, {
+                              kind: event.target.value as TemplateTask["kind"],
+                            })
+                          }
+                        >
+                          <option value="">Wybierz rodzaj…</option>
+                          {Object.entries(taskKindLabels).map(
+                            ([value, label]) => (
+                              <option value={value} key={value}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Rola wykonawcy</span>
+                        <select
+                          required
+                          disabled={busy}
+                          value={task.assigneeRole ?? ""}
+                          onChange={(event) =>
+                            taskChange(kind, index, {
+                              assigneeRole: event.target
+                                .value as TemplateTask["assigneeRole"],
+                            })
+                          }
+                        >
+                          <option value="">Wybierz odpowiedzialność…</option>
+                          {Object.entries(responsibilityLabels).map(
+                            ([value, label]) => (
+                              <option value={value} key={value}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Dni od daty procesu</span>
+                        <input
+                          type="number"
+                          required
+                          min={-365}
+                          max={365}
+                          value={task.offsetDays}
+                          onChange={(event) =>
+                            taskChange(kind, index, {
+                              offsetDays: Number(event.target.value),
+                            })
+                          }
+                        />
+                      </label>
+                      <label className="checkbox-field">
+                        <input
+                          type="checkbox"
+                          checked={task.required}
+                          onChange={(event) =>
+                            taskChange(kind, index, {
+                              required: event.target.checked,
+                            })
+                          }
+                        />
+                        Wymagane do odbioru
+                      </label>
+                    </div>
+                    {!!task.requirementKeys?.length && (
+                      <p className="small muted">
+                        Zadanie ma {task.requirementKeys.length} powiązanych
+                        warunków odbioru. Zmiana opisu nie usuwa tych wymagań.
+                      </p>
+                    )}
+                    {index > 0 && (
+                      <fieldset className="dependency-options">
+                        <legend>Wymagane wcześniejsze zadania</legend>
+                        {values.processTemplates[kind]
+                          .slice(0, index)
+                          .map((candidate) => (
+                            <label
+                              className="checkbox-field"
+                              key={candidate.key}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={task.dependsOn.includes(candidate.key)}
+                                onChange={(event) =>
+                                  taskChange(kind, index, {
+                                    dependsOn: event.target.checked
+                                      ? [...task.dependsOn, candidate.key]
+                                      : task.dependsOn.filter(
+                                          (key) => key !== candidate.key,
+                                        ),
+                                  })
+                                }
+                              />
+                              {candidate.title}
+                            </label>
+                          ))}
+                      </fieldset>
+                    )}
                   </div>
-                  {!!task.requirementKeys?.length && (
-                    <p className="small muted">
-                      Zadanie ma {task.requirementKeys.length} powiązanych
-                      warunków odbioru. Zmiana opisu nie usuwa tych wymagań.
-                    </p>
-                  )}
-                  {index > 0 && (
-                    <fieldset className="dependency-options">
-                      <legend>Wymagane wcześniejsze zadania</legend>
-                      {values.processTemplates[kind]
-                        .slice(0, index)
-                        .map((candidate) => (
-                          <label className="checkbox-field" key={candidate.key}>
-                            <input
-                              type="checkbox"
-                              checked={task.dependsOn.includes(candidate.key)}
-                              onChange={(event) =>
-                                taskChange(kind, index, {
-                                  dependsOn: event.target.checked
-                                    ? [...task.dependsOn, candidate.key]
-                                    : task.dependsOn.filter(
-                                        (key) => key !== candidate.key,
-                                      ),
-                                })
-                              }
-                            />
-                            {candidate.title}
-                          </label>
-                        ))}
-                    </fieldset>
-                  )}
-                </div>
-              ))}
-            </details>
-          ))}
+                ))}
+              </details>
+            ))}
           <Notice>
             Nowy profil zacznie działać po zatwierdzeniu operacji. Zmiana
             szablonu dotyczy nowych procesów; istniejące sprawy zachowują swój
