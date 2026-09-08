@@ -28,7 +28,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     );
     const schema = db
         .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement') ORDER BY name",
+          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement','ops_open_laboratory_case') ORDER BY name",
         )
         .all(),
       records = db.prepare("SELECT * FROM ops_entities").all();
@@ -37,7 +37,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     assert.deepEqual(
       db
         .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement') ORDER BY name",
+          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement','ops_open_laboratory_case') ORDER BY name",
         )
         .all(),
       schema,

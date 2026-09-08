@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useCallback, useState, type FormEvent } from "react";
 import type { WorkspaceStore } from "../../src/workspace";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
@@ -52,6 +52,7 @@ export function LaboratoryPanel({ context }: { context: Context }) {
   const [creating, setCreating] = useState(false),
     [diagnosis, setDiagnosis] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const closeCase = useCallback(() => setCreating(false), []);
   const allowed = (id: string) =>
     context.principal.roles.includes("operator") &&
     context.tools.some((tool) => tool.id === id);
@@ -167,7 +168,7 @@ export function LaboratoryPanel({ context }: { context: Context }) {
         <Sheet
           title="Sprawa naprawy własnej usługi"
           subtitle="Diagnoza i zakres do zatwierdzenia"
-          onClose={() => setCreating(false)}
+          onClose={closeCase}
         >
           <form className="command-form" onSubmit={createCase}>
             <div className="sheet-body">
