@@ -55,6 +55,10 @@ export function registerWorkspaceApi(
 ) {
   const moduleParam = (req: FastifyRequest) =>
     z.object({ module: z.string().max(30) }).parse(req.params).module;
+  app.get("/api/purchases/:id/workflow", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { purchasing: workspace.purchasing(principal(req), id) };
+  });
   app.get("/api/company/templates", async (req) => {
     const actor = principal(req);
     if (!(actor.scopes?.includes("*") || actor.scopes?.includes("company")))

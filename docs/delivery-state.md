@@ -21,7 +21,7 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P04    | blokada zewnętrzna | Lokalny przepływ odebrany w PR #8; rzeczywisty dostawca Claude pozostaje osobnym, niepotwierdzonym odbiorem.                                                                                  |
 | P05    | w toku             | P05a odebrane w PR #9; P05b domyka ewidencję, serwis i rozbieżności.                                                                                                                          |
 | P06    | odebrane lokalnie  | PR #18–20: pełny obieg, warianty i anulowanie; dostawca modelu P04 oraz końcowy przekrojowy odbiór P14 pozostają osobne.                                                                      |
-| P07    | w toku             | P07a: sprawa z dowodem z laboratorium; P07b: certyfikat i niezależna weryfikacja.                                                                                                             |
+| P07    | odebrane lokalnie  | PR #21–22: własne HTTP/TLS, sprawa, zgoda, niezależny test, odbiór i ślad OSS.                                                                                                                |
 | P08    | w toku             | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
 | P09    | w toku             | P09a1: kontekst rewizji i źródła; następnie dowody plikowe i gotowe dokumenty.                                                                                                                |
 | P10    | do wykonania       | Oferta, przekazanie, realizacja i pakiet rozliczeniowy.                                                                                                                                       |
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P07a: sprawa IT z rzeczywistym wynikiem testu.** Baza: odebrany lokalnie PR #20, `c1cbb1f14850e3da24e5c6e8fb61847db24d35bb`. Worktree `/private/tmp/jarvis-it-cases`, gałąź `codex/it-cases`. Obserwacja własnej usługi, uzgodniony zakres, naprawa Core i typowany odbiór; P07b dodaje rzeczywisty przypadek certyfikatu. [Projekt P07](p07-design.md). Pełny spis/import P05b i pozostałe kompetencje są nadal w roadmapie.
+**P08b1: zapotrzebowanie, oferty i zgoda kosztowa.** Baza: odebrany lokalnie PR #22, `856f367495bd5aeb68a1ac135fa8a48816fd03db`. Worktree `/private/tmp/jarvis-procurement`, gałąź `codex/procurement-workflow`. Najpierw porównanie i decyzja dotycząca konkretnej oferty, następnie lokalne zamówienie; P08b2 domyka tożsamość dostaw i wejście wyposażenia do ewidencji. [Projekt P08b](p08b-design.md). Pełny spis/import P05b i pozostałe kompetencje pozostają w roadmapie.
 
 ## Kontynuacja w tym zadaniu
 
@@ -407,3 +407,19 @@ Po zatrzymaniu podglądu: kopia `/private/tmp/jarvis-p07b-backup-20260908T2023` 
 [CI 34274110236](https://github.com/artur-t-96/JARVIS/actions/runs/34274110236) dla `383dddef9820f9e61dee3a782042d438e0097285`: **389/389**, format, typy, build, secret scan i demonstratory. Obejmuje migrację laboratory v3, backup i rzeczywisty SIGKILL po odnowieniu, zachowujący dokładny odcisk i zaszyfrowany klucz. Pierwsze CI wykazało wyścig istniejącego testu deadline z zegarem dzierżawy pod obciążeniem. Test terminu adaptera otrzymał stały zegar dzierżawy; sąsiedni test nadal jawnie sprawdza wygaśnięcie i odrzucenie starego workera. Oba celowane testy przeszły także lokalnie. Kod aplikacji podglądu pozostał bez zmian.
 
 Dowody prywatne: `/private/tmp/jarvis-tls-laboratory/.data/p07b-preview/ui-proof.json`, `tls-proof.mjs`, `pending.mjs`, `restore-proof.ts`. Podgląd zatrzymany. Końcowe CI dokumentacji, scalenie, aktualizacja głównego produktu i świeży dowód OSS pozostają wymagane. To odbiór własnego laboratorium; rozpoznanie innych systemów nie zostało uruchomione.
+
+### P07b — dostarczone lokalnie
+
+[PR #22](https://github.com/artur-t-96/JARVIS/pull/22) scalono jako `856f367495bd5aeb68a1ac135fa8a48816fd03db`. Końcowe [CI PR 34274541041](https://github.com/artur-t-96/JARVIS/actions/runs/34274541041), head `12abd4ac61d0c32d8cbdfd7b2c957ac8d8169918`, oraz [CI main 34274808623](https://github.com/artur-t-96/JARVIS/actions/runs/34274808623) zielone: 389/389, pełne bramki i demonstratory. Zarządzana instalacja 8.09.2026 20:26:45 UTC, Node22.23.0, oba tryby na właściwym SHA; provider wyłączony.
+
+Zatrzymane aplikacje otrzymały kopie: lab `/private/tmp/jarvis-before-p07b-lab-20260908T2026`, 20 plików, manifest `72a6472aa5d482e4c1bee2f6324fd705ad9b0f38890fb925e25d2a9abdb85ffe`; operational `/private/tmp/jarvis-before-p07b-operational-20260908T2026`, sześć plików, manifest `d16eb4ac17553e4b05c1a066dd98a159dcf228865f22e0e0c6ea6bc45f448ae8`. Po aktualizacji operations v12 i laboratory v3 oraz FK poprawne. Pięć wskazanych wcześniejszych spraw jest identycznych, onboarding PR #18 nadal ma aktualny odbiór.
+
+Chrome głównego lab przygotował, rozpoczął i zatwierdził odnowienie `26064955-fe1f-4775-a002-7b76c761fa45`: jedna próba, pozytywny TLS i HTTPS 200. Osobne zgody API powiązały wynik, przekazały i odebrały sprawę `e1e2b176-20ed-46cc-839c-4333dea4552c`, v4/scope1. Panel obejrzano; świeża konsola Chrome bez błędów i ostrzeżeń. `.data/local-product/p07b-verification.json` zawiera sześć komend z rozdzielonym pochodzeniem Chrome/API.
+
+OSS 20:27 UTC: obie Grafany13.2.1, po 14 paneli, trzy źródła OK i metryki workera. Ślady HTTP z właściwego SHA: lab `a544292fc3d776e83ec25eb0d906f248`, operational `1cb81d3ed01c9682fb3a086fb2119532`, każdy z powiązanym logiem. Rzeczywiste odnowienie ma ślad `93cec619eaf43ec7001d56f2187b13e5`, `tool.execute`, `tool.verify` i cztery logi. `.data/local-product/p07b-oss-verification.json`. P07 odebrane w lokalnym zakresie własnego laboratorium. Hosting produkcyjny i rozpoznanie innych systemów nie zostały aktywowane; cała roadmapa nadal trwa.
+
+### P08b1 — obieg decyzji zakupowej, implementacja
+
+Osobne zapotrzebowania, wersje ofert, wybór, decyzja właściciela i lokalne zamówienie. Kwoty mają jawne netto/brutto oraz walutę i są liczone w całkowitych jednostkach ułamkowych. Zmiana oferty lub potrzeby unieważnia wybór i koszt; zmiana źródłowej sprawy, wygaśnięcie oferty i utrata uprawnienia blokują nowe zamówienie. Własny panel porównuje oferty i przygotowuje każdą operację do osobnej zgody Core. Zakup powiązany ze sprawą dziedziczy jej ograniczenia dostępu.
+
+Celowane kontrole lokalne potwierdziły jedenaście scenariuszy domeny/API/UI (dziesięć w pierwszym przebiegu; poprawiony scenariusz zmiany zakresu sprawy przeszedł po uzupełnieniu wymaganego uzasadnienia), w tym odmowę bez próby, oddzielny właściciel, aktualność ofert, rollback obu zapisów, niezależną kontrolę i recovery z osobnym magazynem. Dotychczasowy scenariusz częściowych dostaw i scenariusz dziewięciu API przeszły z nowym obiegiem kosztowym. Typy przeszły. Pełne bramki, nowa migracja v13 i prawdziwy SIGKILL trafią do CI; odbiór Chrome, backup/restore oraz dostarczenie głównej instalacji pozostają przed nami. To P08b1; tożsamość dokumentu dostawy i urządzenia z przyjęcia pozostają P08b2 zgodnie z [projektem](p08b-design.md).

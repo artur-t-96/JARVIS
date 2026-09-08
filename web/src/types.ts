@@ -156,6 +156,7 @@ export const statusLabels: Record<string, string> = {
   retired: "Wycofany",
   requested: "Zgłoszone",
   approved: "Zatwierdzone",
+  awaiting_budget: "Czeka na decyzję kosztową",
   rejected: "Odrzucone",
   ordered: "Zamówione",
   received: "Otrzymane",
