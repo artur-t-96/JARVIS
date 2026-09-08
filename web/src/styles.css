@@ -3431,6 +3431,13 @@ tbody tr:hover {
   border-top: 1px solid var(--line);
   padding-top: 20px;
 }
+.onboarding-work summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.onboarding-card > .card-heading {
+  flex-wrap: wrap;
+}
 .onboarding-work ul,
 .onboarding-periods {
   list-style: none;

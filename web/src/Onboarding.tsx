@@ -26,6 +26,7 @@ export function OnboardingCard({
   const activeTasks = overview.tasks.filter(
     (t) => !["completed", "cancelled"].includes(t.status),
   );
+  const WorkContainer = activeTasks.length ? "div" : "details";
   return (
     <section className="card onboarding-card" aria-label="Przebieg onboardingu">
       <div className="card-heading">
@@ -36,7 +37,14 @@ export function OnboardingCard({
           <h2>{overview.stage.title}</h2>
           <p>{overview.stage.next}</p>
         </div>
-        <Icon name="people" size={24} />
+        {onPrepare && overview.command ? (
+          <button className="button primary" onClick={onPrepare}>
+            {actionLabels[overview.command.action]}{" "}
+            <Icon name="arrow" size={16} />
+          </button>
+        ) : (
+          <Icon name="people" size={24} />
+        )}
       </div>
       <dl className="onboarding-context">
         <div>
@@ -92,12 +100,14 @@ export function OnboardingCard({
           <dd>{overview.case.ownerPrincipalId ?? "Wymaga przypisania"}</dd>
         </div>
       </dl>
-      <div className="onboarding-work">
-        <h3>
-          {activeTasks.length
-            ? "Praca do dokończenia"
-            : "Potwierdzenia wykonanej pracy"}
-        </h3>
+      <WorkContainer className="onboarding-work">
+        {activeTasks.length ? (
+          <h3>Praca do dokończenia</h3>
+        ) : (
+          <summary>
+            Potwierdzenia wykonanej pracy ({overview.tasks.length})
+          </summary>
+        )}
         <ul>
           {(activeTasks.length ? activeTasks : overview.tasks).map((t) => (
             <li key={t.id}>
@@ -127,19 +137,13 @@ export function OnboardingCard({
             </li>
           ))}
         </ul>
-      </div>
+      </WorkContainer>
       <div className="onboarding-footer">
         <p className="small muted">
           Sprawdzono {dateLabel(overview.evaluatedAt, true)} · dzień firmy{" "}
           {dateLabel(overview.today)} ({overview.timezone}) · profil{" "}
           {overview.case.profileVersion ?? "niepotwierdzony"}
         </p>
-        {onPrepare && overview.command && (
-          <button className="button primary" onClick={onPrepare}>
-            {actionLabels[overview.command.action]}{" "}
-            <Icon name="arrow" size={16} />
-          </button>
-        )}
         {!overview.command && overview.stage.action === "review" && (
           <p className="small muted">
             Decyzję podejmuje wskazany właściciel odbioru.
