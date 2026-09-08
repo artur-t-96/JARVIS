@@ -38,6 +38,14 @@ test("v7 migration preserves all existing custody rows and rolls back failed DDL
     db.exec(
       "INSERT INTO ops_asset_events SELECT * FROM synthetic_old_events; DROP TABLE synthetic_old_events; CREATE INDEX ops_asset_event_history ON ops_asset_events(tenant_id,asset_id,recorded_at,id); DROP TABLE ops_access_events; DROP TABLE ops_access_grants; DROP INDEX ops_application_key; DROP INDEX ops_access_bundle_key; DELETE FROM schema_versions_operations WHERE version>=7;",
     );
+    for (const column of [
+      "context_json",
+      "context_hash",
+      "created_by",
+      "created_at",
+      "approved_by",
+    ])
+      db.exec(`ALTER TABLE ops_document_versions DROP COLUMN ${column}`);
     db.exec("CREATE TABLE ops_asset_events_v7(synthetic_collision TEXT)");
     assert.throws(
       () => new WorkspaceStore(path),
@@ -57,7 +65,7 @@ test("v7 migration preserves all existing custody rows and rolls back failed DDL
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      8,
+      9,
     );
     assert.deepEqual(
       db.prepare("SELECT * FROM ops_asset_events ORDER BY rowid").all(),

@@ -1462,17 +1462,25 @@ test("document source references bind actual tenant/version and propagate source
       }),
       code("SOURCE_VERSION_CHANGED"),
     );
-    doc = await h.action(doc, "submit");
-    doc = await h.action(doc, "approve", {
-      decision: "approved",
-      note: "Odbiór zamrożonej treści",
-      humanDecision: true,
-    });
+    await assert.rejects(h.action(doc, "submit"), code("DOCUMENT_NOT_READY"));
     assert.equal(
       (doc.data.sources as JsonObject[])[0]!.version,
       1,
       "existing document keeps its frozen source version",
     );
+    doc = await h.action(doc, "revise", {
+      content: "Jawnie sprawdzono aktualne źródło",
+      changeNote: "Odświeżenie po zmianie źródła",
+      sources: store.documentRefresh(principal("tenant-a", ["*"]), doc.id)
+        .sources,
+    });
+    doc = await h.action(doc, "submit");
+    doc = await h.action(doc, "approve", {
+      decision: "approved",
+      note: "Sprawdzono nową rewizję",
+      humanDecision: true,
+    });
+    assert.equal((doc.data.sources as JsonObject[])[0]!.version, 2);
   } finally {
     store.close();
   }
