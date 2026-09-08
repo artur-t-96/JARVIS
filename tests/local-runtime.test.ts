@@ -171,6 +171,31 @@ test("operational launch requires accounts from the same firm and a clean immuta
   }
 });
 
+test("changed document fonts and unmanifested assets block the installed runtime", async () => {
+  const ctx = fixture();
+  try {
+    mkdirSync(join(ctx.root, "assets", "fonts"), { recursive: true });
+    const font = join(ctx.root, "assets", "fonts", "synthetic.ttf");
+    writeFileSync(font, "Synthetic font bytes for integrity test only");
+    await ctx.runtime.install();
+    writeFileSync(font, "Altered font");
+    assert.throws(() => ctx.runtime.installed(), /build changed/);
+    await ctx.runtime.update();
+    const extra = join(ctx.root, "assets", "unexpected.ttf");
+    writeFileSync(extra, "Unmanifested bytes");
+    assert.throws(
+      () => ctx.runtime.installed(),
+      /outside the install manifest/,
+    );
+    rmSync(extra);
+    assert.equal(ctx.runtime.installed().gitSha, commit);
+    rmSync(font);
+    assert.throws(() => ctx.runtime.installed());
+  } finally {
+    await ctx.close();
+  }
+});
+
 test("tampered or extra build files block startup, and stale metadata never permits signalling an unrelated PID", async () => {
   const ctx = fixture();
   try {
