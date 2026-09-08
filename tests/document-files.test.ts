@@ -348,3 +348,64 @@ test("expired prepared input and mismatched file formats cannot become document 
     code("FILE_SIZE_INVALID"),
   );
 });
+
+test("an unavailable file invalidates dependent documents through multiple source hops", async (t) => {
+  const { dir, f } = fixture(t),
+    { documentId } = await seedFileDocument(f),
+    input = await stageFile(f, documentId);
+  await f.complete("ops.documents.attachFile", input);
+  await approveDocument(f, documentId);
+  const downstream: string[] = [];
+  let sourceId = documentId;
+  for (let i = 0; i < 2; i++) {
+    const result = await f.complete("ops.documents.create", {
+      title: `Synthetic dependent report ${i}`,
+      data: {
+        accessScope: "documents",
+        documentType: "report",
+        content: "Report derived from the referenced document.",
+        sources: [
+          {
+            module: "documents",
+            id: sourceId,
+            version: f.get("documents", sourceId).version,
+            observedAt: new Date(custodyNow).toISOString(),
+          },
+        ],
+      },
+    });
+    sourceId = String(result.steps[0]!.output!.data.entityId);
+    downstream.push(sourceId);
+    await approveDocument(f, sourceId);
+    assert.equal(
+      f.workspace.documentReadiness(f.actor(), sourceId).approvalCurrent,
+      true,
+    );
+  }
+  const path = join(
+    dir,
+    "attachments",
+    "document-files",
+    "saved",
+    fileHash("synthetic-a"),
+    String(input.uploadId),
+    "content.bin",
+  );
+  writeFileSync(path, Buffer.from("synthetic corrupted upstream file"));
+  for (const id of downstream) {
+    assert.equal(
+      f.workspace.documentReadiness(f.actor(), id).approvalCurrent,
+      false,
+    );
+    assert.throws(
+      () => exportArtifact(f.workspace, f.actor(), "documents", id),
+      code("DOCUMENT_APPROVAL_STALE"),
+    );
+  }
+  writeFileSync(path, fileBody);
+  for (const id of downstream)
+    assert.equal(
+      f.workspace.documentReadiness(f.actor(), id).approvalCurrent,
+      true,
+    );
+});

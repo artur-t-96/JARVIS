@@ -34,6 +34,14 @@ export const documentSourceSchema = z.union([
 ]);
 export type DocumentSourceInput = z.infer<typeof documentSourceSchema>;
 type Row = Record<string, unknown>;
+type SourceReference = {
+  module: string;
+  id: string;
+  version: number;
+  kind?: string;
+  currentVersion: number | null;
+  current: boolean;
+};
 const canonical = (value: unknown): string => {
   if (value === null || typeof value !== "object") return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
@@ -222,7 +230,11 @@ export class DocumentSources {
       };
     });
   }
-  references(tenant: string, sources: JsonObject[]) {
+  references(
+    tenant: string,
+    sources: JsonObject[],
+    traversal = { visited: 0, path: new Set<string>() },
+  ): SourceReference[] {
     return sources.map((source) => {
       const base = {
         module: String(source.module),
@@ -244,10 +256,35 @@ export class DocumentSources {
           };
         }
         const current = this.entity(tenant, base.module, base.id);
+        let available = true;
+        if (current.module === "documents") {
+          // Files can become unavailable without changing the source record's version.
+          // Propagate that fact through document sources, with a bounded traversal.
+          if (++traversal.visited > 100 || traversal.path.has(current.id))
+            available = false;
+          else {
+            traversal.path.add(current.id);
+            const files = objects(current.data.files);
+            available =
+              this.integrity(tenant, current) &&
+              (files.length === 0 ||
+                (!!this.files &&
+                  this.files
+                    .assessment(tenant, current.id, files)
+                    .every((f) => f.valid))) &&
+              this.references(
+                tenant,
+                objects(current.data.sources),
+                traversal,
+              ).every((r) => r.current);
+            traversal.path.delete(current.id);
+          }
+        }
         return {
           ...base,
           currentVersion: current.version,
           current:
+            available &&
             current.version === source.version &&
             documentHash(current) === source.snapshotHash &&
             (source.snapshot === undefined ||
