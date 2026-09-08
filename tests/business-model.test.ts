@@ -435,41 +435,74 @@ test("revocation during provider latency prevents reads and all subsequent calls
   assert.equal(f.usage()[0]!.status, "failed");
 });
 
-test("one deadline bounds the whole loop even if fetch and body ignore the abort signal", async (t) => {
-  for (const variant of ["fetch", "body", "second-call"]) {
-    const f = fixture(t);
-    let count = 0;
-    const started = Date.now();
-    await assert.rejects(
-      f.ask(
-        { intent: "unknown" },
-        async () => {
-          count++;
-          if (variant === "body")
-            return new Response(
-              new ReadableStream({ pull: () => new Promise(() => {}) }),
-            );
-          if (variant === "second-call" && count === 1) {
-            await new Promise((resolve) => setTimeout(resolve, 30));
-            return calls([
-              toolCall("context_company", { purpose: "case_followup" }),
-            ]);
-          }
-          return new Promise(() => {});
-        },
-        { timeoutMs: 50 },
-      ),
-      code("PLANNER_FAILED"),
-    );
-    assert.ok(
-      Date.now() - started < 500,
-      "deadline does not depend on cooperative fake I/O",
-    );
-    assert.equal(f.usage().at(-1)!.input_tokens, null);
-    assert.equal(f.usage().at(-1)!.status, "failed");
-    if (variant === "second-call") assert.equal(count, 2);
-  }
-});
+test(
+  "one deadline bounds the whole loop even if fetch and body ignore the abort signal",
+  { timeout: 5000 },
+  async (t) => {
+    for (const variant of ["fetch", "body", "second-call"]) {
+      const f = fixture(t);
+      let count = 0,
+        settled = false;
+      let reachedBlockedIO!: () => void;
+      const blockedIO = new Promise<void>((resolve) => {
+        reachedBlockedIO = resolve;
+      });
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      try {
+        const result = f
+          .ask(
+            { intent: "unknown" },
+            async () => {
+              count++;
+              if (variant === "body")
+                return new Response(
+                  new ReadableStream({
+                    pull: () => {
+                      reachedBlockedIO();
+                      return new Promise(() => {});
+                    },
+                  }),
+                );
+              if (variant === "second-call" && count === 1) {
+                // Consume part of the one shared budget without depending on runner load.
+                t.mock.timers.tick(30);
+                return calls([
+                  toolCall("context_company", { purpose: "case_followup" }),
+                ]);
+              }
+              reachedBlockedIO();
+              return new Promise(() => {});
+            },
+            { timeoutMs: 50 },
+          )
+          .finally(() => {
+            settled = true;
+          });
+        const rejection = assert.rejects(result, code("PLANNER_FAILED"));
+        await blockedIO;
+        assert.equal(count, variant === "second-call" ? 2 : 1);
+        t.mock.timers.tick(variant === "second-call" ? 19 : 49);
+        await Promise.resolve();
+        assert.equal(
+          settled,
+          false,
+          "the whole-turn deadline has not expired yet",
+        );
+        t.mock.timers.tick(1);
+        await rejection;
+        assert.equal(
+          settled,
+          true,
+          "deadline does not depend on cooperative fake I/O",
+        );
+        assert.equal(f.usage().at(-1)!.input_tokens, null);
+        assert.equal(f.usage().at(-1)!.status, "failed");
+      } finally {
+        t.mock.timers.reset();
+      }
+    }
+  },
+);
 
 test("oversized/error provider responses expose no body or key and invent no usage", async (t) => {
   for (const response of [
