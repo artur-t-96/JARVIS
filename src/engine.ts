@@ -677,6 +677,8 @@ export class Engine {
         ? hash(parse<ToolResult>(row.output_json))
         : null,
       verificationHash: verification ? hash(verification) : null,
+      evidenceHashes:
+        verification?.evidence.map((evidence) => hash(evidence)) ?? [],
       succeeded:
         row.run_status === "completed" &&
         row.status === "succeeded" &&

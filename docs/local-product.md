@@ -76,3 +76,11 @@ Proces nadzorujący przechwytuje stdout i stderr serwera, w tym ostrzeżenia bib
 Polecenie `status` rozdziela żywy własny proces, gotowość HTTP, integralność zainstalowanego buildu oraz SHA zwrócone przez serwer. Zielona odpowiedź HTTP z innego procesu lub innej wersji nie wystarcza do potwierdzenia startu.
 
 Testy uruchamiają prawdziwe krótkie procesy Node na losowych portach localhost. Sprawdzają instalację, zgodność SHA, start/stop, brak sygnału do obcego PID, warunek kont, rozdzielenie danych i ograniczenie logów. Test Keychain używa podstawionego procesu polecenia; nie zapisuje prawdziwego sekretu ani nie zmienia istniejących wpisów użytkownika.
+
+## Klucz własnego laboratorium HTTPS
+
+P07b generuje wyłącznie materiały testowe własnej usługi. Prywatne klucze CA i certyfikatu są zaszyfrowane w `laboratory.sqlite`; plik `laboratory-wrapping.key` w tym samym katalogu danych ma tryb 0600 i nie trafia do standardowej kopii. Nie udostępniaj go przez panel, zgłoszenia ani repozytorium. Zachowaj osobną prywatną kopię tego pliku, jeśli chcesz przenosić lub odtwarzać materiały TLS.
+
+Przy odtworzeniu zatrzymaj instancję, odtwórz zwykłą kopię do pustego katalogu, a następnie przywróć **ten sam** plik opakowujący do tego katalogu z uprawnieniami 0600. Kluczy nie wyświetlaj w terminalu. Konta i sesje konfiguruj osobno według dotychczasowej instrukcji. Uruchom JARVIS i wykonaj nowy odczyt certyfikatu. Bez właściwego pliku stan HTTPS pozostaje niepotwierdzony; aplikacja nie odnowi automatycznie utraconych materiałów i nie doda zaufania do systemu operacyjnego. Odciski zapisane przed kopią powinny pozostać identyczne.
+
+Aktualizacja kodu zachowuje katalog danych i jego prywatny plik. Procedura `lab.renewCertificate` wymaga sprawy, zgody na konkretny odcisk oraz niezależnego testu. Żaden z tych kroków nie dotyczy certyfikatów innych aplikacji.

@@ -75,6 +75,7 @@ export interface StepEvidenceReceipt {
   inputHash: string;
   outputHash: string | null;
   verificationHash: string | null;
+  evidenceHashes: string[];
   succeeded: boolean;
   requestedBy: string;
   approvedBy: string | null;
