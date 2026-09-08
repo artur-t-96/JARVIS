@@ -401,8 +401,18 @@ export async function signalAndWait(
   identity: ProcessIdentity,
   timeoutMs: number,
 ): Promise<boolean> {
+  // During exit, /proc/environ or the command can disappear before the PID is
+  // reported dead/zombie. Once ownership is uncertain, only observe: never
+  // signal that PID again. A reused live PID still returns false.
+  const waitForExitOnly = async () => {
+    for (let index = 0; index < 20; index++) {
+      if (!processAlive(identity.pid)) return true;
+      await pause(25);
+    }
+    return !processAlive(identity.pid);
+  };
   if (!processAlive(identity.pid)) return true;
-  if (!ownsProcess(identity)) return false;
+  if (!ownsProcess(identity)) return waitForExitOnly();
   try {
     process.kill(identity.pid, "SIGTERM");
   } catch (error) {
@@ -412,7 +422,7 @@ export async function signalAndWait(
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline && ownsProcess(identity)) await pause(80);
   if (!processAlive(identity.pid)) return true;
-  if (!ownsProcess(identity)) return false;
+  if (!ownsProcess(identity)) return waitForExitOnly();
   try {
     process.kill(identity.pid, "SIGKILL");
   } catch (error) {
@@ -421,7 +431,7 @@ export async function signalAndWait(
   }
   for (let index = 0; index < 30 && ownsProcess(identity); index++)
     await pause(50);
-  return !processAlive(identity.pid);
+  return waitForExitOnly();
 }
 
 export class ObservabilityRuntime {
