@@ -305,6 +305,44 @@ test("no available equipment is a visible blocked need, not a successful reserva
   assert.doesNotMatch(html, /class="draft-choice"|Wykonanie zakończone/);
 });
 
+test("selected employment retains its project detail after choices close, while a verified reservation still requires handover", () => {
+  const html = renderToStaticMarkup(
+    createElement(ConversationDraft, {
+      draft: {
+        ...draft,
+        phase: "in_progress",
+        missingFields: [],
+        episode: {
+          ref: "private-beta-ref",
+          label: "Współpraca kontraktorska: 2026-09-08",
+          detail: "Konsultant projektu Beta · Przedsięwzięcie Beta",
+        },
+        blockedReason:
+          "Rezerwacja została zweryfikowana. Fizyczne wydanie i odbiór gotowości wymagają osobnych dowodów w sprawie.",
+        linkedRuns: [
+          {
+            runId: "private-run",
+            title: "Rezerwacja sprzętu",
+            status: "completed",
+          },
+        ],
+      },
+      onChoose: () => {},
+      onOpenRun: () => {},
+    }),
+  );
+  assert.match(
+    html,
+    /Współpraca kontraktorska: 2026-09-08 · Konsultant projektu Beta · Przedsięwzięcie Beta/,
+  );
+  assert.match(
+    html,
+    /Fizyczne wydanie i odbiór gotowości wymagają osobnych dowodów/,
+  );
+  assert.match(html, /Wykonanie zakończone/);
+  assert.doesNotMatch(html, /private-beta-ref|Powiązane wykonanie zakończone/);
+});
+
 test("a durable pending turn offers explicit resume and does not reveal its idempotency key", () => {
   const html = renderToStaticMarkup(
     createElement(PendingConversationTurn, {

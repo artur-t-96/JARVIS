@@ -231,7 +231,14 @@ export function ConversationDraft({
   };
   const fields: [string, string | undefined][] = [
     ["Osoba", draft.person?.label],
-    ["Współpraca", draft.episode?.label],
+    [
+      "Współpraca",
+      draft.episode
+        ? [draft.episode.label, draft.episode.detail]
+            .filter(Boolean)
+            .join(" · ")
+        : undefined,
+    ],
     ["Sprzęt", draft.asset?.label],
     ["Sprawa", draft.case?.label],
     [
