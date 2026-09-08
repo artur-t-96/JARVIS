@@ -55,3 +55,5 @@ P05b1 w implementacji: historia wersji urządzenia, opiekun ewidencji, metadane,
 P05b1 odebrane lokalnie na `6fda5668571c850a98d6749a5fa632b7b3f65106` (PR #10–12): ewidencja, opiekun, przeniesienia, serwis, naprawa, wycofanie i formularz metadanych. Dowody Chrome, API dwóch firm, rzeczywistego restore i OSS oraz zielone CI wskazuje [dziennik](delivery-state.md#p05b1--domknięcie-dostarczenia). Całe K05 wymaga jeszcze P05b2, spisu i importu.
 
 K05 / P05b2: implementacja zamiany rezerwacji opisana w [projekcie paczki](p05b2-design.md). Dowody automatyczne: `reservation-replacement.test.ts`, `replacement-migration.test.ts`, `replacement-process-recovery.test.ts`. Etap oczekuje na hosted CI i odbiór rzeczywistego formularza; spis z natury i import pozostają otwarte.
+
+K05 / P05b2: potwierdzono również rzeczywisty formularz Chrome i niezależną zgodę (`592e10ef-e9a4-41ed-a416-ccf195caa39b`), API drugiej firmy (`a2b06aa4-6010-4aed-91aa-d288c7a6c280`) oraz zielone CI 34238905035 dla `c52df06`. Szczegóły i ograniczenia w dzienniku realizacji.
