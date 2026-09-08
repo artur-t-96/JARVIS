@@ -47,3 +47,5 @@ Głos ma rzeczywiście uruchomiony lokalny silnik i rozpoznane polskie nagranie.
 Rozszerzenia są wersjonowanymi narzędziami w kodzie. Model nie instaluje samodzielnie nowych pakietów ani reguł. Personalizacja obejmuje profile, zatwierdzane zasady i szablony lifecycle; dowolny wizualny projektant nowych modułów nie jest częścią tej wersji.
 
 Połączenia z produkcyjnymi systemami pozostają wyłączone. Brak rzeczywistych zewnętrznych zapisów, wysyłek, płatności i księgowania jest ustaloną granicą lokalnego produktu. Źródłowe repozytoria, konfiguracje i wdrożenia zachowują swój stan.
+
+P05a: [PR #9](https://github.com/artur-t-96/JARVIS/pull/9) ma zielone CI i syntetyczny odbiór preview w Chrome: wydanie, odrębne powiązanie dowodu, uszkodzony zwrot, restart i odmowa w drugim profilu z dwoma projektami. Szczegóły i identyfikatory w [dzienniku](delivery-state.md). Nie jest to jeszcze odbiór głównej instalacji ani pełnego K05/P05b.
