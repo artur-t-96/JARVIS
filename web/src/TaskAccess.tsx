@@ -150,7 +150,7 @@ export function TaskAccess({
                       <p>{r.bundleTitle ?? "Zestaw do ustalenia"}</p>
                       {r.problem && <Notice tone="error">{r.problem}</Notice>}
                       {r.bound && (
-                        <Notice>
+                        <Notice tone={r.bindingCurrent ? "success" : "error"}>
                           {r.bindingCurrent
                             ? "Dowód powiązany z rewizją. Potwierdzenie wykonania zadania pozostaje osobną decyzją."
                             : "Zapisane powiązanie wymaga ponownego sprawdzenia. Właściciel sprawy musi przygotować nową rewizję przed powiązaniem zmienionego dowodu."}
