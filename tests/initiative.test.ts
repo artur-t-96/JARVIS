@@ -624,7 +624,7 @@ test("legacy profile stays attributed to its original approval and requires expl
     const tool = f.initiatives
       .tools()
       .find((t) => t.id === "initiatives.configure")!;
-    assert.equal(tool.version, "3");
+    assert.equal(tool.version, "4");
     await assert.rejects(
       () => configure(f.initiatives, { companyName: "Only rename" }),
       code("INVALID_INITIATIVE_INPUT"),

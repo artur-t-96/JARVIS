@@ -15,6 +15,7 @@ export async function seedOnboarding(
     kind?: "internal" | "contractor";
     personId?: string;
     startDate?: string;
+    keepProfile?: boolean;
   } = {},
 ) {
   const tenant = options.tenant ?? "synthetic-a",
@@ -28,24 +29,25 @@ export async function seedOnboarding(
     const run = await complete(`ops.${module}.create`, { title, data });
     return String(run.steps[0]!.output!.data.entityId);
   };
-  await complete("initiatives.configure", {
-    companyName: `Synthetic onboarding ${tenant}`,
-    timezone: "Europe/Warsaw",
-    licenseReminderDays: profile.licenseReminderDays,
-    quietHours: profile.quietHours,
-    rules: profile.rules,
-    roleBindings: { hr: "manager", it: "it-one", manager: "manager" },
-    processTemplates: baselineProcessTemplates(kind),
-    employmentPolicy:
-      kind === "contractor"
-        ? {
-            mode: "parallel_projects",
-            maxConcurrent: 3,
-            allowInternalOverlap: false,
-          }
-        : profile.employmentPolicy,
-    expectedVersion: profile.version,
-  } as unknown as JsonObject);
+  if (!options.keepProfile)
+    await complete("initiatives.configure", {
+      companyName: `Synthetic onboarding ${tenant}`,
+      timezone: "Europe/Warsaw",
+      licenseReminderDays: profile.licenseReminderDays,
+      quietHours: profile.quietHours,
+      rules: profile.rules,
+      roleBindings: { hr: "manager", it: "it-one", manager: "manager" },
+      processTemplates: baselineProcessTemplates(kind),
+      employmentPolicy:
+        kind === "contractor"
+          ? {
+              mode: "parallel_projects",
+              maxConcurrent: 3,
+              allowInternalOverlap: false,
+            }
+          : profile.employmentPolicy,
+      expectedVersion: profile.version,
+    } as unknown as JsonObject);
   const personId =
     options.personId ??
     (await create("people", "SYNTHETIC ONBOARDING PERSON", {

@@ -23,6 +23,7 @@ import {
 } from "./workspace-models.js";
 
 export { baselineProcessTemplates } from "./workspace-models.js";
+import { onboardingVariantsSchema } from "./onboarding-profile.js";
 
 const rules = [
   "overdue_case",
@@ -65,6 +66,7 @@ const settingsSchema = z
     employmentPolicy: employmentPolicySchema,
     roleBindings: roleBindingsSchema,
     processTemplates: processTemplatesSchema,
+    onboardingVariants: onboardingVariantsSchema.optional(),
   })
   .strict();
 export type CompanySettings = z.infer<typeof settingsSchema>;
@@ -226,7 +228,7 @@ export class InitiativeStore {
       const stored = JSON.parse(String(row.record_json)) as CompanyProfile;
       // Read old profiles without inventing bindings or a migration approval. Their
       // original version/authors remain intact and lifecycle rejects definition 1.
-      if (stored.definitionVersion !== "3")
+      if (!["3", "4"].includes(stored.definitionVersion))
         return {
           ...stored,
           roleBindings: stored.roleBindings ?? {},
@@ -462,7 +464,7 @@ export class InitiativeStore {
         const toolId = `initiatives.${action}`;
         return {
           id: toolId,
-          version: action === "configure" ? "3" : "1",
+          version: action === "configure" ? "4" : "1",
           scope: action === "configure" ? "company" : "initiatives",
           effect: "write",
           recovery: "reconcile",
@@ -470,7 +472,18 @@ export class InitiativeStore {
           inputSchema,
           requiredScopesForInput:
             action === "configure"
-              ? undefined
+              ? (input) =>
+                  input.onboardingVariants &&
+                  Object.values(
+                    onboardingVariantsSchema.parse(input.onboardingVariants),
+                  ).some((variant) =>
+                    variant.requirements.some(
+                      (r) =>
+                        r.kind === "access_attested" && r.expected.bundleId,
+                    ),
+                  )
+                    ? ["it"]
+                    : []
               : (input, tenantId) =>
                   this.sourceScopes(
                     tenantId,
@@ -519,6 +532,16 @@ export class InitiativeStore {
                   );
                 const { expectedVersion: _expectedVersion, ...settings } =
                   input;
+                if (current.onboardingVariants && !input.onboardingVariants)
+                  fail(
+                    "PROFILE_VARIANTS_REQUIRED",
+                    "Profil ma osobne warianty onboardingu. Odczytaj je i zachowaj w nowym planie.",
+                  );
+                if (input.onboardingVariants)
+                  this.workspace.validateOnboardingVariants(
+                    ctx.tenantId,
+                    onboardingVariantsSchema.parse(input.onboardingVariants),
+                  );
                 const next: CompanyProfile = {
                   ...settingsSchema.parse(settings),
                   tenantId: ctx.tenantId,
@@ -526,7 +549,7 @@ export class InitiativeStore {
                   updatedAt: now,
                   updatedBy: ctx.actorId!,
                   updatedApprovedBy: ctx.approvedBy!,
-                  definitionVersion: "3",
+                  definitionVersion: input.onboardingVariants ? "4" : "3",
                 };
                 this.db
                   .prepare(
