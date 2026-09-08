@@ -16,7 +16,7 @@ import { DomainError, type JsonObject, type Principal } from "./contracts.js";
 import type { Entity, WorkspaceStore } from "./workspace.js";
 import { exportArtifact, type Artifact } from "./artifacts.js";
 
-export const DOCUMENT_RENDERER = "p09a2-1";
+export const DOCUMENT_RENDERER = "p09a2-2";
 type Block = {
   kind: "title" | "heading" | "paragraph" | "bullet" | "small";
   text: string;
@@ -187,7 +187,14 @@ function pdf(entity: Entity, blocks: Block[]): Promise<Buffer> {
         // Keep a heading with at least two lines of the following paragraph.
         const remaining = doc.page.height - doc.page.margins.bottom - doc.y;
         const height = doc.heightOfString(b.text, { width: 504, lineGap: 3 });
-        if (heading && remaining < Math.min(height, 180) + 40) doc.addPage();
+        if (
+          heading &&
+          remaining <
+            (b.text === "Źródła i pliki tej rewizji"
+              ? 230
+              : Math.min(height, 180) + 40)
+        )
+          doc.addPage();
         doc.text(b.kind === "bullet" ? `• ${b.text}` : b.text, {
           width: 504,
           lineGap: 3,
