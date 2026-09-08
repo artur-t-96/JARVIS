@@ -5,12 +5,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Engine } from "../src/engine.js";
 import { WorkspaceStore, type Entity } from "../src/workspace.js";
+import { InitiativeStore } from "../src/initiative.js";
 import type { JsonObject, Principal } from "../src/contracts.js";
 
 // Independent synthetic demonstration. Never reads .env or the application's .data.
 const directory = mkdtempSync(join(tmpdir(), "jarvis-workspace-demo-"));
 const workspace = new WorkspaceStore(join(directory, "operations.sqlite"));
-const tools = workspace.tools();
+const initiatives = new InitiativeStore(
+  join(directory, "initiatives.sqlite"),
+  workspace,
+);
+workspace.setProfileProvider((tenant) => initiatives.profileForTenant(tenant));
+const tools = [...workspace.tools(), ...initiatives.tools()];
 const operator: Principal = {
   id: "demo-operator",
   tenantId: "synthetic-demo",
@@ -22,6 +28,7 @@ const approver: Principal = {
   id: "demo-approver",
   roles: ["approver"],
 };
+workspace.setPrincipalProvider(() => [operator, approver]);
 const engine = new Engine({
   dbPath: join(directory, "core.sqlite"),
   tools,
@@ -41,18 +48,18 @@ const today = new Date().toISOString().slice(0, 10);
 let completedCommands = 0;
 let verifiedSteps = 0;
 let approvals = 0;
-async function command(module: string, action: string, input: JsonObject) {
+async function approved(toolId: string, input: JsonObject) {
   let run = engine.createRun(
     operator,
-    `Syntetyczne demo: ${module}.${action}`,
+    `Syntetyczne demo: ${toolId}`,
     {
-      title: `${module}.${action}`,
+      title: `${toolId}`,
       summary: "Syntetyczne dane, zatwierdzenie przez drugie konto testowe",
       steps: [
         {
           id: "operation",
-          title: `${module}.${action}`,
-          toolId: `ops.${module}.${action}`,
+          title: `${toolId}`,
+          toolId,
           input,
         },
       ],
@@ -76,6 +83,10 @@ async function command(module: string, action: string, input: JsonObject) {
   assert.equal(run.steps[0]!.verification?.ok, true);
   completedCommands++;
   verifiedSteps++;
+  return run;
+}
+async function command(module: string, action: string, input: JsonObject) {
+  const run = await approved(`ops.${module}.${action}`, input);
   return workspace.get(
     operator,
     module,
@@ -92,12 +103,23 @@ const action = (entity: Entity, operation: string, fields: JsonObject = {}) =>
   });
 async function accept(id: string) {
   let entity = workspace.get(operator, "cases", id);
-  for (const task of entity.data.tasks as JsonObject[])
+  for (const task of entity.data.tasks as JsonObject[]) {
+    if (task.status === "completed") continue;
+    entity = await action(entity, "acceptTask", {
+      taskId: task.id!,
+      expectedTaskVersion: task.version!,
+      humanConfirmed: true,
+    });
+    const acceptedTask = (entity.data.tasks as JsonObject[]).find(
+      (t) => t.id === task.id,
+    )!;
     entity = await action(entity, "completeTask", {
       taskId: task.id!,
+      expectedTaskVersion: acceptedTask.version!,
       evidenceNote: "Syntetyczny protokół demonstracyjny",
       humanConfirmed: true,
     });
+  }
   entity = await action(entity, "addEvidence", {
     title: "DEMO protokół",
     reference: "synthetic-only",
@@ -114,6 +136,24 @@ async function accept(id: string) {
 }
 
 try {
+  const {
+    companyName,
+    timezone,
+    licenseReminderDays,
+    quietHours,
+    rules,
+    processTemplates,
+  } = initiatives.profile(operator);
+  await approved("initiatives.configure", {
+    expectedVersion: 0,
+    companyName,
+    timezone,
+    licenseReminderDays,
+    quietHours,
+    rules,
+    processTemplates,
+    roleBindings: { hr: operator.id, it: operator.id, manager: operator.id },
+  });
   let person = await create("people", "Osoba wewnętrzna", {
     personCategory: "internal",
   });
@@ -123,8 +163,22 @@ try {
     role: "Rola demonstracyjna",
     humanDecision: true,
   });
-  await accept(String(person.data.onboardingCaseId));
-  person = await action(person, "activate", { humanDecision: true });
+  const onboardingReadiness = workspace.readiness(
+    operator,
+    String(person.data.onboardingCaseId),
+  );
+  assert.equal(
+    onboardingReadiness.ready,
+    false,
+    "Missing typed proofs must block onboarding",
+  );
+  assert.ok(
+    onboardingReadiness.requirements.some(
+      (requirement) =>
+        requirement.kind === "access_attested" &&
+        requirement.status !== "satisfied",
+    ),
+  );
   let asset = await create("assets", "Laptop", {
     assetType: "laptop",
     serial: "SYNTHETIC-DEMO-001",
@@ -210,6 +264,8 @@ try {
   );
   delivery = await action(delivery, "addTask", {
     title: "Demonstracyjne wykonanie",
+    kind: "work",
+    assigneePrincipalId: operator.id,
     required: true,
   });
   delivery = await action(delivery, "addWorklog", {
@@ -323,10 +379,11 @@ try {
   assert.equal(person.status, "exited");
   assert.equal(asset.status, "available");
   process.stdout.write(
-    `${JSON.stringify({ synthetic: true, storage: "temporary databases removed after demonstration", modules: summary.modules, completedCommands, explicitApprovals: approvals, independentlyVerifiedSteps: verifiedSteps, acceptanceProof: { status: delivery.status, decidedBy: (delivery.data.currentAcceptance as JsonObject).decidedBy, settlementDraft: delivery.data.settlementDraft }, offboarding: person.status, asset: asset.status, purchase: purchase.status, recruitment: application.status, document: document.status, incident: incident.status, externalActionsPerformed: false }, null, 2)}\n`,
+    `${JSON.stringify({ synthetic: true, storage: "temporary databases removed after demonstration", modules: summary.modules, completedCommands, explicitApprovals: approvals, independentlyVerifiedSteps: verifiedSteps, acceptanceProof: { status: delivery.status, decidedBy: (delivery.data.currentAcceptance as JsonObject).decidedBy, settlementDraft: delivery.data.settlementDraft }, onboarding: { status: "blocked", requirements: onboardingReadiness.requirements }, offboarding: person.status, asset: asset.status, purchase: purchase.status, recruitment: application.status, document: document.status, incident: incident.status, externalActionsPerformed: false }, null, 2)}\n`,
   );
 } finally {
   engine.close();
+  initiatives.close();
   workspace.close();
   rmSync(directory, { recursive: true, force: true });
 }

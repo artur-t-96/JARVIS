@@ -11,6 +11,7 @@ import { WorkspaceStore } from "./workspace.js";
 import { Conversations } from "./assistant.js";
 import { InitiativeStore } from "./initiative.js";
 import { Diagnostics } from "./diagnostics.js";
+import { baselineProcessTemplates } from "./workspace-models.js";
 import {
   exportArtifact,
   materializeArtifact,
@@ -27,6 +28,7 @@ export interface WorkspaceApiOptions {
   diagnostics?: Diagnostics;
   initiatives?: InitiativeStore;
   dataDir?: string;
+  principals?: (tenantId: string) => Principal[];
 }
 export function registerWorkspaceApi(
   app: FastifyInstance,
@@ -39,10 +41,93 @@ export function registerWorkspaceApi(
     diagnostics,
     initiatives,
     dataDir,
+    principals,
   }: WorkspaceApiOptions,
 ) {
   const moduleParam = (req: FastifyRequest) =>
     z.object({ module: z.string().max(30) }).parse(req.params).module;
+  app.get("/api/company/templates", async (req) => {
+    const actor = principal(req);
+    if (!(actor.scopes?.includes("*") || actor.scopes?.includes("company")))
+      throw new DomainError(
+        "SCOPE_REQUIRED",
+        "Brak dostępu do konfiguracji firmy.",
+        403,
+      );
+    return {
+      templates: (["internal", "contractor"] as const).map((id) => ({
+        id,
+        label:
+          id === "internal" ? "Pracownik wewnętrzny" : "Konsultant klienta",
+        processTemplates: baselineProcessTemplates(id),
+      })),
+    };
+  });
+  app.get("/api/company/assignees", async (req) => {
+    const actor = principal(req);
+    if (!(actor.scopes?.includes("*") || actor.scopes?.includes("company")))
+      throw new DomainError(
+        "SCOPE_REQUIRED",
+        "Brak dostępu do konfiguracji firmy.",
+        403,
+      );
+    return {
+      assignees: (principals?.(actor.tenantId) ?? [])
+        .filter(
+          (account) =>
+            account.tenantId === actor.tenantId &&
+            account.roles.includes("operator"),
+        )
+        .map((account) => ({ id: account.id, label: account.id })),
+    };
+  });
+  app.get("/api/tasks", async (req) => ({
+    tasks: workspace.listTasks(principal(req)),
+  }));
+  app.get("/api/task-assignees", async (req) => {
+    const actor = principal(req);
+    const { taskId } = z
+      .object({ taskId: z.string().uuid() })
+      .strict()
+      .parse(req.query);
+    return { assignees: workspace.taskAssignees(actor, taskId) };
+  });
+  app.get("/api/cases/:id/readiness", async (req) => ({
+    readiness: workspace.readiness(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
+  app.get("/api/cases/:id/owners", async (req) => {
+    const actor = principal(req);
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    workspace.get(actor, "cases", id);
+    if (!actor.roles.includes("operator"))
+      throw new DomainError(
+        "FORBIDDEN",
+        "Wybór właściciela wymaga roli operatora.",
+        403,
+      );
+    return {
+      assignees: (principals?.(actor.tenantId) ?? [])
+        .filter((candidate) => {
+          if (
+            candidate.tenantId !== actor.tenantId ||
+            !candidate.roles.includes("operator")
+          )
+            return false;
+          try {
+            workspace.get(candidate, "cases", id);
+            return true;
+          } catch (error) {
+            if (error instanceof DomainError && error.statusCode === 403)
+              return false;
+            throw error;
+          }
+        })
+        .map((candidate) => ({ id: candidate.id, label: candidate.id })),
+    };
+  });
   app.get("/api/workspace", async (req) => {
     const actor = principal(req);
     return {

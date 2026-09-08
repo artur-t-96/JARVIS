@@ -1,4 +1,4 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import {
@@ -22,6 +22,13 @@ import {
 import { EntityContent, RecordDownload } from "./EntityContent";
 import { LaboratoryPanel } from "./LaboratoryPanel";
 import { DocumentTemplate } from "./DocumentTemplate";
+import { CaseReadiness } from "./CaseReadiness";
+import { HumanTasks } from "./HumanTasks";
+import {
+  RequirementEditor,
+  cloneRequirementDefinitions,
+  type RequirementDefinition,
+} from "./RequirementEditor";
 
 type FormSpec = {
   title: string;
@@ -31,6 +38,18 @@ type FormSpec = {
   dataForm: boolean;
   initialValues?: Record<string, unknown>;
 };
+const actionFields = (
+  module: ModuleDefinition,
+  action: ModuleDefinition["actions"][number],
+) =>
+  (action.fields ?? []).filter(
+    (field) =>
+      !(
+        module.id === "cases" &&
+        action.id === "addTask" &&
+        ["assigneeId", "assigneePrincipalId"].includes(field.key)
+      ),
+  );
 function CommandForm({
   module,
   spec,
@@ -46,11 +65,40 @@ function CommandForm({
     ...spec.initialValues,
   }));
   const refs = useReferences(spec.fields, spec.entity);
+  const editRequirements = module.id === "cases" && spec.action === "revise";
+  const definitions = useResource<{
+    readiness: { definitions?: RequirementDefinition[] };
+  }>(
+    editRequirements && spec.entity
+      ? `/api/cases/${encodeURIComponent(spec.entity.id)}/readiness`
+      : null,
+  );
+  const [requirementsEdited, setRequirementsEdited] = useState(false);
+  useEffect(() => {
+    if (!editRequirements || requirementsEdited) return;
+    const loaded = cloneRequirementDefinitions(
+      definitions.data?.readiness.definitions,
+    );
+    if (loaded) setValues((current) => ({ ...current, requirements: loaded }));
+  }, [definitions.data, editRequirements, requirementsEdited]);
+  const assignees = useResource<{
+    assignees: { id: string; label: string }[];
+  }>(
+    spec.entity && spec.fields.some((field) => field.key === "ownerPrincipalId")
+      ? `/api/cases/${encodeURIComponent(spec.entity.id)}/owners`
+      : null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [idempotencyKey] = useState(requestKey);
   async function submit(event: FormEvent) {
     event.preventDefault();
+    if (editRequirements && !Array.isArray(values.requirements)) {
+      setError(
+        "Pobierz pełne definicje warunków odbioru przed przygotowaniem rewizji.",
+      );
+      return;
+    }
     setBusy(true);
     setError("");
     const data: Record<string, unknown> = {};
@@ -91,12 +139,10 @@ function CommandForm({
       required: field.required,
       disabled: busy,
     };
-    const options = referenceOptions(
-      field.key,
-      refs.records,
-      values,
-      spec.entity,
-    );
+    const options =
+      field.key === "ownerPrincipalId"
+        ? (assignees.data?.assignees ?? [])
+        : referenceOptions(field.key, refs.records, values, spec.entity);
     const set = (value: unknown) =>
       setValues((current) => ({
         ...current,
@@ -177,11 +223,15 @@ function CommandForm({
               onChange={(event) => set(event.target.value)}
             >
               <option value="">
-                {options.length
-                  ? "Wybierz rekord…"
-                  : field.key === "employmentEpisodeId"
-                    ? "Najpierw wybierz osobę…"
-                    : "Brak dostępnych rekordów"}
+                {field.key === "ownerPrincipalId"
+                  ? assignees.loading
+                    ? "Pobieranie kont…"
+                    : "Wybierz konto właściciela…"
+                  : options.length
+                    ? "Wybierz rekord…"
+                    : field.key === "employmentEpisodeId"
+                      ? "Najpierw wybierz osobę…"
+                      : "Brak dostępnych rekordów"}
               </option>
               {options.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -191,8 +241,9 @@ function CommandForm({
             </select>
             {!options.length && (
               <small>
-                Dodaj potrzebny rekord w odpowiednim obszarze, a następnie wróć
-                do tej operacji.
+                {field.key === "ownerPrincipalId"
+                  ? "Właściciel musi mieć dostęp do całej sprawy. JARVIS sprawdzi uprawnienia konta przed zapisem."
+                  : "Dodaj potrzebny rekord w odpowiednim obszarze, a następnie wróć do tej operacji."}
               </small>
             )}
           </>
@@ -239,6 +290,10 @@ function CommandForm({
       <form onSubmit={submit} className="command-form">
         <div className="sheet-body">
           {error && <Notice tone="error">{error}</Notice>}
+          {assignees.error && <Notice tone="error">{assignees.error}</Notice>}
+          {definitions.error && (
+            <Notice tone="error">{definitions.error}</Notice>
+          )}
           {refs.errors.map((error) => (
             <Notice key={error}>{error}</Notice>
           ))}
@@ -261,21 +316,44 @@ function CommandForm({
                 />
               </label>
             )}
-            {spec.fields.map((field) => (
-              <div
-                className={
-                  field.type === "textarea" ||
-                  field.type === "boolean" ||
-                  field.key === "dependsOn"
-                    ? "wide"
-                    : ""
-                }
-                key={field.key}
-              >
-                {fieldInput(field)}
-              </div>
-            ))}
+            {spec.fields
+              .filter(
+                (field) => !(editRequirements && field.key === "requirements"),
+              )
+              .map((field) => (
+                <div
+                  className={
+                    field.type === "textarea" ||
+                    field.type === "boolean" ||
+                    field.key === "dependsOn"
+                      ? "wide"
+                      : ""
+                  }
+                  key={field.key}
+                >
+                  {fieldInput(field)}
+                </div>
+              ))}
           </div>
+          {editRequirements &&
+            (Array.isArray(values.requirements) ? (
+              <RequirementEditor
+                value={values.requirements as RequirementDefinition[]}
+                disabled={busy}
+                onboarding={spec.entity?.data.caseType === "onboarding"}
+                onChange={(requirements) => {
+                  setRequirementsEdited(true);
+                  setValues((current) => ({ ...current, requirements }));
+                }}
+              />
+            ) : definitions.loading ? (
+              <Loading />
+            ) : (
+              <Notice tone="error">
+                Brak pełnych definicji warunków odbioru. Odśwież sprawę;
+                przygotowanie rewizji jest wstrzymane.
+              </Notice>
+            ))}
           <Notice>
             Przygotujesz plan operacji. Przed zapisem zobaczysz dokładny zakres
             zmiany i przejdziesz do jej zatwierdzenia.
@@ -296,7 +374,13 @@ function CommandForm({
           >
             Anuluj
           </button>
-          <button type="submit" className="button primary" disabled={busy}>
+          <button
+            type="submit"
+            className="button primary"
+            disabled={
+              busy || (editRequirements && !Array.isArray(values.requirements))
+            }
+          >
             {busy ? (
               <span className="spinner" />
             ) : (
@@ -366,7 +450,7 @@ export function WorkspacePage({
       setForm({
         title: action.label,
         action: id,
-        fields: action.fields ?? [],
+        fields: actionFields(module, action),
         entity: item,
         dataForm: false,
         initialValues,
@@ -422,6 +506,13 @@ export function WorkspacePage({
                   </button>
                 )}
               </div>
+              {item.module === "cases" && (
+                <CaseReadiness
+                  item={item}
+                  context={context}
+                  revision={revision}
+                />
+              )}
               <div className="detail-grid">
                 <section className="card">
                   <div className="card-heading">
@@ -489,7 +580,21 @@ export function WorkspacePage({
                     </p>
                     <div className="action-list">
                       {module.actions
-                        .filter((action) => allowedTool(action.id))
+                        .filter(
+                          (action) =>
+                            allowedTool(action.id) &&
+                            !(
+                              module.id === "cases" &&
+                              [
+                                "acceptTask",
+                                "declineTask",
+                                "transferTask",
+                                "completeTask",
+                                "cancelTask",
+                                "bindEvidence",
+                              ].includes(action.id)
+                            ),
+                        )
                         .map((action) => (
                           <button
                             className="action-row"
@@ -498,7 +603,7 @@ export function WorkspacePage({
                               setForm({
                                 title: action.label,
                                 action: action.id,
-                                fields: action.fields ?? [],
+                                fields: actionFields(module, action),
                                 entity: item,
                                 dataForm: false,
                               })
@@ -527,10 +632,18 @@ export function WorkspacePage({
                   </div>
                 </aside>
               </div>
+              {item.module === "cases" && (
+                <HumanTasks
+                  context={context}
+                  revision={revision + item.version}
+                  caseId={item.id}
+                />
+              )}
               <EntityContent
                 item={item}
                 onAction={showAction}
                 allowedTool={allowedTool}
+                hideTasks={item.module === "cases"}
               />
             </>
           )

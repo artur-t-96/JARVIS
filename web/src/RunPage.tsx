@@ -4,6 +4,11 @@ import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
 import { Badge, Icon, JsonView, Loading, Notice } from "./ui";
 
+export const isHumanTaskOperation = (toolId: string) =>
+  /^ops\.cases\.(acceptTask|declineTask|transferTask|completeTask|cancelTask)$/.test(
+    toolId,
+  );
+
 const eventLabels: Record<string, string> = {
   plan_created: "Przygotowano plan",
   run_started: "Rozpoczęto wykonanie",
@@ -257,11 +262,15 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                         className="button secondary section-link"
                         onClick={() =>
                           navigate(
-                            `module/${String(step.output!.data.module)}/${String(step.output!.data.entityId)}`,
+                            isHumanTaskOperation(step.toolId)
+                              ? "tasks"
+                              : `module/${String(step.output!.data.module)}/${String(step.output!.data.entityId)}`,
                           )
                         }
                       >
-                        Otwórz zapisany rekord
+                        {isHumanTaskOperation(step.toolId)
+                          ? "Otwórz zadania"
+                          : "Otwórz zapisany rekord"}
                         <Icon name="arrow" size={16} />
                       </button>
                     )}

@@ -238,10 +238,10 @@ test("all nine domain APIs execute through Core approvals; asset handover is ten
       humanConfirmed: true,
     });
     assert.equal(asset.status, "available");
-    assert.equal((asset.data.handover as JsonObject).confirmedBy, "approver");
+    assert.equal((asset.data.handover as JsonObject).confirmedBy, "operator");
     assert.equal(
       (asset.data.returnReceipt as JsonObject).confirmedBy,
-      "approver",
+      "operator",
     );
 
     let business = await f.create("cases", "Odbiór biznesowy", {
@@ -256,10 +256,18 @@ test("all nine domain APIs execute through Core approvals; asset handover is ten
     );
     business = await f.action(business, "addTask", {
       title: "Sprawdzenie",
+      kind: "work",
+      assigneePrincipalId: "operator",
       required: true,
+    });
+    business = await f.action(business, "acceptTask", {
+      taskId: (business.data.tasks as JsonObject[])[0]!.id!,
+      expectedTaskVersion: (business.data.tasks as JsonObject[])[0]!.version!,
+      humanConfirmed: true,
     });
     business = await f.action(business, "completeTask", {
       taskId: (business.data.tasks as JsonObject[])[0]!.id!,
+      expectedTaskVersion: (business.data.tasks as JsonObject[])[0]!.version!,
       evidenceNote: "Poświadczenie",
       humanConfirmed: true,
     });
@@ -279,7 +287,7 @@ test("all nine domain APIs execute through Core approvals; asset handover is ten
     assert.equal(business.status, "accepted");
     assert.equal(
       (business.data.currentAcceptance as JsonObject).decidedBy,
-      "approver",
+      "operator",
     );
 
     const supplier = await f.create("purchases", "Dostawca", {

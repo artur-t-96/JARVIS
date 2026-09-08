@@ -34,6 +34,7 @@ const denied = (error: unknown) =>
   error instanceof DomainError && [403, 404].includes(error.statusCode);
 function fixture() {
   const store = new WorkspaceStore(":memory:");
+  store.setPrincipalProvider(() => [p]);
   const tools = new Map(store.tools().map((t) => [t.id, t]));
   const apply = async (module: string, action: string, input: JsonObject) => {
     const result = await tools.get(`ops.${module}.${action}`)!.execute(
@@ -150,9 +151,20 @@ test("case package requires current business acceptance and includes draft settl
       () => exportArtifact(f.store, p, "cases", c.id),
       (e) => e instanceof DomainError && e.code === "CASE_NOT_ACCEPTED",
     );
-    c = await f.action(c, "addTask", { title: "Test", required: true });
+    c = await f.action(c, "addTask", {
+      title: "Test",
+      kind: "work",
+      assigneePrincipalId: p.id,
+      required: true,
+    });
+    c = await f.action(c, "acceptTask", {
+      taskId: (c.data.tasks as JsonObject[])[0]!.id!,
+      expectedTaskVersion: (c.data.tasks as JsonObject[])[0]!.version!,
+      humanConfirmed: true,
+    });
     c = await f.action(c, "completeTask", {
       taskId: (c.data.tasks as JsonObject[])[0]!.id!,
+      expectedTaskVersion: (c.data.tasks as JsonObject[])[0]!.version!,
       evidenceNote: "Synthetic",
       humanConfirmed: true,
     });
@@ -179,10 +191,7 @@ test("case package requires current business acceptance and includes draft settl
     });
     const exported = exportArtifact(f.store, p, "cases", c.id),
       body = JSON.parse(exported.body);
-    assert.equal(
-      body.case.data.currentAcceptance.decidedBy,
-      "synthetic-approver",
-    );
+    assert.equal(body.case.data.currentAcceptance.decidedBy, "operator");
     assert.equal(body.settlement.kind, "draft");
     assert.equal(body.settlement.declaredMinutes, 30);
     assert.equal(body.financialPosting, false);
@@ -253,5 +262,105 @@ test("exports are idempotent, detect overwritten files, and reject symlink direc
   } finally {
     f.store.close();
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("an accepted package stops exporting when a typed document's underlying source changes", async () => {
+  const f = fixture();
+  try {
+    let person = await f.create("people", "Syntetyczne źródło raportu", {
+      personCategory: "internal",
+    });
+    let document = await f.create("documents", "Zatwierdzony raport", {
+      accessScope: "people",
+      documentType: "report",
+      content: "Potwierdzona treść",
+      sources: [
+        {
+          module: "people",
+          id: person.id,
+          version: person.version,
+          observedAt: new Date().toISOString(),
+        },
+      ],
+    });
+    document = await f.action(document, "submit");
+    document = await f.action(document, "approve", {
+      decision: "approved",
+      note: "Sprawdzone źródło",
+      humanDecision: true,
+    });
+    let c = await f.create("cases", "Sprawa z wymaganym raportem", {
+      caseType: "general",
+      brief: "Sprawdź raport",
+      acceptanceCriteria: "Aktualne potwierdzenie",
+      requirements: [
+        {
+          key: "report",
+          title: "Aktualny raport",
+          kind: "document_approved",
+          required: true,
+          expected: {
+            documentType: "report",
+            documentId: document.id,
+            currentVersionRequired: true,
+          },
+        },
+      ],
+    });
+    c = await f.action(c, "addTask", {
+      title: "Kontrola",
+      kind: "work",
+      required: true,
+      assigneePrincipalId: p.id,
+    });
+    let task = (c.data.tasks as JsonObject[])[0]!;
+    c = await f.action(c, "acceptTask", {
+      taskId: task.id!,
+      expectedTaskVersion: task.version!,
+      humanConfirmed: true,
+    });
+    task = (c.data.tasks as JsonObject[])[0]!;
+    c = await f.action(c, "completeTask", {
+      taskId: task.id!,
+      expectedTaskVersion: task.version!,
+      humanConfirmed: true,
+      evidenceNote: "Sprawdzono raport",
+    });
+    c = await f.action(c, "bindEvidence", {
+      requirementId: f.store.readiness(p, c.id).requirements[0]!.id,
+      sourceModule: "documents",
+      sourceId: document.id,
+      sourceVersion: document.version,
+    });
+    c = await f.action(c, "submit");
+    c = await f.action(c, "accept", {
+      decision: "accepted",
+      note: "Odebrano",
+      humanDecision: true,
+    });
+    const accepted = JSON.parse(exportArtifact(f.store, p, "cases", c.id).body);
+    assert.equal(accepted.readiness.acceptanceCurrent, true);
+    assert.equal(accepted.case.data.currentAcceptance.decidedBy, p.id);
+    assert.equal(
+      accepted.case.data.currentAcceptance.approvedBy,
+      "synthetic-approver",
+    );
+    person = await f.action(person, "update", {
+      title: "Zmiana danych źródłowych",
+    });
+    assert.equal(person.version, 2);
+    assert.throws(
+      () => exportArtifact(f.store, p, "cases", c.id),
+      (e) => e instanceof DomainError && e.code === "CASE_ACCEPTANCE_STALE",
+    );
+    assert.equal(
+      f.store.get(p, "cases", c.id).status,
+      "accepted",
+      "historical acceptance remains recorded",
+    );
+    assert.equal(f.store.readiness(p, c.id).acceptanceCurrent, false);
+  } finally {
+    f.store.close();
   }
 });

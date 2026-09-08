@@ -127,6 +127,8 @@ const interval = setInterval(() => {
     for (const p of config.mode === "accounts"
       ? accounts.principals()
       : config.principals) {
+      if (!(p.scopes?.includes("*") || p.scopes?.includes("initiatives")))
+        continue;
       try {
         initiatives.scan(p);
       } catch {

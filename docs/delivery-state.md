@@ -15,9 +15,9 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | Paczka | Status       | Następny warunek                                                                                                                                                                              |
 | ------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | P00    | odebrane     | [PR #4](https://github.com/artur-t-96/JARVIS/pull/4), merge `0ecee032cc69125c60fb8c75866ca60d3e9930c4`; [wymagane CI](https://github.com/artur-t-96/JARVIS/actions/runs/34215317438) zielone. |
-| P01    | w toku       | Preview pięciu usług i obu trybów odebrane; PR #6, końcowe CI i aktualizacja main do domknięcia.                                                                                              |
+| P01    | odebrane     | PR #6 scalony, CI zielone; oba lokalne tryby i przepływ metryk/logów/śladów odebrane.                                                                                                         |
 | P02    | w toku       | HTTP/run/tool/model zinstrumentowane; OTLP i Prometheus działają, zgoda zachowuje link przez restart.                                                                                         |
-| P03    | do wykonania | Typowane warunki odbioru i właściwi wykonawcy zadań.                                                                                                                                          |
+| P03    | w toku       | Typowane warunki odbioru i właściwi wykonawcy zadań.                                                                                                                                          |
 | P04    | do wykonania | Kontrolowane odczyty kontekstu, ciągłość rozmowy i sprawy.                                                                                                                                    |
 | P05    | do wykonania | Kompletny obieg wyposażenia z poświadczeniami.                                                                                                                                                |
 | P06    | do wykonania | Pełny onboarding po P08a/P09a i bazowych profilach z P03.                                                                                                                                     |
@@ -30,19 +30,11 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P13    | do wykonania | Dwa pełne profile, rozszerzenia i rozmowa głosowa.                                                                                                                                            |
 | P14    | do wykonania | Cała macierz i powtarzalna instalacja po aktualizacji.                                                                                                                                        |
 
-Statusy P01–P14 oznaczają brak pełnego odbioru paczki opisanej w roadmapie. Nie oznaczają braku całego kodu bazowego danego modułu.
+Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w roadmapie. Nie oznacza braku całego kodu bazowego danego modułu.
 
 ## Najbliższa paczka wykonawcza
 
-**P01/P02: rzeczywiste observability OSS.** Uzgodniony kierunek: OpenTelemetry Collector Contrib, Prometheus, Loki, Jaeger/Badger i Grafana OSS. Dostępność oficjalnych binariów macOS arm64 została rozpoznana; konfiguracja razem i zasoby pozostają do sprawdzenia.
-
-1. Zweryfikować main i otwarte PR-y/worktrees JARVIS; dokończyć istniejącą paczkę zamiast dublować implementację.
-2. Rozdzielić niezależne prace: manifest/instalator i zamknięty lifecycle, konfiguracje/panele, kontekst/instrumentacja oraz niezależny przegląd.
-3. Pierwsza poprawka kontekstu jest scalona: [PR #5](https://github.com/artur-t-96/JARVIS/pull/5), merge `4ce6f3f1fcc37705b41afc8e23a860b00d5ea831`, [CI main](https://github.com/artur-t-96/JARVIS/actions/runs/34215909114) zielone. Commit implementacji `b1e4b9b`: `AsyncLocalStorage`, `withSpan` i `withWorkerTick`, testy równoległego HTTP/workera, zagnieżdżeń, błędów, zakończenia i redakcji. Sprawdzono lokalnie 12 testów infrastruktury, backend TypeScript i format. Oba zarządzane tryby zaktualizowano do merge SHA i potwierdzono izolację korelacji na rzeczywistych żądaniach.
-4. Przypiąć oficjalne binaria z SHA-256, przygotować własne katalogi i jawne porty loopback; bez globalnych usług i odczytu innych repozytoriów przez kolektor.
-5. Uruchomić na syntetycznym laboratorium rzeczywiste metryki, logi i ślady. Sprawdzić retencję, restart, awarię kolektora, rozdział danych i zużycie zasobów.
-6. Doprowadzić kod przez bot branch/PR/CI/merge. Po merge zaktualizować wyłącznie zarządzaną instalację JARVIS, z zachowaniem danych i sprawdzeniem wersji w przeglądarce.
-7. Zapisać dowód i zaktualizować ten dziennik oraz macierz; przejść do P03 bez rutynowego pytania użytkownika o zgodę na kolejną paczkę.
+**P03: sprawy, odpowiedzialność ludzi i typowane warunki odbioru.** P01 jest dostarczone; instrumentacja P02 działa, a pełny odbiór modelu i proaktywnych reguł ma dalsze zależności. Realizacja P03 obejmuje model domenowy, migrację, uprawnienia do konkretnego zadania także w Core, panel oraz odbiór w izolowanym preview. Po przejściu wymaganych kontroli: PR, merge, kopia i aktualizacja tylko zarządzanej instalacji JARVIS. Kolejna paczka to P04, bez rutynowego pytania o zgodę na kontynuację.
 
 ## Kontynuacja w tym zadaniu
 
@@ -56,7 +48,7 @@ Jeżeli brakuje klucza modelu, realnego poświadczenia albo zgody systemowej mik
 
 W kolejnej aktualizacji wpisać: paczkę, branch/worktree, PR, commit, wynik wymaganych CI, lokalny SHA, dowód odbioru, otwarte problemy i jednoznaczny następny krok. Nie zapisywać haseł, tokenów ani treści danych operacyjnych. Wynik planowania i wynik implementacji mają pozostać rozdzielone.
 
-## P01/P02 — bieżąca implementacja
+## P01/P02 — dostarczona paczka OSS
 
 Gałąź `codex/observability-oss`, worktree `/private/tmp/jarvis-observability-oss`. Kod źródłowy głównej instalacji pozostaje na scalonym SHA podczas sprawdzania preview na porcie 4330. Oficjalne dystrybucje pięciu komponentów pobrano, sprawdzono według SHA-256 i pełnego drzewa, zainstalowano w prywatnych katalogach JARVIS.
 
@@ -64,4 +56,22 @@ Potwierdzone w preview: wszystkie pięć usług uruchomione, prawdziwe metryki P
 
 Podczas rzeczywistego startu usunięto konflikt portów Jaeger query HTTP/gRPC. Loki zwrócił 503 na zapis mimo /ready200: domyślny próg WAL 90% blokował dysk z 39 GiB wolnego. Konfiguracja zachowuje guard przy 95% oraz bezwzględną rezerwę supervisora 2 GiB. Po zmianie zapis logów działa. Dwa realne stosy uruchomiono jednocześnie: kontrolny ślad i 20 logów trybu operacyjnego były nieobecne w lab, a po restarcie pozostał dokładnie jeden ślad i 20 logów. Prywatny dowód: `.data/observability/isolation-proof.json`. W Chrome potwierdzono dashboard, rzeczywiste logi i przejście do konkretnego śladu HTTP `753ecf10a0fce9cd5286d50e6c19f53c`. Trzy testy połączeń Grafany zwróciły OK. Pierwsze [CI PR #6](https://github.com/artur-t-96/JARVIS/actions/runs/34219402406) przeszło; końcowa poprawka rozdziela cookies logowania obu Grafan oraz używa metadanych trace_id w linku ślad → logi.
 
-Pozostają końcowe CI poprawki, merge i aktualizacja zarządzanej instalacji main. P01/P02 nie zamykają pełnego odbioru asystenta i procesów biznesowych. Po dostarczeniu tej gałęzi przejść do P03: oddzielenie wykonawcy zadania od zatwierdzającego zapis i typowane bramki biznesowego odbioru.
+[PR #6](https://github.com/artur-t-96/JARVIS/pull/6) scalony do `04bb1f048ee8befe3daa9866cb4989782fcbb620`. Końcowe wymagane [CI PR](https://github.com/artur-t-96/JARVIS/actions/runs/34219803831) i [CI main](https://github.com/artur-t-96/JARVIS/actions/runs/34219944452) przeszły: 132 testy, format, typy, build, demonstratory i rzeczywisty SIGKILL. Oba katalogi danych skopiowano przed aktualizacją; backup/restore zweryfikował manifesty. Lab4310 i operational4320 zostały zaktualizowane zarządzanym `local update` i uruchomione z własnym stosem OSS. `/api/ready` obu trybów potwierdziło oczekiwany SHA oraz działającego workera.
+
+Dowód z głównej instalacji `.data/local-product/observability-oss-verification.json` (8.09.2026, 11:23 UTC): wszystkie trzy źródła Grafany OK, po 14 paneli; rzeczywiste liczniki workera, ślady HTTP i dopasowane logi po `trace_id` w obu trybach. Ślad lab `44c07e9820c2d2583582b0a3dfbfe995`, operational `8892f08ecbdc022a6c428a5eb85c8c3f`. W Chrome na4310 widoczny dokładny SHA, aktywny eksport i zero błędów wysyłki w bieżącym procesie. W głównej Grafanie potwierdzono rzeczywiste wykresy, a kliknięcie Related logs ze śladu `44c07e9820c2d2583582b0a3dfbfe995` zwróciło jeden właściwy wpis `http.request`. Nie jest to odbiór rzeczywistego modelu ani całej warstwy reguł procesowych P02/P12.
+
+## P03 — bieżąca paczka
+
+Gałąź `codex/case-readiness`, worktree `/private/tmp/jarvis-case-readiness` z main `04bb1f0`. Zakres: migracja danych bez zgadywania dawnych autorów, typowane wymagania i powiązania dowodów, ponowna ocena przy odbiorze/aktywacji, zadania przypisane do aktywnych kont HR/IT/kierownika, osobna projekcja zadania IT i panel gotowości. Projekt: [P03](p03-design.md). Zależności P05/P08a/P09a pozostają jawne; ich brak ma blokować wynik, a nie dawać zastępcze potwierdzenie. Następnie testy migracji, autoryzacji, odmów, rewizji oraz restartu, PR/CI/merge i rzeczywisty odbiór lokalny.
+
+Pierwsze potwierdzone testy P03: aktywne konta i rozdzielenie autora pracy od zatwierdzającego; ograniczony widok IT i odmowa odczytu nieprzypisanego wykonania nawet przy wspólnym zakresie `it`; utrata odpowiedzi po przekazaniu i odtworzenie bez drugiego skutku; cofnięcie dostępu po zgodzie; blokada eksportu przy zmianie źródła zaakceptowanego dokumentu. Demonstrator nadal obejmuje dziewięć modułów, ale teraz jawnie blokuje onboarding bez typowanych dowodów: 55 zatwierdzonych i zweryfikowanych komend. Nie zalicza nieistniejącego poświadczenia dostępu.
+
+Wykryty cykl źródła dokumentu z tej samej sprawy jest jawną blokadą: powiązanie dowodu zmienia wersję sprawy. Pełny kontrakt niezmiennej rewizji zakresu jako źródła dokumentu należy do P09a; nie omijamy kontroli aktualności. Bazowe wymagania nie mają reguły dopuszczającej wyjątek, więc notatka lub wyjątek nie zastępują sprzętu, dokumentu i dostępu.
+
+Przebieg Chrome w izolowanym preview `localhost:4330`, syntetyczny tenant: kierownik widzi trzy brakujące warunki; IT1 widzi wyłącznie dwa przypisane zadania i otrzymuje 403 dla całej sprawy. Przyjęcie → przekazanie przez selektor do IT2 → ponowne przyjęcie → potwierdzenie pracy przeszły cztery osobne zgody Core i niezależną weryfikację, po jednej próbie. Zapisany wykonawca to IT2; ukończenie tekstowego zadania nie zalicza dowodu wydania i gotowość pozostaje zablokowana. Prywatny dowód `.data/p03-preview/ui-proof.json` i trzy zrzuty ekranu. Test API dodatkowo rozdziela operatora i zatwierdzającego oraz potwierdza zachowanie autorów po restarcie. Finalne poprawki interfejsu i dostarczenie wymagają jeszcze odbioru właściwej wersji.
+
+Przegląd przed PR ujawnił dwie ścieżki wymagające dodatkowej osłony: automatyczne zamknięcie onboardingu musi anulować jego otwarte zadania w tej samej transakcji, a wildcard obszarów nie może omijać kontroli tożsamości dla nierozwiązanych referencji Core. Ponowna ocena dowodów obejmuje też zakończenie współpracy. Plan następnej paczki: [P04 — kontekst firmy i rozmowa](p04-design.md).
+
+[PR #7](https://github.com/artur-t-96/JARVIS/pull/7), commit `26e86c5be987c187fa7f5c7ba821af8ff3188b14`: pierwsze [CI](https://github.com/artur-t-96/JARVIS/actions/runs/34222698053) przeszło — 165 testów, format, typy, build, oba demonstratory i rzeczywiste SIGKILL. Ostatnia poprawka dodaje typowany edytor wymagań rewizji oraz pobieranie kandydatów na właściciela według uprawnień konkretnej sprawy. Pełne definicje są pobierane przed edycją; niewidoczne ograniczenia źródła, rewizji i hasha pozostają w planie. Końcowe CI oraz merge i odbiór głównej instalacji są jeszcze przed nami.
+
+Kolejne CI wykryło przejściowy błąd odczytu tożsamości kończącego się procesu w teście SIGKILL supervisora OSS (166/167 testów przeszło). `signalAndWait` po utracie potwierdzenia PID prowadzi teraz wyłącznie ograniczone oczekiwanie na zakończenie, bez ponownego sygnału. Dwie regresje uruchamiają prawdziwe procesy: proces zmieniający tytuł podczas normalnego wyjścia zostaje poprawnie rozpoznany jako zakończony, a żywy PID o niewłaściwej tożsamości pozostaje nietknięty. Obie przeszły lokalnie; wymagany jest ponowny pełny przebieg CI.

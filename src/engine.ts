@@ -18,6 +18,7 @@ import {
   type RunStatus,
   type StepStatus,
   type ToolContext,
+  type ToolAccessContext,
   type ToolDefinition,
   type ToolResult,
   type Verification,
@@ -292,8 +293,24 @@ export class Engine {
     principal: Principal,
     tool: ToolDefinition,
     input?: JsonObject,
+    context?: ToolAccessContext,
   ) {
-    return hasToolAccess(principal, tool, input);
+    return hasToolAccess(principal, tool, input, context);
+  }
+  private accessContext(
+    run: Row,
+    step: Row,
+    purpose: ToolAccessContext["purpose"],
+  ): ToolAccessContext {
+    return {
+      purpose,
+      runId: String(run.id),
+      stepId: String(step.id),
+      requestedBy: String(run.requested_by),
+      ...(step.operation_key
+        ? { operationKey: String(step.operation_key) }
+        : {}),
+    };
   }
   private policy(tenantId: string) {
     const policy = this.policies.get(tenantId);
@@ -314,30 +331,57 @@ export class Engine {
         const tool = this.tools.get(step.toolId);
         if (!tool) return true;
         const persisted = this.db
-          .prepare("SELECT resolved_input FROM steps WHERE run_id=? AND id=?")
+          .prepare(
+            "SELECT id,resolved_input,operation_key FROM steps WHERE run_id=? AND id=?",
+          )
           .get(String(run.id), step.id) as Row | undefined;
         if (persisted?.resolved_input)
           return !this.canUse(
             actor,
             tool,
             parse<JsonObject>(persisted.resolved_input),
+            this.accessContext(run, persisted, "read"),
           );
-        if (this.hasRefs(step.input))
+        if (this.hasRefs(step.input)) {
+          const unchangedRequester =
+            run.requested_by === actor.id &&
+            run.requester_authority ===
+              hash({
+                roles: [...actor.roles].sort(),
+                scopes: [...(actor.scopes ?? [])].sort(),
+              });
+          // A wildcard grants domain scopes, not a different person's identity.
+          // The predicate can inspect literal target identifiers even when a
+          // different argument is unresolved. Unknown identity fails closed;
+          // only the unchanged requester may still review their own draft.
+          if (tool.canAccess && !unchangedRequester) {
+            try {
+              if (
+                !tool.canAccess(
+                  actor,
+                  step.input,
+                  this.accessContext(run, persisted ?? { id: step.id }, "read"),
+                )
+              )
+                return true;
+            } catch {
+              return true;
+            }
+          }
           return (
             Boolean(
               tool.requiredScopesForInput &&
               !actor.scopes?.includes("*") &&
-              !(
-                run.requested_by === actor.id &&
-                run.requester_authority ===
-                  hash({
-                    roles: [...actor.roles].sort(),
-                    scopes: [...(actor.scopes ?? [])].sort(),
-                  })
-              ),
+              !unchangedRequester,
             ) || !this.canUse(actor, tool)
           );
-        return !this.canUse(actor, tool, step.input);
+        }
+        return !this.canUse(
+          actor,
+          tool,
+          step.input,
+          this.accessContext(run, persisted ?? { id: step.id }, "read"),
+        );
       })
     )
       throw new DomainError(
@@ -397,7 +441,7 @@ export class Engine {
       }
       if (!this.hasRefs(step.input)) {
         tool.inputSchema.parse(step.input);
-        if (!this.canUse(actor, tool, step.input))
+        if (!this.canUse(actor, tool, step.input, { purpose: "propose" }))
           throw new DomainError(
             "FORBIDDEN_TOOL",
             "Brak dostępu do danych operacji.",
@@ -714,6 +758,7 @@ export class Engine {
     tool: ToolDefinition,
     input: JsonObject,
     token: string,
+    purpose: "execute" | "recover" = "execute",
   ) {
     const run = this.db
       .prepare("SELECT * FROM runs WHERE id=?")
@@ -722,13 +767,23 @@ export class Engine {
     const requester = this.principals.get(
       `${run.tenant_id}:${run.requested_by}`,
     )!;
-    if (!this.canUse(requester, tool, input))
+    if (
+      !this.canUse(
+        requester,
+        tool,
+        input,
+        this.accessContext(run, step, purpose),
+      )
+    )
       throw new DomainError(
         "AUTHORITY_REVOKED",
         "Brak uprawnienia do danych operacji.",
         403,
       );
-    if (run.cancellation_requested || !this.owns(runId, String(step.id), token))
+    if (
+      (purpose === "execute" && run.cancellation_requested) ||
+      !this.owns(runId, String(step.id), token)
+    )
       throw new DomainError(
         "EXECUTION_STOPPED",
         "Wykonanie zatrzymano lub wygasło prawo do tej próby.",
@@ -746,7 +801,12 @@ export class Engine {
         : undefined;
       if (
         !actor?.roles.includes("approver") ||
-        !this.canUse(actor, tool, input) ||
+        !this.canUse(
+          actor,
+          tool,
+          input,
+          this.accessContext(run, step, "approve"),
+        ) ||
         (!policy.allowSelfApproval && actor.id === run.requested_by)
       )
         throw new DomainError(
@@ -806,7 +866,14 @@ export class Engine {
           409,
         );
       this.checkPolicy(run, tool);
-      if (!this.canUse(actor, tool, parse<JsonObject>(step.resolved_input)))
+      if (
+        !this.canUse(
+          actor,
+          tool,
+          parse<JsonObject>(step.resolved_input),
+          this.accessContext(run, step, "approve"),
+        )
+      )
         throw new DomainError(
           "FORBIDDEN",
           "Brak uprawnienia do tego obszaru.",
@@ -1002,6 +1069,28 @@ export class Engine {
                 parse<JsonObject>(step.input_json),
               ) as JsonObject);
           input = tool.inputSchema.parse(input) as JsonObject;
+          const requester = this.principals.get(
+            `${run.tenant_id}:${run.requested_by}`,
+          )!;
+          if (
+            !this.canUse(
+              requester,
+              tool,
+              input,
+              this.accessContext(
+                run,
+                step,
+                step.status === "executing" || step.status === "verifying"
+                  ? "recover"
+                  : "propose",
+              ),
+            )
+          )
+            throw new DomainError(
+              "AUTHORITY_REVOKED",
+              "Brak aktualnego uprawnienia do danych operacji.",
+              403,
+            );
           if (!step.resolved_input)
             this.db
               .prepare(
@@ -1188,6 +1277,15 @@ export class Engine {
           };
           try {
             let result: ToolResult;
+            if (job.mode !== "execute")
+              this.executionAuthority(
+                runId,
+                step,
+                tool,
+                input,
+                token,
+                "recover",
+              );
             if (job.mode === "verify")
               result = parse<ToolResult>(step.output_json);
             else if (job.mode === "reconcile") {
@@ -1298,7 +1396,17 @@ export class Engine {
             const verified = await this.observe(
               "tool.verify",
               telemetryFields,
-              () => bounded(() => tool.verify(ctx, input, result)),
+              () => {
+                this.executionAuthority(
+                  runId,
+                  step,
+                  tool,
+                  input,
+                  token,
+                  "recover",
+                );
+                return bounded(() => tool.verify(ctx, input, result));
+              },
             );
             this.validateVerification(verified);
             this.tx(() => {

@@ -123,10 +123,12 @@ export function EntityContent({
   item,
   onAction,
   allowedTool,
+  hideTasks = false,
 }: {
   item: Entity;
   onAction: (action: string, values?: Record<string, unknown>) => void;
   allowedTool: (action: string) => boolean;
+  hideTasks?: boolean;
 }) {
   const tasks = rows(item.data.tasks);
   const refs = useReferences(
@@ -187,7 +189,7 @@ export function EntityContent({
           ))}
         </section>
       )}
-      {item.module === "cases" && (
+      {item.module === "cases" && !hideTasks && (
         <section className="card">
           <div className="card-heading">
             <div>

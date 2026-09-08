@@ -81,6 +81,13 @@ export type Reconciliation =
   | { status: "applied"; result: ToolResult }
   | { status: "not_applied" }
   | { status: "unknown"; reason: string };
+export interface ToolAccessContext {
+  purpose: "propose" | "read" | "approve" | "execute" | "recover";
+  runId?: string;
+  stepId?: string;
+  requestedBy?: string;
+  operationKey?: string;
+}
 export interface ToolDefinition {
   id: string;
   version: string;
@@ -90,6 +97,12 @@ export interface ToolDefinition {
   scope?: string;
   requiredScopes?: string[];
   requiredScopesForInput?: (input: JsonObject, tenantId: string) => string[];
+  /** Trusted Core context is supplied separately from untrusted tool arguments. */
+  canAccess?: (
+    principal: Principal,
+    input: JsonObject,
+    context?: ToolAccessContext,
+  ) => boolean;
   prepareInput?: (input: JsonObject, tenantId: string) => JsonObject;
   inputSchema: z.ZodType;
   execute(ctx: ToolContext, input: JsonObject): Promise<ToolResult>;
@@ -124,6 +137,7 @@ export function hasToolAccess(
   principal: Principal,
   tool: ToolDefinition,
   input?: JsonObject,
+  context?: ToolAccessContext,
 ): boolean {
   const scopes = [
     ...(tool.scope ? [tool.scope] : []),
@@ -132,8 +146,11 @@ export function hasToolAccess(
       ? (tool.requiredScopesForInput?.(input, principal.tenantId) ?? [])
       : []),
   ];
-  return scopes.every(
-    (scope) =>
-      principal.scopes?.includes("*") || principal.scopes?.includes(scope),
+  return (
+    scopes.every(
+      (scope) =>
+        principal.scopes?.includes("*") || principal.scopes?.includes(scope),
+    ) &&
+    (!input || !tool.canAccess || tool.canAccess(principal, input, context))
   );
 }

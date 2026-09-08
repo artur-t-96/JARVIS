@@ -1,6 +1,6 @@
 # P03 — projekt spraw, pracy ludzi i typowanego odbioru
 
-Status: **projekt następnej paczki, bez implementacji i odbioru**. Dokument powstał z odczytu obecnych kontraktów, magazynu domenowego i testów. Nie potwierdza wykonania opisanych funkcji ani pełnego onboardingu. Podstawy zakresu: [roadmapa](roadmap.md), [plan odbioru](acceptance.md), [wizja](vision.md).
+Status: **kontrakt paczki P03; implementacja i odbiór opisane w dzienniku realizacji**. Wprowadzenie opisuje problem zastanej wersji przed P03. Ten dokument nie jest samodzielnym dowodem odbioru ani ukończenia onboardingu. Podstawy zakresu: [roadmapa](roadmap.md), [plan odbioru](acceptance.md), [wizja](vision.md).
 
 ## Problem i warunek docelowy
 

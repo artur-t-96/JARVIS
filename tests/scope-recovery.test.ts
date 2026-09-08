@@ -296,10 +296,15 @@ test("bounded-role requester can review its reference plan and profile preparati
       required: true,
       offsetDays: 0,
       dependsOn: [],
+      assigneeRole: "manager" as const,
+      kind: "work" as const,
+      requirementKeys: [],
     },
   ];
   workspace.setProfileProvider(() => ({
     version: 9,
+    definitionVersion: "2",
+    roleBindings: { manager: owner.id },
     processTemplates: { onboarding: template, offboarding: template },
   }));
   const tools = workspace.tools();
@@ -380,5 +385,107 @@ test("bounded-role requester can review its reference plan and profile preparati
   } finally {
     engine.close();
     workspace.close();
+  }
+});
+
+test("wildcard scopes never bypass an identity-only tool predicate for unresolved references", async () => {
+  const owner: Principal = {
+    id: "owner",
+    tenantId: "identity-test",
+    roles: ["operator"],
+    scopes: ["*"],
+  };
+  const viewer: Principal = { ...owner, id: "viewer", roles: ["viewer"] };
+  const unrelated: Principal = { ...owner, id: "unrelated" };
+  const base: ToolDefinition = {
+    id: "context.read",
+    version: "1",
+    effect: "read",
+    recovery: "idempotent",
+    description: "Synthetic local read",
+    inputSchema: z.object({ target: z.string() }).strict(),
+    execute: async () => ({ data: { target: "known-target" } }),
+    verify: async () => ({
+      ok: true,
+      summary: "Synthetic read checked",
+      evidence: [
+        {
+          source: "synthetic",
+          summary: "Fixture only",
+          observedAt: new Date().toISOString(),
+          data: {},
+        },
+      ],
+    }),
+  };
+  const privateTool: ToolDefinition = {
+    ...base,
+    id: "context.private",
+    canAccess: (p, input) =>
+      p.id === owner.id && input.target === "known-target",
+  };
+  const engine = new Engine({
+    dbPath: ":memory:",
+    principals: [owner, viewer, unrelated],
+    tools: [base, privateTool],
+    policies: [
+      {
+        tenantId: owner.tenantId,
+        version: "1",
+        name: "Synthetic identity rule",
+        allowedTools: [base.id, privateTool.id],
+        approvalTools: [],
+        allowSelfApproval: false,
+      },
+    ],
+  });
+  try {
+    const run = engine.createRun(
+      owner,
+      "Private synthetic request",
+      {
+        title: "Private read",
+        summary: "Identity cannot be replaced by wildcard",
+        steps: [
+          {
+            id: "source",
+            title: "Read",
+            toolId: base.id,
+            input: { target: "public" },
+          },
+          {
+            id: "private",
+            title: "Read private",
+            toolId: privateTool.id,
+            input: { target: { $step: "source", path: "target" } },
+          },
+        ],
+      },
+      "unresolved-identity-test",
+    );
+    assert.equal(engine.getRun(owner, run.id).status, "planned");
+    for (const actor of [viewer, unrelated]) {
+      assert.throws(
+        () => engine.getRun(actor, run.id),
+        (e) => e instanceof DomainError && e.statusCode === 403,
+      );
+      assert.deepEqual(engine.listRuns(actor), []);
+    }
+    engine.setPrincipals([{ ...owner, scopes: ["people"] }, viewer, unrelated]);
+    assert.throws(
+      () => engine.getRun(owner, run.id),
+      (e) => e instanceof DomainError && e.statusCode === 403,
+    );
+    engine.setPrincipals([owner, viewer, unrelated]);
+    engine.start(owner, run.id);
+    for (let i = 0; i < 4; i++) await engine.tick();
+    assert.equal(engine.getRun(owner, run.id).status, "completed");
+    for (const actor of [viewer, unrelated])
+      assert.throws(
+        () => engine.getRun(actor, run.id),
+        (e) => e instanceof DomainError && e.statusCode === 403,
+      );
+  } finally {
+    engine.close();
   }
 });

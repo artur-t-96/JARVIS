@@ -54,6 +54,12 @@ export const optionLabels: Record<string, string> = {
   people: "Kadry i osoby",
   sales: "Sprzedaż",
   documents: "Dokumenty",
+  hr: "HR",
+  manager: "Przełożony",
+  information: "Uzupełnienie danych",
+  decision: "Decyzja człowieka",
+  work: "Praca człowieka",
+  attestation: "Poświadczenie",
 };
 export const optionLabel = (value: string) => optionLabels[value] ?? value;
 export const rows = (value: unknown): Record<string, unknown>[] =>

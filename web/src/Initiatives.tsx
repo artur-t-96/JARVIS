@@ -23,6 +23,9 @@ type TemplateTask = {
   required: boolean;
   offsetDays: number;
   dependsOn: string[];
+  kind?: "information" | "decision" | "work" | "attestation";
+  assigneeRole?: "hr" | "it" | "manager";
+  requirementKeys?: string[];
 };
 type CompanyProfile = {
   tenantId: string;
@@ -33,15 +36,69 @@ type CompanyProfile = {
   quietHours: { enabled: boolean; start: string; end: string };
   rules: Record<string, boolean>;
   processTemplates: { onboarding: TemplateTask[]; offboarding: TemplateTask[] };
+  roleBindings?: { hr?: string; it?: string; manager?: string };
   updatedAt: string | null;
   updatedBy: string | null;
 };
+type CompanyTemplate = {
+  id: "internal" | "contractor";
+  label: string;
+  processTemplates: CompanyProfile["processTemplates"];
+};
+export function applyCompanyTemplate(
+  profile: CompanyProfile,
+  template: CompanyTemplate,
+): CompanyProfile {
+  return {
+    ...profile,
+    processTemplates: structuredClone(template.processTemplates),
+  };
+}
+export function companyProfileInput(
+  profile: CompanyProfile,
+  expectedVersion: number,
+) {
+  const {
+    companyName,
+    timezone,
+    licenseReminderDays,
+    quietHours,
+    rules,
+    roleBindings,
+  } = profile;
+  return {
+    expectedVersion,
+    companyName,
+    timezone,
+    licenseReminderDays,
+    quietHours,
+    rules,
+    roleBindings: roleBindings ?? {},
+    processTemplates: {
+      onboarding: profile.processTemplates.onboarding.map((task) => ({
+        ...task,
+        requirementKeys: task.requirementKeys ?? [],
+      })),
+      offboarding: profile.processTemplates.offboarding.map((task) => ({
+        ...task,
+        requirementKeys: task.requirementKeys ?? [],
+      })),
+    },
+  };
+}
 const ruleLabels: Record<string, string> = {
   overdue_case: "Sprawy po terminie",
   overdue_task: "Zadania po terminie",
   expired_reservation: "Wygasłe rezerwacje sprzętu",
   license_expiry: "Zbliżający się koniec licencji",
   high_severity_incident: "Pilne incydenty IT",
+};
+const responsibilityLabels = { hr: "HR", it: "IT", manager: "Przełożony" };
+const taskKindLabels = {
+  information: "Uzupełnienie danych",
+  decision: "Decyzja człowieka",
+  work: "Praca człowieka",
+  attestation: "Poświadczenie",
 };
 
 export function Initiatives({ context }: { context: Context }) {
@@ -285,6 +342,9 @@ export function CompanySettings({ context }: { context: Context }) {
     allowed ? "/api/profile" : null,
   );
   const [editing, setEditing] = useState(false);
+  const directory = useResource<{ assignees: { id: string; label: string }[] }>(
+    allowed ? "/api/company/assignees" : null,
+  );
   const profile = resource.data?.profile;
   if (!allowed) return null;
   return (
@@ -342,6 +402,32 @@ export function CompanySettings({ context }: { context: Context }) {
               </span>
             ))}
           </div>
+          <h3>Odpowiedzialność za proces</h3>
+          <dl className="data-grid">
+            {Object.entries(responsibilityLabels).map(([role, label]) => {
+              const id =
+                profile.roleBindings?.[
+                  role as keyof typeof responsibilityLabels
+                ];
+              return (
+                <div key={role}>
+                  <dt>{label}</dt>
+                  <dd>
+                    {id
+                      ? (directory.data?.assignees.find(
+                          (entry) => entry.id === id,
+                        )?.label ?? "Przypisane konto · szczegóły niedostępne")
+                      : "Brak przypisanej osoby"}
+                  </dd>
+                </div>
+              );
+            })}
+          </dl>
+          {directory.error && (
+            <p className="small muted">
+              Nie udało się potwierdzić aktualnej obsady ról.
+            </p>
+          )}
           <details className="technical-details">
             <summary>Szablony onboardingu i offboardingu</summary>
             {(["onboarding", "offboarding"] as const).map((kind) => (
@@ -352,6 +438,10 @@ export function CompanySettings({ context }: { context: Context }) {
                     <li key={task.key}>
                       {task.title} · {task.required ? "wymagane" : "opcjonalne"}{" "}
                       · {task.offsetDays} dni od daty procesu
+                      {task.assigneeRole
+                        ? ` · ${responsibilityLabels[task.assigneeRole]}`
+                        : " · brak roli wykonawcy"}
+                      {task.kind ? ` · ${taskKindLabels[task.kind]}` : ""}
                       {task.dependsOn.length
                         ? ` · po: ${task.dependsOn.map((key) => profile.processTemplates[kind].find((item) => item.key === key)?.title ?? key).join(", ")}`
                         : ""}
@@ -387,30 +477,22 @@ function ProfileForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [key] = useState(requestKey);
+  const directory = useResource<{ assignees: { id: string; label: string }[] }>(
+    "/api/company/assignees",
+  );
+  const templates = useResource<{ templates: CompanyTemplate[] }>(
+    "/api/company/templates",
+  );
+  const [templateId, setTemplateId] = useState("");
+  const [templateNotice, setTemplateNotice] = useState("");
   async function submit(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
-      const {
-        companyName,
-        timezone,
-        licenseReminderDays,
-        quietHours,
-        rules,
-        processTemplates,
-      } = values;
       const response = await post<{ run: Run }>("/api/commands", {
         toolId: "initiatives.configure",
-        input: {
-          expectedVersion: profile.version,
-          companyName,
-          timezone,
-          licenseReminderDays,
-          quietHours,
-          rules,
-          processTemplates,
-        },
+        input: companyProfileInput(values, profile.version),
         idempotencyKey: key,
       });
       onClose();
@@ -534,6 +616,51 @@ function ProfileForm({
               />
             </label>
           </div>
+          <h3>Osoby odpowiedzialne</h3>
+          <p className="small muted">
+            Konto wskazuje wykonawcę roli. Nie nadaje mu dodatkowych uprawnień.
+            Brak obsady pozostawi zadania nieprzypisane.
+          </p>
+          {directory.error && <Notice tone="error">{directory.error}</Notice>}
+          <div className="form-grid">
+            {Object.entries(responsibilityLabels).map(([role, label]) => {
+              const key = role as keyof typeof responsibilityLabels;
+              const selected = values.roleBindings?.[key] ?? "";
+              return (
+                <label className="field" key={role}>
+                  <span>{label}</span>
+                  <select
+                    disabled={busy || directory.loading || !!directory.error}
+                    value={selected}
+                    onChange={(event) =>
+                      setValues((current) => {
+                        const roleBindings = { ...current.roleBindings };
+                        if (event.target.value)
+                          roleBindings[key] = event.target.value;
+                        else delete roleBindings[key];
+                        return { ...current, roleBindings };
+                      })
+                    }
+                  >
+                    <option value="">Bez przypisania</option>
+                    {selected &&
+                      !directory.data?.assignees.some(
+                        (entry) => entry.id === selected,
+                      ) && (
+                        <option value={selected}>
+                          Dotychczasowe konto · dostępność niepotwierdzona
+                        </option>
+                      )}
+                    {directory.data?.assignees.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              );
+            })}
+          </div>
           <h3>Aktywne reguły</h3>
           <div className="profile-rule-inputs">
             {Object.entries(values.rules).map(([key, checked]) => (
@@ -552,6 +679,50 @@ function ProfileForm({
               </label>
             ))}
           </div>
+          <h3>Bazowy wariant procesu</h3>
+          <p className="small muted">
+            Wczytanie zastąpi szablony w tym formularzu. Zapisany profil firmy
+            zmieni się dopiero po zatwierdzeniu operacji.
+          </p>
+          {templates.error && <Notice tone="error">{templates.error}</Notice>}
+          <div className="task-filters">
+            <label className="field">
+              <span>Wariant</span>
+              <select
+                disabled={busy || templates.loading || !!templates.error}
+                value={templateId}
+                onChange={(event) => setTemplateId(event.target.value)}
+              >
+                <option value="">Wybierz wariant…</option>
+                {templates.data?.templates.map((template) => (
+                  <option value={template.id} key={template.id}>
+                    {template.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="button secondary"
+              disabled={busy || !templateId || !!templates.error}
+              onClick={() => {
+                const template = templates.data?.templates.find(
+                  (candidate) => candidate.id === templateId,
+                );
+                if (template) {
+                  setValues((current) =>
+                    applyCompanyTemplate(current, template),
+                  );
+                  setTemplateNotice(
+                    `Wczytano wariant „${template.label}” do formularza. Sprawdź obsadę i terminy przed przygotowaniem zmiany.`,
+                  );
+                }
+              }}
+            >
+              Wczytaj do formularza
+            </button>
+          </div>
+          {templateNotice && <Notice>{templateNotice}</Notice>}
           {(["onboarding", "offboarding"] as const).map((kind) => (
             <details className="template-editor" key={kind}>
               <summary>
@@ -573,6 +744,51 @@ function ProfileForm({
                     />
                   </label>
                   <div className="form-grid">
+                    <label className="field">
+                      <span>Rodzaj zadania</span>
+                      <select
+                        required
+                        disabled={busy}
+                        value={task.kind ?? ""}
+                        onChange={(event) =>
+                          taskChange(kind, index, {
+                            kind: event.target.value as TemplateTask["kind"],
+                          })
+                        }
+                      >
+                        <option value="">Wybierz rodzaj…</option>
+                        {Object.entries(taskKindLabels).map(
+                          ([value, label]) => (
+                            <option value={value} key={value}>
+                              {label}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span>Rola wykonawcy</span>
+                      <select
+                        required
+                        disabled={busy}
+                        value={task.assigneeRole ?? ""}
+                        onChange={(event) =>
+                          taskChange(kind, index, {
+                            assigneeRole: event.target
+                              .value as TemplateTask["assigneeRole"],
+                          })
+                        }
+                      >
+                        <option value="">Wybierz odpowiedzialność…</option>
+                        {Object.entries(responsibilityLabels).map(
+                          ([value, label]) => (
+                            <option value={value} key={value}>
+                              {label}
+                            </option>
+                          ),
+                        )}
+                      </select>
+                    </label>
                     <label className="field">
                       <span>Dni od daty procesu</span>
                       <input
@@ -601,6 +817,12 @@ function ProfileForm({
                       Wymagane do odbioru
                     </label>
                   </div>
+                  {!!task.requirementKeys?.length && (
+                    <p className="small muted">
+                      Zadanie ma {task.requirementKeys.length} powiązanych
+                      warunków odbioru. Zmiana opisu nie usuwa tych wymagań.
+                    </p>
+                  )}
                   {index > 0 && (
                     <fieldset className="dependency-options">
                       <legend>Wymagane wcześniejsze zadania</legend>

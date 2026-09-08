@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { caseRequirementDefinitionsSchema } from "./case-readiness.js";
 
 export interface WorkspaceField {
   key: string;
@@ -34,6 +35,171 @@ const email = z.string().email().max(254).optional();
 const money = z.number().finite().min(0).max(1_000_000_000);
 const integer = z.number().int().min(1).max(100_000);
 const yes = z.literal(true);
+export const principalIdSchema = z.string().trim().min(1).max(200);
+export const taskKindSchema = z.enum([
+  "information",
+  "decision",
+  "work",
+  "attestation",
+]);
+export const taskStatusSchema = z.enum([
+  "unassigned",
+  "offered",
+  "accepted",
+  "declined",
+  "completed",
+  "cancelled",
+]);
+export const taskRoleSchema = z.enum(["hr", "it", "manager"]);
+export const roleBindingsSchema = z
+  .object({
+    hr: principalIdSchema.optional(),
+    it: principalIdSchema.optional(),
+    manager: principalIdSchema.optional(),
+  })
+  .strict();
+const templateKey = z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/);
+export const processTemplateTaskSchema = z
+  .object({
+    key: templateKey,
+    title: short,
+    required: z.boolean(),
+    offsetDays: z.number().int().min(-365).max(365),
+    dependsOn: z.array(templateKey).max(30),
+    assigneeRole: taskRoleSchema,
+    kind: taskKindSchema,
+    requirementKeys: z.array(templateKey).max(30),
+  })
+  .strict();
+export const processTemplateSchema = z
+  .array(processTemplateTaskSchema)
+  .min(1)
+  .max(30)
+  .superRefine((tasks, context) => {
+    const seen = new Set<string>();
+    for (const [index, task] of tasks.entries()) {
+      if (
+        seen.has(task.key) ||
+        new Set(task.dependsOn).size !== task.dependsOn.length ||
+        task.dependsOn.some((key) => !seen.has(key)) ||
+        new Set(task.requirementKeys).size !== task.requirementKeys.length
+      )
+        context.addIssue({
+          code: "custom",
+          message:
+            "Unikalne klucze i wymagania; zależności wskazują wcześniejsze zadania.",
+          path: [index],
+        });
+      seen.add(task.key);
+    }
+    if (!tasks.some((task) => task.required))
+      context.addIssue({
+        code: "custom",
+        message: "Szablon wymaga obowiązkowego zadania.",
+      });
+  });
+export const processTemplatesSchema = z
+  .object({
+    onboarding: processTemplateSchema,
+    offboarding: processTemplateSchema,
+  })
+  .strict();
+export type TaskKind = z.infer<typeof taskKindSchema>;
+export type TaskStatus = z.infer<typeof taskStatusSchema>;
+export type TaskRole = z.infer<typeof taskRoleSchema>;
+export type RoleBindings = z.infer<typeof roleBindingsSchema>;
+/** Draft defaults only. A saved company profile still needs explicit Core approval. */
+export function baselineProcessTemplates(
+  kind: "internal" | "contractor",
+): z.infer<typeof processTemplatesSchema> {
+  const contractor = kind === "contractor";
+  return {
+    onboarding: [
+      {
+        key: "documents",
+        title: contractor
+          ? "Potwierdź dokumenty współpracy konsultanta"
+          : "Potwierdź dokumenty pracownika",
+        required: true,
+        offsetDays: contractor ? -3 : -1,
+        dependsOn: [],
+        assigneeRole: "hr",
+        kind: "work",
+        requirementKeys: ["documents"],
+      },
+      {
+        key: "equipment",
+        title: contractor
+          ? "Przygotuj uzgodniony sprzęt konsultanta"
+          : "Przygotuj sprzęt pracownika",
+        required: true,
+        offsetDays: contractor ? -2 : -1,
+        dependsOn: [],
+        assigneeRole: "it",
+        kind: "work",
+        requirementKeys: ["equipment"],
+      },
+      {
+        key: "access",
+        title: contractor
+          ? "Potwierdź uzgodnione dostępy konsultanta"
+          : "Potwierdź wymagane dostępy pracownika",
+        required: true,
+        offsetDays: 0,
+        dependsOn: ["documents"],
+        assigneeRole: "it",
+        kind: "attestation",
+        requirementKeys: ["access"],
+      },
+      {
+        key: "readiness",
+        title: contractor
+          ? "Oceń gotowość konsultanta do współpracy"
+          : "Oceń gotowość pracownika do rozpoczęcia",
+        required: true,
+        offsetDays: 0,
+        dependsOn: ["documents", "equipment", "access"],
+        assigneeRole: "manager",
+        kind: "decision",
+        requirementKeys: ["documents", "equipment", "access"],
+      },
+    ],
+    offboarding: [
+      {
+        key: "handover",
+        title: "Przekaż obowiązki i materiały",
+        required: true,
+        offsetDays: contractor ? -3 : -1,
+        dependsOn: [],
+        assigneeRole: "manager",
+        kind: "work",
+        requirementKeys: [],
+      },
+      {
+        key: "resources",
+        title: "Rozlicz sprzęt i potwierdź cofnięcie dostępów",
+        required: true,
+        offsetDays: 0,
+        dependsOn: [],
+        assigneeRole: "it",
+        kind: "attestation",
+        requirementKeys: [],
+      },
+      {
+        key: "closure",
+        title: contractor
+          ? "Oceń zakończenie współpracy konsultanta"
+          : "Oceń zakończenie zatrudnienia",
+        required: true,
+        offsetDays: 0,
+        dependsOn: ["handover", "resources"],
+        assigneeRole: "hr",
+        kind: "decision",
+        requirementKeys: [],
+      },
+    ],
+  };
+}
 export const documentSourceSchema = z
   .object({
     module: z.enum([
@@ -63,6 +229,7 @@ export const createDataSchemas = {
     .strict(),
   cases: z
     .object({
+      requirements: caseRequirementDefinitionsSchema.optional(),
       caseType: z.enum([
         "general",
         "onboarding",
@@ -200,20 +367,90 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         "Podaj czas albo koszt",
       ),
     revise: z
-      .object({ ...base, brief: text, acceptanceCriteria: text, reason: text })
+      .object({
+        ...base,
+        brief: text,
+        acceptanceCriteria: text,
+        reason: text,
+        dueDate: date.optional(),
+        startDate: date.optional(),
+        ownerPrincipalId: principalIdSchema.optional(),
+        requirements: caseRequirementDefinitionsSchema.optional(),
+      })
       .strict(),
     addTask: z
       .object({
         ...base,
         title: short,
         assigneeId: id.optional(),
+        assigneePrincipalId: principalIdSchema.nullable().optional(),
+        profileVersion: z.number().int().min(0).optional(),
+        assigneeRole: taskRoleSchema.optional(),
+        kind: taskKindSchema,
         required: z.boolean(),
         dueDate: date.optional(),
         dependsOn: z.array(id).max(50).optional(),
       })
       .strict(),
     completeTask: z
-      .object({ ...base, taskId: id, evidenceNote: text, humanConfirmed: yes })
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().min(1),
+        evidenceNote: text,
+        humanConfirmed: yes,
+      })
+      .strict(),
+    acceptTask: z
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().min(1),
+        humanConfirmed: yes,
+      })
+      .strict(),
+    declineTask: z
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().min(1),
+        reason: text,
+        humanConfirmed: yes,
+      })
+      .strict(),
+    transferTask: z
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().min(1),
+        assigneePrincipalId: principalIdSchema,
+        reason: text,
+        humanConfirmed: yes,
+      })
+      .strict(),
+    cancelTask: z
+      .object({
+        ...base,
+        taskId: id,
+        expectedTaskVersion: z.number().int().min(1),
+        reason: text,
+        humanConfirmed: yes,
+      })
+      .strict(),
+    bindEvidence: z
+      .object({
+        ...base,
+        requirementId: id,
+        sourceModule: z.enum([
+          "assets",
+          "documents",
+          "licenses",
+          "purchases",
+          "it",
+        ]),
+        sourceId: id,
+        sourceVersion: z.number().int().min(1),
+      })
       .strict(),
     addEvidence: z
       .object({
@@ -530,7 +767,12 @@ const actionLabels: Record<string, string> = {
   revise: "Utwórz nową rewizję",
   addTask: "Dodaj zadanie człowieka",
   completeTask: "Potwierdź wykonanie zadania",
+  acceptTask: "Przyjmij zadanie",
+  declineTask: "Odmów przyjęcia zadania",
+  transferTask: "Przekaż zadanie do przyjęcia",
+  cancelTask: "Anuluj zadanie",
   addEvidence: "Dodaj dowód człowieka",
+  bindEvidence: "Powiąż dowód wymagania",
   addWorklog: "Zarejestruj czas lub koszt",
   submit: "Przekaż do odbioru",
   accept: "Decyzja odbioru",
@@ -580,6 +822,10 @@ const fieldLabels: Record<string, string> = {
   personId: "ID osoby",
   ownerId: "ID właściciela",
   assigneeId: "ID wykonawcy",
+  assigneePrincipalId: "Konto wykonawcy",
+  ownerPrincipalId: "Konto właściciela sprawy",
+  assigneeRole: "Odpowiedzialność w procesie",
+  kind: "Rodzaj zadania",
   taskId: "ID zadania",
   employmentKind: "Rodzaj współpracy",
   startDate: "Data rozpoczęcia",
@@ -630,7 +876,13 @@ function actionFields(schema: z.ZodType): WorkspaceField[] {
   };
   return Object.entries(json.properties ?? {})
     .filter(
-      ([key]) => !["id", "expectedVersion", "profileVersion"].includes(key),
+      ([key]) =>
+        ![
+          "id",
+          "expectedVersion",
+          "expectedTaskVersion",
+          "profileVersion",
+        ].includes(key),
     )
     .map(([key, value]) =>
       f(
