@@ -37,3 +37,5 @@ jobs:
       - run: npm run build
       - name: Standalone recovery demonstration
         run: npm run demo
+      - name: Nine-competency operational demonstration
+        run: npm run demo:workspace

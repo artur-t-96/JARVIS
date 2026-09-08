@@ -1,4 +1,4 @@
-# JARVIS Core v0.1
+# Architektura JARVIS lokalnie
 
 Rdzeń prowadzi zatwierdzony plan przez dozwolone narzędzia, trwałe oczekiwania,
 ponowienia i niezależną weryfikację. Model językowy może proponować plan, ale nie
@@ -41,9 +41,7 @@ obiecuje wykonania dokładnie raz przez dowolne narzędzie: potrzebne jest wspar
 idempotencji lub uzgadniania stanu po stronie systemu docelowego. Sam lease
 chroni stan silnika, ale nie cofa skutku wykonanego przez zewnętrzny system.
 
-W przyszłej integracji sprawa biznesowa i decyzja odbioru pozostają w systemie
-domenowym. Lokalna zgoda v0.1 autoryzuje operację testową; nie jest odbiorem
-usługi przez klienta ani zgodą na rozliczenie.
+Sprawa biznesowa i decyzja odbioru należą do lokalnego WorkspaceStore w operations.sqlite. Core w jarvis.sqlite przechowuje wyłącznie wykonania. Lokalna zgoda autoryzuje konkretną operację; odbiór zakresu oraz przygotowanie pakietu do rozliczenia są osobnymi operacjami domenowymi.
 
 ## Co sprawdzają testy
 
@@ -82,3 +80,19 @@ Wersję SQLite sprawdza się wewnątrz używanego runtime Node, nie wyłącznie
 systemowym CLI. Poprawka błędu WAL-reset jest dostępna od 3.51.3 oraz w
 backportach 3.44.6 i 3.50.7. Źródło:
 [SQLite — WAL-reset bug](https://sqlite.org/wal.html#walresetbug).
+
+## Warstwy aplikacji
+
+`WorkspaceStore` posiada rekordy domenowe, wersje, współprace, zadania człowieka, alokacje, dokumenty, dowody, worklog i odbiór. Każda komenda zapisuje wynik, receipt, audyt i outbox atomowo w swojej bazie. Core zapisuje wynik osobno i po awarii uzgadnia go z niezależnym ledgerem modułu.
+
+`Conversations` zapisuje prywatną rozmowę i szkice w assistant.sqlite. Zmiana ról/obszarów unieważnia dostęp do starej rozmowy, aby jej kontekst nie przekroczył aktualnych uprawnień. Model tworzy tylko plany z rejestru. Bounded-role operator może czytać swój plan z nierozwiązanymi odwołaniami tylko przy tej samej migawce uprawnień; rozwiązane argumenty zawsze przechodzą kontrolę danych.
+
+`InitiativeStore` posiada profil firmy i projekcje problemów; nie zmienia rekordów domenowych w ramach skanowania. Zmiana profilu, wyciszenie i decyzje są narzędziami Core. Szablon lifecycle zostaje przypięty do planu przed hashowaniem, także przy odwołaniach do poprzedniego kroku; sprawa zachowuje migawkę szablonu.
+
+`Accounts` trzyma hashe haseł i sesji w wyłączonej z backupu bazie. `Diagnostics` zbiera wyłącznie dozwolone pola i lokalne metryki. `LocalLaboratory` wystawia własny, tokenowany HTTP na losowym loopback porcie i nie przyjmuje URL obcego systemu. `VoiceService` przyjmuje ograniczony WAV i wywołuje lokalny proces bez powłoki i odziedziczonych sekretów.
+
+Panel w web/ jest kompilowany Vite do dist/web i serwowany przez Fastify. Żadne dane w LocalStorage nie autoryzują operacji. Cookies kont są HttpOnly/SameSite=Strict; API bearer zachowuje istniejący kontrakt.
+
+## Rozszerzenia rejestru
+
+Narzędzie deklaruje stabilne id, wersję, schemat wejścia, obszary danych, rodzaj skutku, recovery i niezależną weryfikację. Dodanie lub zmiana kodu rozszerzenia wymaga przeglądu i wydania nowej wersji. Runtime nie pobiera ani nie uruchamia pakietów zaproponowanych przez model. Plan przypina wersje narzędzi i polityki; niezgodność blokuje wykonanie. Adaptery innych systemów należy dołączyć oddzielnie dopiero po kontraktowym teście i świadomym uruchomieniu.

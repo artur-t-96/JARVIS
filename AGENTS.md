@@ -1,8 +1,9 @@
 # JARVIS working agreement
 
+- Treat `docs/vision.md` as the product reference and update `docs/coverage.md` with verified evidence. All nine competencies remain the final scope.
 - Change only JARVIS. Do not modify other applications, databases, credentials or deployments as part of this project without explicit instruction.
 - Use Node 22.23.0 (`.nvmrc`) and npm. No local Docker.
-- Main source is `src/`; the Polish operations console is `public/`.
+- Main backend source is `src/`; the Polish React console is `web/`, built to `dist/web/`. `public/` retains the v0.1 fallback.
 - Relevant gates: `npm run format:check`, `npm run check`, `npm run demo`.
 - Keep SQLite state, access tokens and provider secrets outside Git. `.data/` and `.env*` are ignored.
 - Core owns executions, not domain data or commercial acceptance. Tools are a closed registry; the planner never grants authority.

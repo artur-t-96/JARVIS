@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { resolve } from "node:path";
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { timingSafeEqual } from "node:crypto";
 import { DomainError, type Policy, type Principal } from "./contracts.js";
 
@@ -9,6 +9,7 @@ const principalSchema = z
     id: z.string().min(1).max(100),
     tenantId: z.string().min(1).max(100),
     roles: z.array(z.enum(["operator", "approver", "viewer"])).min(1),
+    scopes: z.array(z.string()).optional(),
   })
   .strict();
 const policySchema = z
@@ -33,7 +34,7 @@ export interface AppConfig {
   host: string;
   port: number;
   dataDir: string;
-  mode: "local" | "authenticated";
+  mode: "local" | "authenticated" | "accounts";
   principals: Principal[];
   policies: Policy[];
   tokens: Map<string, Principal>;
@@ -41,13 +42,13 @@ export interface AppConfig {
 }
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const mode = z
-    .enum(["local", "authenticated"])
+    .enum(["local", "authenticated", "accounts"])
     .parse(env.JARVIS_MODE ?? "local");
   const host = env.HOST ?? "127.0.0.1";
   const port = Number(env.PORT ?? 4310);
   if (!Number.isInteger(port) || port < 1 || port > 65535)
     throw new Error("Invalid PORT");
-  if (mode === "local" && !["127.0.0.1", "::1"].includes(host))
+  if (mode !== "authenticated" && !["127.0.0.1", "::1"].includes(host))
     throw new Error("Local mode must bind a loopback address");
   const plannerKind = env.JARVIS_PLANNER ?? "demo";
   if (plannerKind !== "demo" && plannerKind !== "anthropic")
@@ -59,6 +60,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       throw new Error("Authenticated mode requires JARVIS_AUTH_FILE");
     let auth: z.infer<typeof authSchema>;
     try {
+      const stat = statSync(env.JARVIS_AUTH_FILE);
+      if ((stat.mode & 0o077) !== 0)
+        throw new Error("Auth file permissions must be private");
       auth = authSchema.parse(
         JSON.parse(readFileSync(env.JARVIS_AUTH_FILE, "utf8")),
       );
@@ -86,6 +90,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
         id: "local-operator",
         tenantId: "jarvis-lab",
         roles: ["operator", "approver", "viewer"],
+        scopes: ["*"],
       },
     ];
     policies = [
@@ -104,7 +109,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port,
     dataDir: resolve(env.JARVIS_DATA_DIR ?? ".data"),
     mode,
-    principals,
+    principals: mode === "accounts" ? [] : principals,
     policies,
     tokens,
     plannerKind,

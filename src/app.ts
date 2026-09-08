@@ -1,15 +1,23 @@
 import Fastify, { type FastifyRequest } from "fastify";
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 import { z, ZodError } from "zod";
 import { authenticate, type AppConfig } from "./config.js";
 import {
   DomainError,
+  hasToolAccess,
   type Planner,
   type Principal,
   type ToolDefinition,
 } from "./contracts.js";
 import { Engine } from "./engine.js";
+import { Accounts } from "./accounts.js";
+import { WorkspaceStore } from "./workspace.js";
+import { Conversations } from "./assistant.js";
+import { Diagnostics } from "./diagnostics.js";
+import { InitiativeStore } from "./initiative.js";
+import { VoiceService } from "./voice.js";
+import { registerWorkspaceApi } from "./workspace-api.js";
 
 export interface AppOptions {
   engine: Engine;
@@ -18,6 +26,12 @@ export interface AppOptions {
   tools: ToolDefinition[];
   version?: string;
   publicDir?: string;
+  accounts?: Accounts;
+  workspace?: WorkspaceStore;
+  conversations?: Conversations;
+  diagnostics?: Diagnostics;
+  voice?: VoiceService;
+  initiatives?: InitiativeStore;
 }
 const createSchema = z
   .object({
@@ -39,7 +53,15 @@ export function createApp({
   planner,
   tools,
   version = "development",
-  publicDir = resolve("public"),
+  publicDir = resolve(
+    existsSync("dist/web/index.html") ? "dist/web" : "public",
+  ),
+  accounts,
+  workspace,
+  conversations,
+  diagnostics,
+  voice,
+  initiatives,
 }: AppOptions) {
   const app = Fastify({
     logger: false,
@@ -47,8 +69,13 @@ export function createApp({
     requestTimeout: 30_000,
     trustProxy: false,
   });
-  const principal = (req: FastifyRequest): Principal =>
-    authenticate(config, req.headers.authorization);
+  const principal = (req: FastifyRequest): Principal => {
+    if (config.mode === "accounts" && accounts) {
+      engine.setPrincipals(accounts.principals());
+      return accounts.authenticate(req.headers.cookie);
+    }
+    return authenticate(config, req.headers.authorization);
+  };
   const runId = (req: FastifyRequest) =>
     z.object({ id: z.string().uuid() }).parse(req.params).id;
   const counts = new Map<string, { started: number; count: number }>();
@@ -62,7 +89,7 @@ export function createApp({
     );
     reply.header("Cache-Control", "no-store");
     const host = req.headers.host ?? "";
-    if (config.mode === "local") {
+    if (config.mode !== "authenticated") {
       const remote = req.ip;
       if (!["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(remote))
         throw new DomainError(
@@ -122,8 +149,26 @@ export function createApp({
           );
       }
     }
-    if (req.url.startsWith("/api/") && req.url !== "/api/health")
+    if (
+      req.url.startsWith("/api/") &&
+      ![
+        "/api/health",
+        "/api/live",
+        "/api/ready",
+        "/api/auth/status",
+        "/api/auth/login",
+      ].includes(req.url.split("?")[0]!)
+    )
       principal(req);
+  });
+  app.addHook("onResponse", async (req, reply) => {
+    diagnostics?.recordRequest({
+      method: req.method,
+      route: req.routeOptions.url ?? "unknown",
+      statusCode: reply.statusCode,
+      durationMs: reply.elapsedTime,
+      requestId: req.id,
+    });
   });
   app.setErrorHandler((error, _req, reply) => {
     if (error instanceof DomainError)
@@ -160,6 +205,66 @@ export function createApp({
       });
     }
   });
+  app.get("/api/live", async () => ({ status: "alive", version }));
+  app.get("/api/ready", async (_req, reply) => {
+    let healthy = true;
+    try {
+      engine.health();
+      workspace?.health();
+      initiatives?.health();
+    } catch {
+      healthy = false;
+    }
+    const state = diagnostics?.snapshot({
+      databaseHealthy: healthy,
+      queue: engine.queue(),
+    });
+    return reply
+      .code((state?.ready ?? healthy) ? 200 : 503)
+      .send({ ready: state?.ready ?? healthy, version });
+  });
+  app.get("/api/auth/status", async (req) => {
+    let authenticated = false;
+    try {
+      principal(req);
+      authenticated = true;
+    } catch {}
+    return {
+      mode: config.mode,
+      authenticated,
+      setupRequired: config.mode === "accounts" && !accounts?.count(),
+    };
+  });
+  app.post("/api/auth/login", async (req, reply) => {
+    if (config.mode !== "accounts" || !accounts)
+      throw new DomainError(
+        "AUTH_MODE",
+        "Logowanie kontem nie jest włączone.",
+        400,
+      );
+    const input = z
+      .object({
+        username: z.string().trim().min(1).max(100),
+        password: z.string().min(1).max(256),
+      })
+      .strict()
+      .parse(req.body);
+    const result = accounts.login(input.username, input.password);
+    reply.header(
+      "Set-Cookie",
+      `jarvis_session=${result.token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=28800${req.protocol === "https" ? "; Secure" : ""}`,
+    );
+    return { principal: result.principal };
+  });
+  app.post("/api/auth/logout", async (req, reply) => {
+    emptySchema.parse(req.body);
+    accounts?.logout(req.headers.cookie);
+    reply.header(
+      "Set-Cookie",
+      "jarvis_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0",
+    );
+    return { ok: true };
+  });
   app.get("/api/context", async (req) => {
     const actor = principal(req);
     const policy = config.policies.find((p) => p.tenantId === actor.tenantId)!;
@@ -169,7 +274,9 @@ export function createApp({
       planner: { kind: planner.kind },
       mode: config.mode,
       tools: tools
-        .filter((t) => policy.allowedTools.includes(t.id))
+        .filter(
+          (t) => policy.allowedTools.includes(t.id) && hasToolAccess(actor, t),
+        )
         .map((t) => ({
           id: t.id,
           description: t.description,
@@ -178,7 +285,15 @@ export function createApp({
     };
   });
   app.get("/api/runs", async (req) => ({
-    runs: engine.listRuns(principal(req)),
+    runs: engine.listRuns(
+      principal(req),
+      z
+        .object({
+          limit: z.coerce.number().int().min(1).max(100).optional(),
+          offset: z.coerce.number().int().min(0).max(100000).optional(),
+        })
+        .parse(req.query),
+    ),
   }));
   app.get("/api/runs/:id", async (req) => ({
     run: engine.getRun(principal(req), runId(req)),
@@ -214,7 +329,9 @@ export function createApp({
       )!;
       const plan = await planner.plan(
         request,
-        tools.filter((t) => policy.allowedTools.includes(t.id)),
+        tools.filter(
+          (t) => policy.allowedTools.includes(t.id) && hasToolAccess(actor, t),
+        ),
       );
       return reply.code(201).send({
         run:
@@ -244,6 +361,46 @@ export function createApp({
     emptySchema.parse(req.body);
     return { run: engine.retry(principal(req), runId(req)) };
   });
+  if (workspace)
+    registerWorkspaceApi(app, {
+      workspace,
+      engine,
+      tools,
+      principal,
+      conversations,
+      diagnostics,
+      initiatives,
+      dataDir: config.dataDir === "/unused" ? undefined : config.dataDir,
+    });
+  app.get(
+    "/api/voice/status",
+    async () =>
+      voice?.status() ?? {
+        available: false,
+        reason: "Moduł głosowy nie jest skonfigurowany.",
+      },
+  );
+  app.post(
+    "/api/voice/transcribe",
+    { bodyLimit: 3 * 1024 * 1024 },
+    async (req) => {
+      const actor = principal(req);
+      if (!actor.roles.includes("operator"))
+        throw new DomainError("FORBIDDEN", "Brak uprawnienia do rozmowy.", 403);
+      if (!voice)
+        throw new DomainError(
+          "VOICE_UNAVAILABLE",
+          "Moduł głosowy niedostępny.",
+          503,
+        );
+      return voice.transcribe(
+        z
+          .object({ audio: z.string(), mimeType: z.string() })
+          .strict()
+          .parse(req.body),
+      );
+    },
+  );
   const assets = [
     ["/", "index.html", "text/html; charset=utf-8"],
     ["/app.js", "app.js", "text/javascript; charset=utf-8"],
@@ -253,5 +410,23 @@ export function createApp({
     app.get(route, async (_req, reply) =>
       reply.type(contentType).send(readFileSync(resolve(publicDir, file))),
     );
+  const bundleDir = resolve(publicDir, "assets");
+  if (existsSync(bundleDir))
+    for (const file of readdirSync(bundleDir)) {
+      if (!/^[a-zA-Z0-9_.-]+\.(js|css|svg|woff2)$/.test(file)) continue;
+      app.get(`/assets/${file}`, async (_req, reply) =>
+        reply
+          .type(
+            file.endsWith(".js")
+              ? "text/javascript"
+              : file.endsWith(".css")
+                ? "text/css"
+                : file.endsWith(".svg")
+                  ? "image/svg+xml"
+                  : "font/woff2",
+          )
+          .send(readFileSync(resolve(bundleDir, file))),
+      );
+    }
   return app;
 }

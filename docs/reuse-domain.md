@@ -1,0 +1,31 @@
+# Reguły domenowe i pochodzenie
+
+Warstwa `src/workspace.ts` i `src/workspace-models.ts` jest nową implementacją TypeScript/SQLite w JARVIS. Nie kopiuje baz, danych osób, konfiguracji, tokenów, wysyłek ani połączeń produkcyjnych. Własne repozytoria były czytane wyłącznie jako materiał projektowy; poniższe odwołania oznaczają inspirację konkretnymi regułami, a nie skopiowany moduł.
+
+## Odczytane wzorce
+
+- [NEXUS: polecenia procesu rekrutacji](https://github.com/artur-t-96/Nexus/blob/42ba51875efe788cefcd50ef82050b9f9e132fdd/backend/app/services/recruitment_process_commands.py): jawne przejścia procesu, zapis decyzji i weryfikacji oraz porządek blokowania rekordów. JARVIS ma własny automat aplikacji, a rozpoczęcie współpracy wymaga wskazanej osoby, zgodnego rodzaju współpracy i jawnej decyzji uwierzytelnionego człowieka. Etap `hired` nie oznacza automatycznie aktywnego pracownika ani rozpoczęcia zlecenia klienta.
+- [COMPASS: modele lifecycle](https://github.com/artur-t-96/compass/blob/1ea2d9908cc6a62c46230fe58e8ce2c2e50f5241/COMPASS/lib/types/lifecycle.ts): etapy onboarding/active/offboarding/exited, właściciele, wymagane zadania i terminy. JARVIS tworzy własne lokalne sprawy i zadania zależne dla konkretnego okresu współpracy. Nie uruchamia wiadomości powitalnych, kont, LMS ani efektów COMPASS.
+- [COMPASS: okna zatrudnienia](https://github.com/artur-t-96/compass/blob/1ea2d9908cc6a62c46230fe58e8ce2c2e50f5241/COMPASS/lib/hr/employment-window.ts): historia współpracy jest osią czasu, a nie jedną flagą. JARVIS zapisuje osobne okresy, zabrania nakładania okresów i odróżnia aktywację od przyszłej daty startu. Nie przenosi miesięcznych reguł płacowych ani klasyfikacji ról produkcyjnych.
+
+Identyfikatory powyżej są odczytanymi lokalnymi migawkami `origin/main`, nie dowodem aktualnego wdrożenia tych aplikacji. Żaden kod nie był uruchamiany w tych repozytoriach podczas implementacji domen JARVIS.
+
+## Gwarancje lokalnej implementacji
+
+- Dziewięć kompetencji ma zamknięte schematy Zod i dedykowane przejścia. Stanów, tożsamości wykonawcy, danych organizacji, wersji dokumentu ani decyzji nie można wprowadzić przez dowolny JSON aktualizacji.
+- Osoby i okresy współpracy, zadania, dowody, odbiory, alokacje sprzętu, stanowiska licencji oraz wersje dokumentów mają osobne trwałe tabele. Numer wersji encji zabezpiecza polecenia przed zapisem na nieaktualnym stanie. Rezerwacje sprzętu i przydziały stanowisk mają dodatkowe ograniczenia bazy.
+- Pojedyncza transakcja SQLite zapisuje wszystkie zmienione encje i ich wersje, audyt, potwierdzenie polecenia oraz lokalny outbox. Klucz polecenia jest ograniczony organizacją i porównywany z kanonicznym hashem argumentów. Weryfikacja ponownie czyta potwierdzenie, niezmienne wersje oraz rzeczywistą bieżącą treść rekordu. Outbox jest rejestrem zdarzeń lokalnych, bez wysyłki do innych systemów.
+- Każdy publiczny zapis jest narzędziem Core wymagającym jego kontroli uprawnień i zatwierdzenia. Warstwa domenowa nie wystawia oddzielnego API mutacji. Narzędzia złożone deklarują dodatkowe zakresy; dynamiczne sprawdzenie używa zaufanej organizacji i rzeczywistego rodzaju wskazanego rekordu. Sprawy HR i dokumenty sklasyfikowane jako `people` nie są dostępne użytkownikowi mającemu wyłącznie IT, sprawy i dokumenty.
+- Dowód wprowadzony przez człowieka jest oznaczony jako zgłoszenie lub poświadczenie. Potwierdzenie dostawcy nie jest dostawą, oferta nie jest automatycznie wysłana, przydział stanowiska nie nadaje konta w usłudze, a wpis o działaniu IT nie wykonuje tego działania. Fizyczny odbiór i zakończenie pracy wymagają jawnego poświadczenia.
+
+## Granice i dalsze rozszerzenia
+
+To lokalne procesy operacyjne: nie implementują księgowości, płac, podpisu kwalifikowanego, prawnej walidacji umów, poczty, skanowania sieci ani dostępu do produkcyjnych systemów. Treść dokumentów pozostaje wersjonowanym tekstem z referencjami do sprawdzonych wersji źródeł; referencja dowodu jest opisem, bez automatycznego odczytu plików. Zmiana klasyfikacji dostępu dokumentu jest celowo niedostępna w zwykłej aktualizacji; osobna przyszła operacja musi wymagać obu obszarów dostępu.
+
+Zadania lifecycle korzystają z zatwierdzonego profilu firmy: plan przypina numer wersji, a sprawa zachowuje migawkę szablonu, przesunięcia terminów i zależności. Zmiana wersji przed wykonaniem lub wznowieniem wymaga nowego planu. Bez podłączonego profilu pozostaje lokalny zestaw trzech kroków używany przez starsze testy; nie należy przedstawiać go jako skopiowanej procedury konkretnej organizacji. Testy używają wyłącznie syntetycznych danych i tymczasowych baz.
+
+Dowody techniczne: `tests/workspace.test.ts` obejmuje wszystkie kompetencje, dwa tenanty, odtworzenie po ponownym otwarciu bazy, idempotencję, niezależną weryfikację i wykrycie zmiany treści poza rejestrem, dwóch współzawodniczących autorów rezerwacji, zależności zadań, odbiór rewizji, rozliczenie odejścia, limit stanowisk, częściową dostawę, jawne zatrudnienie i przekazanie oferty do realizacji. Test dwóch połączeń SQLite nie zastępuje testu zabicia osobnego procesu w trakcie wykonania Core.
+
+Dodatkowe dowody: `tests/workspace-api.test.ts` wykonuje wszystkie kompetencje przez HTTP, Core i osobne konto zatwierdzające. `tests/scope-recovery.test.ts` obejmuje odebranie konta przed wznowieniem i zakresy uprawnień planów z referencjami; `tests/assistant.test.ts` sprawdza izolację rozmów i minimalizację kontekstu bez prawdziwego połączenia z dostawcą modelu. `tests/operations-recovery.test.ts` zabija osobny proces po zatwierdzonym zapisie w `operations.sqlite` i przed zapisaniem wyniku w Core, następnie potwierdza jeden efekt, jeden audyt i jeden wpis outbox. `scripts/workspace-demo.ts` przechodzi 57 jawnie zatwierdzonych, zweryfikowanych poleceń na tymczasowych danych dziewięciu kompetencji.
+
+Rozliczenie sprawy to wyłącznie szkic oparty na zadeklarowanych minutach i kosztach w osobnych walutach. Wpisy pracy są niezmienne w ramach rewizji; zakończony odbiór blokuje dopisywanie, a nowa rewizja zaczyna nowe zestawienie. Szkic nie księguje kosztów ani nie wykonuje płatności.
