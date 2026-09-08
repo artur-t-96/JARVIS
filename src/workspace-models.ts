@@ -36,6 +36,38 @@ const money = z.number().finite().min(0).max(1_000_000_000);
 const integer = z.number().int().min(1).max(100_000);
 const yes = z.literal(true);
 export const principalIdSchema = z.string().trim().min(1).max(200);
+export const engagementRefSchema = z
+  .object({ module: z.enum(["sales", "cases"]), id })
+  .strict();
+export type EngagementRef = z.infer<typeof engagementRefSchema>;
+export const employmentPolicySchema = z
+  .object({
+    mode: z.enum(["single_open", "parallel_projects"]),
+    maxConcurrent: z.number().int().min(1).max(20),
+    allowInternalOverlap: z.literal(false),
+  })
+  .strict()
+  .refine(
+    (policy) => policy.mode !== "single_open" || policy.maxConcurrent === 1,
+    "Pojedyncza współpraca wymaga limitu 1.",
+  );
+export type EmploymentPolicy = z.infer<typeof employmentPolicySchema>;
+export const defaultEmploymentPolicy: EmploymentPolicy = {
+  mode: "single_open",
+  maxConcurrent: 1,
+  allowInternalOverlap: false,
+};
+const episodeInput = {
+  employmentEpisodeId: id,
+  expectedEpisodeVersion: z.number().int().positive(),
+};
+const resourceEpisodeInput = {
+  personId: id,
+  ...episodeInput,
+  caseId: id.optional(),
+  profileVersion: z.number().int().min(0).optional(),
+};
+
 export const taskKindSchema = z.enum([
   "information",
   "decision",
@@ -327,16 +359,20 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
       .object({
         ...base,
         employmentKind: z.enum(["internal", "contractor"]),
+        engagementRef: engagementRefSchema.optional(),
         profileVersion: z.number().int().min(0).optional(),
         startDate: date,
         role: short,
         humanDecision: yes,
       })
       .strict(),
-    activate: z.object({ ...base, humanDecision: yes }).strict(),
+    activate: z
+      .object({ ...base, ...episodeInput, humanDecision: yes })
+      .strict(),
     beginOffboarding: z
       .object({
         ...base,
+        ...episodeInput,
         profileVersion: z.number().int().min(0).optional(),
         endDate: date,
         reason: text,
@@ -344,7 +380,13 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
       })
       .strict(),
     endEmployment: z
-      .object({ ...base, endDate: date, reason: text, humanDecision: yes })
+      .object({
+        ...base,
+        ...episodeInput,
+        endDate: date,
+        reason: text,
+        humanDecision: yes,
+      })
       .strict(),
   },
   cases: {
@@ -374,6 +416,8 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         reason: text,
         dueDate: date.optional(),
         startDate: date.optional(),
+        profileVersion: z.number().int().min(0).optional(),
+        expectedEpisodeVersion: z.number().int().positive().optional(),
         ownerPrincipalId: principalIdSchema.optional(),
         requirements: caseRequirementDefinitionsSchema.optional(),
       })
@@ -474,12 +518,12 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
   },
   assets: {
     reserve: z
-      .object({ ...base, personId: id, purpose: text, until: date })
+      .object({ ...base, ...resourceEpisodeInput, purpose: text, until: date })
       .strict(),
     issue: z
       .object({
         ...base,
-        personId: id,
+        ...resourceEpisodeInput,
         issuedOn: date,
         handoverNote: text,
         humanConfirmed: yes,
@@ -523,8 +567,10 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     deactivate: z.object({ ...base, reason: text }).strict(),
   },
   licenses: {
-    assign: z.object({ ...base, personId: id, note: text }).strict(),
-    revoke: z.object({ ...base, personId: id, reason: text }).strict(),
+    assign: z.object({ ...base, ...resourceEpisodeInput, note: text }).strict(),
+    revoke: z
+      .object({ ...base, ...resourceEpisodeInput, reason: text })
+      .strict(),
     resize: z.object({ ...base, totalSeats: integer }).strict(),
     renew: z
       .object({
@@ -575,6 +621,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     hire: z
       .object({
         ...base,
+        engagementRef: engagementRefSchema.optional(),
         profileVersion: z.number().int().min(0).optional(),
         startDate: date,
         role: short,
@@ -824,6 +871,10 @@ const fieldLabels: Record<string, string> = {
   assigneeId: "ID wykonawcy",
   assigneePrincipalId: "Konto wykonawcy",
   ownerPrincipalId: "Konto właściciela sprawy",
+  employmentEpisodeId: "Okres współpracy",
+  expectedEpisodeVersion: "Wersja okresu współpracy",
+  engagementRef: "Uzgodniony projekt lub umowa",
+  caseId: "Powiązana sprawa okresu",
   assigneeRole: "Odpowiedzialność w procesie",
   kind: "Rodzaj zadania",
   taskId: "ID zadania",

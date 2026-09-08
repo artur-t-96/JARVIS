@@ -23,30 +23,33 @@ const casesOnly: Principal = {
   id: "cases-only",
   scopes: ["cases"],
 };
-const oldTaskSql = `CREATE TABLE ops_tasks(tenant_id TEXT NOT NULL,id TEXT NOT NULL,case_id TEXT NOT NULL,scope_revision INTEGER NOT NULL,title TEXT NOT NULL,assignee_id TEXT,required INTEGER NOT NULL CHECK(required IN(0,1)),status TEXT NOT NULL CHECK(status IN('open','completed')),completed_by TEXT,completed_at TEXT,evidence_note TEXT,due_date TEXT,depends_on_json TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,case_id) REFERENCES ops_entities(tenant_id,id));`;
-
-/** Reconstruct the v2 shape on an empty temporary database, then seed genuine
- * legacy columns. No migration function under test runs on the seeded records. */
+// Frozen genuine operations v2 schema. Do not derive this fixture from the current
+// constructor or reverse future columns: migrations must run on legacy data once.
+const legacyV2Sql = `
+PRAGMA foreign_keys=ON;
+CREATE TABLE schema_versions_operations(version INTEGER PRIMARY KEY,applied_at TEXT NOT NULL);
+INSERT INTO schema_versions_operations VALUES(1,'2026-09-01T00:00:00Z'),(2,'2026-09-01T00:00:00Z');
+   CREATE TABLE ops_entities(tenant_id TEXT NOT NULL,id TEXT NOT NULL,module TEXT NOT NULL,title TEXT NOT NULL,status TEXT NOT NULL,version INTEGER NOT NULL,data_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(tenant_id,id));
+   CREATE INDEX ops_entity_module ON ops_entities(tenant_id,module,updated_at);
+   CREATE TABLE ops_entity_versions(tenant_id TEXT NOT NULL,entity_id TEXT NOT NULL,version INTEGER NOT NULL,snapshot_json TEXT NOT NULL,snapshot_hash TEXT NOT NULL,PRIMARY KEY(tenant_id,entity_id,version),FOREIGN KEY(tenant_id,entity_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE TABLE ops_commands(tenant_id TEXT NOT NULL,operation_key TEXT NOT NULL,tool_id TEXT NOT NULL,input_hash TEXT NOT NULL,receipt_json TEXT NOT NULL,changes_json TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(tenant_id,operation_key));
+   CREATE TABLE ops_audit(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,operation_key TEXT NOT NULL,run_id TEXT NOT NULL,step_id TEXT NOT NULL,actor_id TEXT NOT NULL,tool_id TEXT NOT NULL,entity_id TEXT NOT NULL,entity_version INTEGER NOT NULL,created_at TEXT NOT NULL);
+   CREATE TABLE ops_outbox(id TEXT PRIMARY KEY,tenant_id TEXT NOT NULL,operation_key TEXT NOT NULL,event_type TEXT NOT NULL,payload_json TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('pending','consumed')),created_at TEXT NOT NULL,UNIQUE(tenant_id,operation_key));
+   CREATE TABLE ops_employment(tenant_id TEXT NOT NULL,id TEXT NOT NULL,person_id TEXT NOT NULL,kind TEXT NOT NULL CHECK(kind IN ('internal','contractor')),start_date TEXT NOT NULL,end_date TEXT,status TEXT NOT NULL CHECK(status IN ('onboarding','active','offboarding','ended')),role TEXT NOT NULL,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,person_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE UNIQUE INDEX ops_one_open_employment ON ops_employment(tenant_id,person_id) WHERE status!='ended';
+   CREATE TABLE ops_tasks(tenant_id TEXT NOT NULL,id TEXT NOT NULL,case_id TEXT NOT NULL,scope_revision INTEGER NOT NULL,title TEXT NOT NULL,assignee_id TEXT,required INTEGER NOT NULL CHECK(required IN (0,1)),status TEXT NOT NULL CHECK(status IN ('open','completed')),completed_by TEXT,completed_at TEXT,evidence_note TEXT,due_date TEXT,depends_on_json TEXT NOT NULL DEFAULT '[]',PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,case_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE TABLE ops_evidence(tenant_id TEXT NOT NULL,id TEXT NOT NULL,case_id TEXT NOT NULL,scope_revision INTEGER NOT NULL,title TEXT NOT NULL,reference TEXT NOT NULL,note TEXT NOT NULL,reported_by TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,case_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE TABLE ops_acceptances(tenant_id TEXT NOT NULL,id TEXT NOT NULL,case_id TEXT NOT NULL,scope_revision INTEGER NOT NULL,decision TEXT NOT NULL CHECK(decision IN ('accepted','rejected')),note TEXT NOT NULL,decided_by TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,case_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE TABLE ops_allocations(tenant_id TEXT NOT NULL,id TEXT NOT NULL,asset_id TEXT NOT NULL,person_id TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('reserved','issued','released','returned')),reserved_until TEXT NOT NULL,issued_on TEXT,returned_on TEXT,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,asset_id) REFERENCES ops_entities(tenant_id,id),FOREIGN KEY(tenant_id,person_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE UNIQUE INDEX ops_one_active_allocation ON ops_allocations(tenant_id,asset_id) WHERE status IN ('reserved','issued');
+   CREATE TABLE ops_license_seats(tenant_id TEXT NOT NULL,id TEXT NOT NULL,license_id TEXT NOT NULL,person_id TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('assigned','revoked')),assigned_at TEXT NOT NULL,revoked_at TEXT,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,license_id) REFERENCES ops_entities(tenant_id,id),FOREIGN KEY(tenant_id,person_id) REFERENCES ops_entities(tenant_id,id));
+   CREATE UNIQUE INDEX ops_unique_seat ON ops_license_seats(tenant_id,license_id,person_id) WHERE status='assigned';
+   CREATE TABLE ops_document_versions(tenant_id TEXT NOT NULL,document_id TEXT NOT NULL,revision INTEGER NOT NULL,content TEXT NOT NULL,content_hash TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('draft','review','approved','rejected')),decided_by TEXT,decision_note TEXT,decided_at TEXT,PRIMARY KEY(tenant_id,document_id,revision),FOREIGN KEY(tenant_id,document_id) REFERENCES ops_entities(tenant_id,id));
+CREATE TABLE ops_worklogs(tenant_id TEXT NOT NULL,id TEXT NOT NULL,case_id TEXT NOT NULL,scope_revision INTEGER NOT NULL,description TEXT NOT NULL,minutes INTEGER NOT NULL CHECK(minutes>=0),performed_on TEXT NOT NULL,amount_minor INTEGER,currency TEXT,reported_by TEXT NOT NULL,approved_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,case_id) REFERENCES ops_entities(tenant_id,id));
+`;
 function v2(path: string) {
-  new WorkspaceStore(path).close();
   const db = new DatabaseSync(path);
-  db.exec(`PRAGMA foreign_keys=ON; DROP TABLE ops_task_events; DROP TABLE ops_tasks; ${oldTaskSql}
-    DROP TABLE ops_case_exceptions; DROP TABLE ops_requirement_bindings; DROP TABLE ops_case_requirements;
-    DELETE FROM schema_versions_operations WHERE version=3;`);
-  for (const column of [
-    "scope_hash",
-    "bindings_hash",
-    "bindings_json",
-    "contract_version",
-    "requested_by",
-    "approved_by",
-    "person_id",
-    "employment_episode_id",
-  ])
-    db.exec(`ALTER TABLE ops_acceptances DROP COLUMN ${column}`);
-  for (const table of ["ops_allocations", "ops_license_seats"])
-    for (const column of ["employment_episode_id", "case_id"])
-      db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`);
+  db.exec(legacyV2Sql);
   return db;
 }
 
@@ -283,7 +286,13 @@ test("v2 migration preserves legacy attestations without inventing principal, ep
             stepId: randomUUID(),
             signal: new AbortController().signal,
           },
-          { id: personId, expectedVersion: 3, humanDecision: true },
+          {
+            id: personId,
+            expectedVersion: 3,
+            employmentEpisodeId: episodeId,
+            expectedEpisodeVersion: 1,
+            humanDecision: true,
+          },
         ),
         (error: unknown) =>
           error instanceof DomainError &&
@@ -355,10 +364,10 @@ test("failed readiness migration rolls back table replacement and refuses an unk
     new WorkspaceStore(path).close();
     db = new DatabaseSync(path);
     db.prepare("INSERT INTO schema_versions_operations VALUES(?,?)").run(
-      4,
+      5,
       "2026-09-08T10:00:00Z",
     );
-    assert.throws(() => new WorkspaceStore(path), /newer than supported v3/);
+    assert.throws(() => new WorkspaceStore(path), /newer than supported v4/);
   } finally {
     db.close();
     rmSync(dir, { recursive: true, force: true });

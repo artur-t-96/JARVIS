@@ -77,10 +77,34 @@ function fixture() {
     input: JsonObject,
     tenant = "a",
   ) => {
-    const before = workspace.list(
-      principals.find((p) => p.tenantId === tenant && p.id === "operator")!,
-      module,
-    );
+    const principal = principals.find(
+      (p) => p.tenantId === tenant && p.id === "operator",
+    )!;
+    // This fixture has one open period; API clients must make the selection explicitly.
+    if (
+      (module === "people" &&
+        ["activate", "beginOffboarding", "endEmployment"].includes(action)) ||
+      (module === "assets" && ["reserve", "issue"].includes(action)) ||
+      (module === "licenses" && ["assign", "revoke"].includes(action))
+    ) {
+      const episodes = workspace
+        .listEmploymentEpisodes(
+          principal,
+          String(module === "people" ? input.id : input.personId),
+        )
+        .filter((e) => e.status !== "ended");
+      assert.equal(
+        episodes.length,
+        1,
+        "fixture must select exactly one open employment period",
+      );
+      input = {
+        employmentEpisodeId: episodes[0]!.id,
+        expectedEpisodeVersion: episodes[0]!.version,
+        ...input,
+      };
+    }
+    const before = workspace.list(principal, module);
     const created = await post(
       "/api/commands",
       {

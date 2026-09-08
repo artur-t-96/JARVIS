@@ -86,6 +86,31 @@ async function approved(toolId: string, input: JsonObject) {
   return run;
 }
 async function command(module: string, action: string, input: JsonObject) {
+  // Only this synthetic demo asserts a single open period before choosing it.
+  // Operational commands require the user's explicit period ID and version.
+  if (
+    (module === "people" &&
+      ["activate", "beginOffboarding", "endEmployment"].includes(action)) ||
+    (module === "assets" && ["reserve", "issue"].includes(action)) ||
+    (module === "licenses" && ["assign", "revoke"].includes(action))
+  ) {
+    const episodes = workspace
+      .listEmploymentEpisodes(
+        operator,
+        String(module === "people" ? input.id : input.personId),
+      )
+      .filter((e) => e.status !== "ended");
+    assert.equal(
+      episodes.length,
+      1,
+      "demo must select exactly one open employment period",
+    );
+    input = {
+      employmentEpisodeId: episodes[0]!.id,
+      expectedEpisodeVersion: episodes[0]!.version,
+      ...input,
+    };
+  }
   const run = await approved(`ops.${module}.${action}`, input);
   return workspace.get(
     operator,
@@ -143,6 +168,7 @@ try {
     quietHours,
     rules,
     processTemplates,
+    employmentPolicy,
   } = initiatives.profile(operator);
   await approved("initiatives.configure", {
     expectedVersion: 0,
@@ -152,6 +178,7 @@ try {
     quietHours,
     rules,
     processTemplates,
+    employmentPolicy,
     roleBindings: { hr: operator.id, it: operator.id, manager: operator.id },
   });
   let person = await create("people", "Osoba wewnętrzna", {

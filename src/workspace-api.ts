@@ -81,6 +81,31 @@ export function registerWorkspaceApi(
         .map((account) => ({ id: account.id, label: account.id })),
     };
   });
+  app.get("/api/people/:id/episodes", async (req) => {
+    const actor = principal(req);
+    const id = z.object({ id: z.string().uuid() }).parse(req.params).id;
+    return {
+      episodes: workspace.listEmploymentEpisodes(actor, id).map((episode) => {
+        let engagementLabel: string | undefined;
+        if (episode.engagementRef) {
+          try {
+            engagementLabel = workspace.get(
+              actor,
+              episode.engagementRef.module,
+              episode.engagementRef.id,
+            ).title;
+          } catch (error) {
+            if (
+              !(error instanceof DomainError) ||
+              ![403, 404].includes(error.statusCode)
+            )
+              throw error;
+          }
+        }
+        return { ...episode, ...(engagementLabel ? { engagementLabel } : {}) };
+      }),
+    };
+  });
   app.get("/api/tasks", async (req) => ({
     tasks: workspace.listTasks(principal(req)),
   }));
@@ -291,10 +316,12 @@ export function registerWorkspaceApi(
       ),
     }));
     app.post("/api/conversations/:id/messages", async (req) => {
-      const { message, idempotencyKey } = z
+      const { message, idempotencyKey, choiceRef, expectedDraftVersion } = z
         .object({
           message: z.string().trim().min(1).max(4000),
-          idempotencyKey: z.string().min(8).max(80),
+          idempotencyKey: z.string().regex(/^[a-zA-Z0-9_:.-]{8,128}$/),
+          choiceRef: z.string().min(1).max(240).optional(),
+          expectedDraftVersion: z.number().int().nonnegative().optional(),
         })
         .strict()
         .parse(req.body);
@@ -304,6 +331,21 @@ export function registerWorkspaceApi(
           z.object({ id: z.string().uuid() }).parse(req.params).id,
           message,
           idempotencyKey,
+          {
+            ...(choiceRef ? { choiceRef } : {}),
+            ...(expectedDraftVersion !== undefined
+              ? { expectedDraftVersion }
+              : {}),
+          },
+        ),
+      };
+    });
+    app.post("/api/conversations/:id/resume", async (req) => {
+      z.object({}).strict().parse(req.body);
+      return {
+        conversation: await conversations.resume(
+          principal(req),
+          z.object({ id: z.string().uuid() }).parse(req.params).id,
         ),
       };
     });

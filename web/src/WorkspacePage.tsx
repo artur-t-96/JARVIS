@@ -29,6 +29,19 @@ import {
   cloneRequirementDefinitions,
   type RequirementDefinition,
 } from "./RequirementEditor";
+import { EngagementSelect } from "./EngagementSelect";
+import {
+  EmploymentPeriodSelect,
+  useEmploymentPeriods,
+} from "./EmploymentPeriodSelect";
+import {
+  availableEmploymentPeriods,
+  changeCommandField,
+  employmentCaseOptions,
+  employmentPersonId,
+  requiresEmploymentPeriod,
+  selectedEmploymentInput,
+} from "./employment-periods";
 
 type FormSpec = {
   title: string;
@@ -64,7 +77,6 @@ function CommandForm({
     title: spec.dataForm ? (spec.entity?.title ?? "") : "",
     ...spec.initialValues,
   }));
-  const refs = useReferences(spec.fields, spec.entity);
   const editRequirements = module.id === "cases" && spec.action === "revise";
   const definitions = useResource<{
     readiness: { definitions?: RequirementDefinition[] };
@@ -81,6 +93,36 @@ function CommandForm({
     );
     if (loaded) setValues((current) => ({ ...current, requirements: loaded }));
   }, [definitions.data, editRequirements, requirementsEdited]);
+  const needsPeriod =
+    !spec.dataForm && requiresEmploymentPeriod(module.id, spec.action);
+  const revisesPeriodDate =
+    module.id === "cases" &&
+    spec.action === "revise" &&
+    Boolean(spec.entity?.data.employmentEpisodeId) &&
+    Boolean(values.startDate);
+  const personId = needsPeriod
+    ? employmentPersonId(module.id, spec.entity, values)
+    : revisesPeriodDate
+      ? String(spec.entity?.data.personId ?? "")
+      : "";
+  const periods = useEmploymentPeriods(personId || null);
+  const choices = availableEmploymentPeriods(
+    module.id,
+    spec.action,
+    personId,
+    periods.episodes,
+  );
+  const selectedPeriod = choices.find(
+    (episode) => episode.id === values.employmentEpisodeId,
+  );
+  const refs = useReferences(
+    spec.fields.filter(
+      (field) =>
+        field.key !== "employmentEpisodeId" &&
+        field.key !== "expectedEpisodeVersion",
+    ),
+    spec.entity,
+  );
   const assignees = useResource<{
     assignees: { id: string; label: string }[];
   }>(
@@ -99,10 +141,39 @@ function CommandForm({
       );
       return;
     }
-    setBusy(true);
     setError("");
-    const data: Record<string, unknown> = {};
+    const periodInput: Record<string, unknown> = {};
+    try {
+      if (needsPeriod || revisesPeriodDate) {
+        if (periods.loading || periods.error)
+          throw new Error(
+            "Poczekaj na aktualne okresy współpracy lub ponów ich odczyt.",
+          );
+        const selection = selectedEmploymentInput(
+          module.id,
+          spec.action,
+          personId,
+          needsPeriod
+            ? values.employmentEpisodeId
+            : spec.entity?.data.employmentEpisodeId,
+          periods.episodes,
+        );
+        periodInput.expectedEpisodeVersion = selection.expectedEpisodeVersion;
+        if (needsPeriod)
+          periodInput.employmentEpisodeId = selection.employmentEpisodeId;
+      }
+    } catch (cause) {
+      setError(errorMessage(cause));
+      return;
+    }
+    setBusy(true);
+    const data: Record<string, unknown> = { ...periodInput };
     for (const field of spec.fields) {
+      if (
+        field.key === "expectedEpisodeVersion" ||
+        (needsPeriod && field.key === "employmentEpisodeId")
+      )
+        continue;
       const value = values[field.key];
       if (field.key === "dependsOn")
         data[field.key] = Array.isArray(value) ? value : [];
@@ -134,6 +205,45 @@ function CommandForm({
     }
   }
   function fieldInput(field: Field) {
+    if (field.key === "engagementRef")
+      return (
+        <EngagementSelect
+          value={values.engagementRef}
+          disabled={busy}
+          onSelect={(reference) =>
+            setValues((current) => ({ ...current, engagementRef: reference }))
+          }
+        />
+      );
+    if (needsPeriod && field.key === "employmentEpisodeId")
+      return (
+        <EmploymentPeriodSelect
+          personId={personId}
+          episodes={choices}
+          selectedId={String(values.employmentEpisodeId ?? "")}
+          loading={periods.loading}
+          error={periods.error}
+          disabled={busy}
+          onSelect={(id) =>
+            setValues((current) => ({
+              ...changeCommandField(current, "employmentEpisodeId", id),
+              ...(spec.action === "endEmployment"
+                ? {
+                    endDate:
+                      choices.find((episode) => episode.id === id)?.endDate ??
+                      "",
+                  }
+                : {}),
+            }))
+          }
+          onRefresh={() => {
+            setValues((current) =>
+              changeCommandField(current, "employmentEpisodeId", ""),
+            );
+            periods.refresh();
+          }}
+        />
+      );
     const common = {
       id: `field-${field.key}`,
       required: field.required,
@@ -142,14 +252,15 @@ function CommandForm({
     const options =
       field.key === "ownerPrincipalId"
         ? (assignees.data?.assignees ?? [])
-        : referenceOptions(field.key, refs.records, values, spec.entity);
+        : needsPeriod && field.key === "caseId"
+          ? employmentCaseOptions(
+              refs.records.cases ?? [],
+              personId,
+              values.employmentEpisodeId,
+            )
+          : referenceOptions(field.key, refs.records, values, spec.entity);
     const set = (value: unknown) =>
-      setValues((current) => ({
-        ...current,
-        [field.key]: value,
-        ...(field.key === "personId" ? { employmentEpisodeId: "" } : {}),
-        ...(field.key === "kind" ? { parentId: "" } : {}),
-      }));
+      setValues((current) => changeCommandField(current, field.key, value));
     if (field.key === "dependsOn")
       return (
         <fieldset className="dependency-options">
@@ -294,6 +405,9 @@ function CommandForm({
           {definitions.error && (
             <Notice tone="error">{definitions.error}</Notice>
           )}
+          {revisesPeriodDate && periods.error && (
+            <Notice tone="error">{periods.error}</Notice>
+          )}
           {refs.errors.map((error) => (
             <Notice key={error}>{error}</Notice>
           ))}
@@ -318,14 +432,18 @@ function CommandForm({
             )}
             {spec.fields
               .filter(
-                (field) => !(editRequirements && field.key === "requirements"),
+                (field) =>
+                  field.key !== "expectedEpisodeVersion" &&
+                  !(editRequirements && field.key === "requirements"),
               )
               .map((field) => (
                 <div
                   className={
                     field.type === "textarea" ||
                     field.type === "boolean" ||
-                    field.key === "dependsOn"
+                    field.key === "dependsOn" ||
+                    field.key === "employmentEpisodeId" ||
+                    field.key === "engagementRef"
                       ? "wide"
                       : ""
                   }
@@ -378,7 +496,11 @@ function CommandForm({
             type="submit"
             className="button primary"
             disabled={
-              busy || (editRequirements && !Array.isArray(values.requirements))
+              busy ||
+              ((needsPeriod || revisesPeriodDate) &&
+                (periods.loading || Boolean(periods.error))) ||
+              (needsPeriod && !selectedPeriod) ||
+              (editRequirements && !Array.isArray(values.requirements))
             }
           >
             {busy ? (

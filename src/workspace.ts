@@ -21,6 +21,10 @@ import {
   processTemplatesSchema,
   roleBindingsSchema,
   baselineProcessTemplates,
+  employmentPolicySchema,
+  defaultEmploymentPolicy,
+  type EmploymentPolicy,
+  type EngagementRef,
   type TaskRole,
   type RoleBindings,
   type ModuleDefinition,
@@ -50,6 +54,20 @@ export interface Entity {
   createdAt: string;
   updatedAt: string;
 }
+export interface EmploymentEpisode {
+  id: string;
+  personId: string;
+  version: number;
+  kind: "internal" | "contractor";
+  status: "onboarding" | "active" | "offboarding" | "ended";
+  startDate: string;
+  endDate: string | null;
+  endReason: string | null;
+  role: string;
+  onboardingCaseId: string | null;
+  offboardingCaseId: string | null;
+  engagementRef: EngagementRef | null;
+}
 type Row = Record<string, unknown>;
 type CommandInput = {
   id?: string;
@@ -64,11 +82,12 @@ export interface LifecycleProfile {
   timezone?: string;
   roleBindings: RoleBindings;
   processTemplates: z.infer<typeof processTemplatesSchema>;
+  employmentPolicy?: EmploymentPolicy;
 }
 const lifecycleProfileSchema = z
   .object({
     version: z.number().int().min(0),
-    definitionVersion: z.literal("2"),
+    definitionVersion: z.enum(["2", "3"]),
     timezone: z
       .string()
       .min(1)
@@ -82,6 +101,7 @@ const lifecycleProfileSchema = z
         }
       }),
     roleBindings: roleBindingsSchema,
+    employmentPolicy: employmentPolicySchema,
     processTemplates: processTemplatesSchema,
   })
   .strict();
@@ -218,6 +238,52 @@ export class WorkspaceStore {
             migrateReadiness(db);
           },
         },
+        {
+          version: 4,
+          name: "Explicit versioned employment episodes and resource ownership",
+          up: (db) => {
+            db.exec(`ALTER TABLE ops_employment ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+              ALTER TABLE ops_employment ADD COLUMN onboarding_case_id TEXT;
+              ALTER TABLE ops_employment ADD COLUMN offboarding_case_id TEXT;
+              ALTER TABLE ops_employment ADD COLUMN engagement_module TEXT;
+              ALTER TABLE ops_employment ADD COLUMN engagement_id TEXT;
+              ALTER TABLE ops_employment ADD COLUMN engagement_key TEXT;
+              ALTER TABLE ops_employment ADD COLUMN end_reason TEXT;
+              ALTER TABLE ops_employment ADD COLUMN updated_at TEXT;`);
+            for (const episode of db
+              .prepare("SELECT tenant_id,id,person_id FROM ops_employment")
+              .all() as Row[]) {
+              for (const type of ["onboarding", "offboarding"] as const) {
+                const candidates = db
+                  .prepare(
+                    "SELECT id FROM ops_entities WHERE tenant_id=? AND module='cases' AND json_extract(data_json,'$.caseType')=? AND json_extract(data_json,'$.employmentEpisodeId')=? AND json_extract(data_json,'$.personId')=?",
+                  )
+                  .all(
+                    String(episode.tenant_id),
+                    type,
+                    String(episode.id),
+                    String(episode.person_id),
+                  ) as Row[];
+                if (candidates.length === 1)
+                  db.prepare(
+                    `UPDATE ops_employment SET ${type}_case_id=? WHERE tenant_id=? AND id=?`,
+                  ).run(
+                    String(candidates[0]!.id),
+                    String(episode.tenant_id),
+                    String(episode.id),
+                  );
+              }
+            }
+            // Historical nullable resource links remain unresolved. All new
+            // writes below require explicit episode identity and policy guards.
+            db.exec(`DROP INDEX ops_one_open_employment;
+              CREATE UNIQUE INDEX ops_one_open_engagement ON ops_employment(tenant_id,person_id,engagement_key) WHERE status!='ended' AND engagement_key IS NOT NULL;
+              CREATE UNIQUE INDEX ops_one_open_internal ON ops_employment(tenant_id,person_id) WHERE status!='ended' AND kind='internal';
+              DROP INDEX ops_unique_seat;
+              CREATE UNIQUE INDEX ops_unique_episode_seat ON ops_license_seats(tenant_id,license_id,person_id,employment_episode_id) WHERE status='assigned' AND employment_episode_id IS NOT NULL;
+              CREATE UNIQUE INDEX ops_unique_legacy_seat ON ops_license_seats(tenant_id,license_id,person_id) WHERE status='assigned' AND employment_episode_id IS NULL;`);
+          },
+        },
       ],
     });
     this.readinessStore = new CaseReadinessStore(this.db, (tenant, e) => {
@@ -289,16 +355,32 @@ export class WorkspaceStore {
   setProfileProvider(provider: (tenantId: string) => LifecycleProfile) {
     this.profileProvider = provider;
   }
+  /** Trusted in-process configuration writer only. Lock order is operations
+   * before profiles, so an approved policy cannot change during a domain write. */
+  acquireEmploymentPolicyLock(): () => void {
+    this.db.exec("BEGIN IMMEDIATE");
+    let released = false;
+    return () => {
+      if (!released) {
+        this.db.exec("ROLLBACK");
+        released = true;
+      }
+    };
+  }
   private currentProfile(tenantId: string): LifecycleProfile | undefined {
     if (!this.profileProvider) return undefined;
     const profile = this.profileProvider(tenantId);
-    if (profile.definitionVersion !== "2") return undefined;
+    if (!["2", "3"].includes(profile.definitionVersion)) return undefined;
     return lifecycleProfileSchema.parse({
       version: profile.version,
       definitionVersion: profile.definitionVersion,
       timezone: profile.timezone ?? "Europe/Warsaw",
       roleBindings: profile.roleBindings,
       processTemplates: profile.processTemplates,
+      employmentPolicy:
+        profile.definitionVersion === "3"
+          ? profile.employmentPolicy
+          : defaultEmploymentPolicy,
     });
   }
   private companyDate(cmd: Pick<Command, "now" | "profile">): string {
@@ -318,7 +400,7 @@ export class WorkspaceStore {
   ): LifecycleProfile | undefined {
     if (
       this.profileProvider &&
-      this.profileProvider(tenantId).definitionVersion !== "2"
+      !["2", "3"].includes(this.profileProvider(tenantId).definitionVersion)
     )
       fail(
         "PROFILE_UPGRADE_REQUIRED",
@@ -421,7 +503,53 @@ export class WorkspaceStore {
     // Project migrated rows without rewriting historical entity snapshots.
     if (entity.module === "cases")
       this.caseState({ ctx: { tenantId: tenant } }, entity);
+    if (entity.module === "people")
+      this.syncPerson({ ctx: { tenantId: tenant } }, entity);
+    if (entity.module === "assets")
+      entity.data.allocations = this.allocations(tenant, entity.id);
+    if (entity.module === "licenses")
+      entity.data.assignments = this.licenseAssignments(tenant, entity.id);
     return entity;
+  }
+  private allocations(tenant: string, assetId: string): JsonObject[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT id,person_id AS personId,employment_episode_id AS employmentEpisodeId,case_id AS caseId,status,reserved_until AS reservedUntil,issued_on AS issuedOn,returned_on AS returnedOn FROM ops_allocations WHERE tenant_id=? AND asset_id=? ORDER BY rowid",
+        )
+        .all(tenant, assetId) as Row[]
+    ).map(asJson);
+  }
+  private licenseAssignments(tenant: string, licenseId: string): JsonObject[] {
+    return (
+      this.db
+        .prepare(
+          "SELECT id,person_id AS personId,employment_episode_id AS employmentEpisodeId,case_id AS caseId,status,assigned_at AS assignedAt,revoked_at AS revokedAt FROM ops_license_seats WHERE tenant_id=? AND license_id=? ORDER BY rowid",
+        )
+        .all(tenant, licenseId) as Row[]
+    ).map(asJson);
+  }
+  private relationalStateMatches(tenant: string, entity: Entity): boolean {
+    if (entity.module === "people")
+      return (
+        canonical(entity.data.employmentEpisodes) ===
+        canonical(
+          this.employmentRows(tenant, entity.id).map((row) =>
+            this.projectEpisode(row),
+          ),
+        )
+      );
+    if (entity.module === "assets")
+      return (
+        canonical(entity.data.allocations) ===
+        canonical(this.allocations(tenant, entity.id))
+      );
+    if (entity.module === "licenses")
+      return (
+        canonical(entity.data.assignments) ===
+        canonical(this.licenseAssignments(tenant, entity.id))
+      );
+    return true;
   }
   summary(principal: Principal) {
     const modules = this.catalog()
@@ -525,6 +653,24 @@ export class WorkspaceStore {
         ? ((input.data ?? {}) as JsonObject)
         : this.read(tenant, module, String(input.id)).data;
     scopes.push(...this.entityScopes(module, data, tenant));
+    if (
+      input.engagementRef &&
+      typeof input.engagementRef === "object" &&
+      !Array.isArray(input.engagementRef)
+    ) {
+      const reference = input.engagementRef as JsonObject;
+      const target = this.module(String(reference.module));
+      const engagement = this.read(tenant, target, String(reference.id));
+      scopes.push(
+        target,
+        ...this.entityScopes(target, engagement.data, tenant),
+      );
+    }
+    if (["assets", "licenses"].includes(module) && input.caseId) {
+      const record = this.read(tenant, "cases", String(input.caseId));
+      scopes.push("cases", ...this.entityScopes("cases", record.data, tenant));
+    }
+
     if (module === "cases" && action === "addTask" && input.assigneeId)
       scopes.push("people");
     if (module === "cases" && action === "bindEvidence") {
@@ -905,51 +1051,284 @@ export class WorkspaceStore {
     }
     return this.saveNew(cmd, e);
   }
+  private employmentRows(tenantId: string, personId: string): Row[] {
+    return this.db
+      .prepare(
+        "SELECT * FROM ops_employment WHERE tenant_id=? AND person_id=? ORDER BY start_date,id",
+      )
+      .all(tenantId, personId) as Row[];
+  }
+  private projectEpisode(row: Row): EmploymentEpisode {
+    return {
+      id: String(row.id),
+      personId: String(row.person_id),
+      version: Number(row.version),
+      kind: row.kind as EmploymentEpisode["kind"],
+      status: row.status as EmploymentEpisode["status"],
+      startDate: String(row.start_date),
+      endDate: row.end_date ? String(row.end_date) : null,
+      endReason: row.end_reason ? String(row.end_reason) : null,
+      role: String(row.role),
+      onboardingCaseId: row.onboarding_case_id
+        ? String(row.onboarding_case_id)
+        : null,
+      offboardingCaseId: row.offboarding_case_id
+        ? String(row.offboarding_case_id)
+        : null,
+      engagementRef:
+        row.engagement_module && row.engagement_id
+          ? {
+              module: row.engagement_module as EngagementRef["module"],
+              id: String(row.engagement_id),
+            }
+          : null,
+    };
+  }
+  listEmploymentEpisodes(
+    principal: Principal,
+    personId: string,
+  ): EmploymentEpisode[] {
+    this.get(principal, "people", personId);
+    return this.employmentRows(principal.tenantId, personId).map((row) =>
+      this.projectEpisode(row),
+    );
+  }
+  private employmentEpisode(
+    cmd: Command,
+    personId: string,
+    input: CommandInput,
+    states?: string[],
+  ): Row {
+    const episode = this.db
+      .prepare(
+        "SELECT * FROM ops_employment WHERE tenant_id=? AND person_id=? AND id=?",
+      )
+      .get(
+        cmd.ctx.tenantId,
+        personId,
+        String(input.employmentEpisodeId ?? ""),
+      ) as Row | undefined;
+    if (!episode)
+      fail(
+        "EMPLOYMENT_REQUIRED",
+        "Nie znaleziono wskazanego okresu tej osoby.",
+      );
+    if (episode.version !== input.expectedEpisodeVersion)
+      fail(
+        "EPISODE_VERSION_CONFLICT",
+        "Okres współpracy zmienił wersję. Odczytaj aktualny okres i przygotuj nowy plan.",
+      );
+    if (states && !states.includes(String(episode.status)))
+      fail(
+        "INVALID_TRANSITION",
+        "Wskazany okres współpracy nie pozwala na to działanie.",
+      );
+    return episode;
+  }
+  private resourceEpisode(
+    cmd: Command,
+    input: CommandInput,
+    states: string[],
+  ): Row {
+    const person = this.ref(cmd, "people", input.personId);
+    const episode = this.employmentEpisode(cmd, person.id, input, states);
+    if (input.caseId) {
+      const record = this.ref(cmd, "cases", input.caseId);
+      if (
+        record.data.personId !== person.id ||
+        record.data.employmentEpisodeId !== episode.id ||
+        record.status === "cancelled"
+      )
+        fail(
+          "RESOURCE_CASE_MISMATCH",
+          "Sprawa nie dotyczy wskazanej osoby i okresu współpracy.",
+        );
+    }
+    return episode;
+  }
+  private unresolvedResources(tenantId: string, personId: string): boolean {
+    return Boolean(
+      this.db
+        .prepare(
+          "SELECT id FROM ops_allocations WHERE tenant_id=? AND person_id=? AND employment_episode_id IS NULL AND status IN('reserved','issued') LIMIT 1",
+        )
+        .get(tenantId, personId) ||
+      this.db
+        .prepare(
+          "SELECT id FROM ops_license_seats WHERE tenant_id=? AND person_id=? AND employment_episode_id IS NULL AND status='assigned' LIMIT 1",
+        )
+        .get(tenantId, personId),
+    );
+  }
+  private syncPerson(cmd: { ctx: { tenantId: string } }, person: Entity) {
+    const episodes = this.employmentRows(cmd.ctx.tenantId, person.id);
+    const open = episodes.filter((row) => row.status !== "ended");
+    person.status = open.some((row) => row.status === "active")
+      ? "active"
+      : open.some((row) => row.status === "onboarding")
+        ? "onboarding"
+        : open.length
+          ? "offboarding"
+          : episodes.length
+            ? "exited"
+            : "registered";
+    person.data.employmentEpisodes = episodes.map((row) =>
+      asJson(this.projectEpisode(row)),
+    );
+    person.data.currentEmploymentEpisodeId =
+      open.length === 1 ? String(open[0]!.id) : null;
+    person.data.onboardingCaseId =
+      open.length === 1 ? (open[0]!.onboarding_case_id as string | null) : null;
+    person.data.offboardingCaseId =
+      open.length === 1
+        ? (open[0]!.offboarding_case_id as string | null)
+        : null;
+  }
+  private engagement(
+    cmd: Command,
+    value: unknown,
+  ): { reference: EngagementRef; key: string } | null {
+    if (!value) return null;
+    const reference = value as EngagementRef;
+    const record = this.ref(cmd, reference.module, reference.id);
+    let key = `${reference.module}:${record.id}`;
+    if (reference.module === "sales") {
+      if (
+        (record.data.kind === "deal" && record.status !== "won") ||
+        (record.data.kind === "offer" &&
+          !["accepted", "handed_over"].includes(record.status)) ||
+        !["deal", "offer"].includes(String(record.data.kind))
+      )
+        fail(
+          "ENGAGEMENT_NOT_AGREED",
+          "Wybierz wygraną szansę albo zaakceptowaną ofertę.",
+        );
+      if (record.data.kind === "offer") {
+        const deal = this.ref(cmd, "sales", record.data.parentId);
+        this.kind(deal, "deal");
+        key = `sales:${deal.id}`;
+      }
+    } else {
+      if (
+        record.data.caseType !== "delivery" ||
+        !["open", "awaiting_acceptance", "accepted"].includes(record.status)
+      )
+        fail(
+          "ENGAGEMENT_NOT_AGREED",
+          "Wybierz uzgodnioną, aktywną sprawę realizacji.",
+        );
+      if (record.data.sourceOfferId) {
+        const offer = this.ref(cmd, "sales", record.data.sourceOfferId);
+        this.kind(offer, "offer");
+        const deal = this.ref(cmd, "sales", offer.data.parentId);
+        this.kind(deal, "deal");
+        key = `sales:${deal.id}`;
+      }
+    }
+    return { reference, key };
+  }
+  private assertEmploymentStart(
+    cmd: Command,
+    personId: string,
+    kind: string,
+    startDate: string,
+    engagementKey: string | null,
+    excludeId?: string,
+  ) {
+    const policy = cmd.profile?.employmentPolicy ?? defaultEmploymentPolicy;
+    const existing = this.employmentRows(cmd.ctx.tenantId, personId).filter(
+      (row) => row.id !== excludeId,
+    );
+    const open = existing.filter((row) => row.status !== "ended");
+    const overlap = existing.filter(
+      (row) => !row.end_date || String(row.end_date) >= startDate,
+    );
+    if (policy.mode === "single_open") {
+      if (open.length)
+        fail(
+          "EMPLOYMENT_LIMIT",
+          "Profil firmy pozwala na jeden otwarty okres współpracy.",
+        );
+      if (overlap.length)
+        fail(
+          "OVERLAPPING_EMPLOYMENT",
+          "Nowy okres musi rozpocząć się po zakończeniu poprzedniego.",
+        );
+    } else {
+      if (!engagementKey && kind === "contractor")
+        fail(
+          "ENGAGEMENT_REQUIRED",
+          "Równoległe współprace wymagają wskazania uzgodnionego projektu lub umowy.",
+        );
+      if (open.length >= policy.maxConcurrent)
+        fail(
+          "EMPLOYMENT_LIMIT",
+          "Osiągnięto zatwierdzony limit otwartych współprac.",
+        );
+      if (
+        open.length &&
+        (this.unresolvedResources(cmd.ctx.tenantId, personId) ||
+          open.some((row) => !row.engagement_key))
+      )
+        fail(
+          "LEGACY_EMPLOYMENT_UNRESOLVED",
+          "Najpierw rozstrzygnij historyczne powiązania projektów i aktywnych zasobów tej osoby.",
+        );
+      if (overlap.some((row) => kind === "internal" || row.kind === "internal"))
+        fail(
+          "INTERNAL_EMPLOYMENT_OVERLAP",
+          "Współpraca wewnętrzna nie może nakładać się na inny okres.",
+        );
+      if (overlap.some((row) => row.engagement_key === engagementKey))
+        fail(
+          "DUPLICATE_ENGAGEMENT",
+          "Ta współpraca ma już okres obejmujący wskazany termin.",
+        );
+    }
+  }
   private startEmployment(
     cmd: Command,
     person: Entity,
     input: CommandInput,
   ): string {
-    this.state(person, "registered", "exited");
-    if (input.employmentKind !== person.data.personCategory)
-      fail(
-        "EMPLOYMENT_KIND_MISMATCH",
-        "Rodzaj współpracy musi odpowiadać osobie.",
-      );
-    const latest = this.db
-      .prepare(
-        "SELECT end_date FROM ops_employment WHERE tenant_id=? AND person_id=? ORDER BY start_date DESC LIMIT 1",
-      )
-      .get(cmd.ctx.tenantId, person.id) as Row | undefined;
-    if (latest?.end_date && String(input.startDate) <= String(latest.end_date))
-      fail(
-        "OVERLAPPING_EMPLOYMENT",
-        "Nowy okres musi rozpocząć się po poprzednim.",
-      );
+    const engagement = this.engagement(cmd, input.engagementRef);
+    this.assertEmploymentStart(
+      cmd,
+      person.id,
+      String(input.employmentKind),
+      String(input.startDate),
+      engagement?.key ?? null,
+    );
     const episodeId = randomUUID();
     this.db
-      .prepare("INSERT INTO ops_employment VALUES(?,?,?,?,?,?,?,?)")
+      .prepare(
+        "INSERT INTO ops_employment(tenant_id,id,person_id,kind,start_date,end_date,status,role,version,engagement_module,engagement_id,engagement_key,updated_at) VALUES(?,?,?,?,?,NULL,'onboarding',?,1,?,?,?,?)",
+      )
       .run(
         cmd.ctx.tenantId,
         episodeId,
         person.id,
         String(input.employmentKind),
         String(input.startDate),
-        null,
-        "onboarding",
         String(input.role),
+        engagement?.reference.module ?? null,
+        engagement?.reference.id ?? null,
+        engagement?.key ?? null,
+        cmd.now,
       );
-    person.status = "onboarding";
-    person.data.currentEmploymentEpisodeId = episodeId;
-    person.data.employmentEpisodes = this.episodes(cmd, person.id);
-    person.data.onboardingCaseId = this.lifecycleCase(
+    const caseId = this.lifecycleCase(
       cmd,
       person,
       episodeId,
       "onboarding",
       String(input.startDate),
     );
-    person.data.offboardingCaseId = null;
+    this.db
+      .prepare(
+        "UPDATE ops_employment SET onboarding_case_id=? WHERE tenant_id=? AND id=?",
+      )
+      .run(caseId, cmd.ctx.tenantId, episodeId);
+    this.syncPerson(cmd, person);
     return episodeId;
   }
   private lifecycleCase(
@@ -959,13 +1338,20 @@ export class WorkspaceStore {
     type: "onboarding" | "offboarding",
     dueDate: string,
   ): string {
+    const episode = this.db
+      .prepare(
+        "SELECT kind FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=?",
+      )
+      .get(cmd.ctx.tenantId, episodeId, person.id) as Row | undefined;
+    if (!episode)
+      fail("EMPLOYMENT_REQUIRED", "Brak właściwego okresu współpracy.");
     const c = this.create(
       cmd,
       "cases",
       `${type === "onboarding" ? "Onboarding" : "Offboarding"}: ${person.title}`,
       {
         caseType: type,
-        brief: `${type === "onboarding" ? "Rozpoczęcie" : "Zakończenie"} współpracy ${person.data.personCategory === "internal" ? "wewnętrznej" : "kontraktorskiej"}: ${person.title}.`,
+        brief: `${type === "onboarding" ? "Rozpoczęcie" : "Zakończenie"} współpracy ${episode.kind === "internal" ? "wewnętrznej" : "kontraktorskiej"}: ${person.title}.`,
         acceptanceCriteria:
           "Wymagane zadania ukończone, dowody dostarczone i odebrane przez człowieka.",
         personId: person.id,
@@ -976,7 +1362,7 @@ export class WorkspaceStore {
     const template =
       cmd.profile?.processTemplates[type] ??
       baselineProcessTemplates(
-        person.data.personCategory === "contractor" ? "contractor" : "internal",
+        episode.kind === "contractor" ? "contractor" : "internal",
       )[type];
     c.data.ownerPrincipalId =
       this.taskStore.resolveRole(
@@ -1028,15 +1414,6 @@ export class WorkspaceStore {
     this.caseState(cmd, c);
     this.save(cmd, c);
     return c.id;
-  }
-  private episodes(cmd: Command, personId: string): JsonObject[] {
-    return (
-      this.db
-        .prepare(
-          "SELECT id,kind,start_date AS startDate,end_date AS endDate,status,role FROM ops_employment WHERE tenant_id=? AND person_id=? ORDER BY start_date,id",
-        )
-        .all(cmd.ctx.tenantId, personId) as Row[]
-    ).map(asJson);
   }
   private documentVersion(
     cmd: Command,
@@ -1161,16 +1538,18 @@ export class WorkspaceStore {
       this.human(cmd, input);
       if (action === "startEmployment") this.startEmployment(cmd, e, input);
       else {
-        const episode = this.db
-          .prepare(
-            "SELECT * FROM ops_employment WHERE tenant_id=? AND person_id=? AND status!='ended'",
-          )
-          .get(cmd.ctx.tenantId, e.id) as Row | undefined;
-        if (!episode)
-          fail("EMPLOYMENT_REQUIRED", "Brak otwartego okresu współpracy.");
+        const episode = this.employmentEpisode(
+          cmd,
+          e.id,
+          input,
+          action === "activate"
+            ? ["onboarding"]
+            : action === "beginOffboarding"
+              ? ["onboarding", "active"]
+              : ["offboarding"],
+        );
         if (action === "activate") {
-          this.state(e, "onboarding");
-          const onboarding = this.ref(cmd, "cases", d.onboardingCaseId);
+          const onboarding = this.ref(cmd, "cases", episode.onboarding_case_id);
           this.state(onboarding, "accepted");
           const readiness = this.readinessStore.evaluate(
             cmd.ctx.tenantId,
@@ -1181,7 +1560,6 @@ export class WorkspaceStore {
             onboarding.data.caseType !== "onboarding" ||
             onboarding.data.personId !== e.id ||
             onboarding.data.employmentEpisodeId !== episode.id ||
-            d.currentEmploymentEpisodeId !== episode.id ||
             !readiness.acceptanceCurrent
           )
             fail(
@@ -1195,30 +1573,37 @@ export class WorkspaceStore {
             );
           this.db
             .prepare(
-              "UPDATE ops_employment SET status='active' WHERE tenant_id=? AND id=?",
+              "UPDATE ops_employment SET status='active',version=version+1,updated_at=? WHERE tenant_id=? AND id=? AND version=?",
             )
-            .run(cmd.ctx.tenantId, String(episode.id));
-          e.status = "active";
+            .run(
+              cmd.now,
+              cmd.ctx.tenantId,
+              String(episode.id),
+              Number(episode.version),
+            );
         }
         if (action === "beginOffboarding" || action === "endEmployment") {
-          this.state(
-            e,
-            ...(action === "beginOffboarding"
-              ? ["active", "onboarding"]
-              : ["offboarding"]),
-          );
           if (String(input.endDate) < String(episode.start_date))
             fail(
               "INVALID_EMPLOYMENT_DATES",
               "Koniec nie może poprzedzać początku współpracy.",
             );
           if (action === "endEmployment") {
+            if (input.endDate !== episode.end_date)
+              fail(
+                "EXIT_DATE_CHANGED",
+                "Data zakończenia musi odpowiadać odebranemu zakresowi offboardingu.",
+              );
             if (String(input.endDate) > this.companyDate(cmd))
               fail(
                 "END_DATE_NOT_REACHED",
                 "Nie można potwierdzić zakończenia współpracy w przyszłości.",
               );
-            const offboarding = this.ref(cmd, "cases", d.offboardingCaseId);
+            const offboarding = this.ref(
+              cmd,
+              "cases",
+              episode.offboarding_case_id,
+            );
             this.state(offboarding, "accepted");
             const readiness = this.readinessStore.evaluate(
               cmd.ctx.tenantId,
@@ -1229,42 +1614,62 @@ export class WorkspaceStore {
               offboarding.data.caseType !== "offboarding" ||
               offboarding.data.personId !== e.id ||
               offboarding.data.employmentEpisodeId !== episode.id ||
-              d.currentEmploymentEpisodeId !== episode.id ||
               !readiness.acceptanceCurrent
             )
               fail(
                 "EXIT_READINESS_STALE",
                 "Odbiór nie potwierdza aktualnego rozliczenia tej osoby i współpracy. Wymagana nowa ocena lub rewizja.",
               );
-            if (
-              this.db
-                .prepare(
-                  "SELECT id FROM ops_allocations WHERE tenant_id=? AND person_id=? AND status IN ('reserved','issued')",
-                )
-                .get(cmd.ctx.tenantId, e.id)
-            )
+            if (this.unresolvedResources(cmd.ctx.tenantId, e.id))
               fail(
-                "ASSETS_NOT_RETURNED",
-                "Najpierw rozlicz sprzęt i rezerwacje osoby.",
+                "LEGACY_RESOURCES_UNRESOLVED",
+                "Aktywne historyczne zasoby tej osoby nie mają rozstrzygniętego okresu. Najpierw rozlicz ich powiązanie lub zwrot.",
               );
             if (
               this.db
                 .prepare(
-                  "SELECT id FROM ops_license_seats WHERE tenant_id=? AND person_id=? AND status='assigned'",
+                  "SELECT id FROM ops_allocations WHERE tenant_id=? AND person_id=? AND employment_episode_id=? AND status IN('reserved','issued') LIMIT 1",
                 )
-                .get(cmd.ctx.tenantId, e.id)
+                .get(cmd.ctx.tenantId, e.id, String(episode.id))
+            )
+              fail(
+                "ASSETS_NOT_RETURNED",
+                "Najpierw rozlicz sprzęt i rezerwacje wskazanego okresu.",
+              );
+            if (
+              this.db
+                .prepare(
+                  "SELECT id FROM ops_license_seats WHERE tenant_id=? AND person_id=? AND employment_episode_id=? AND status='assigned' LIMIT 1",
+                )
+                .get(cmd.ctx.tenantId, e.id, String(episode.id))
             )
               fail(
                 "LICENSES_NOT_REVOKED",
-                "Najpierw zamknij przydziały licencji.",
+                "Najpierw zamknij przydziały licencji wskazanego okresu.",
               );
           }
           if (
             action === "beginOffboarding" &&
-            e.status === "onboarding" &&
-            d.onboardingCaseId
+            episode.status === "onboarding"
           ) {
-            const onboarding = this.ref(cmd, "cases", d.onboardingCaseId);
+            if (!episode.onboarding_case_id)
+              fail(
+                "LEGACY_LIFECYCLE_UNRESOLVED",
+                "Brak jednoznacznej sprawy historycznego onboardingu dla tego okresu.",
+              );
+            const onboarding = this.ref(
+              cmd,
+              "cases",
+              episode.onboarding_case_id,
+            );
+            if (
+              onboarding.data.personId !== e.id ||
+              onboarding.data.employmentEpisodeId !== episode.id
+            )
+              fail(
+                "LIFECYCLE_BINDING_REQUIRED",
+                "Sprawa onboardingu nie dotyczy tego okresu.",
+              );
             if (
               ["open", "needs_changes", "awaiting_acceptance"].includes(
                 onboarding.status,
@@ -1278,30 +1683,35 @@ export class WorkspaceStore {
               this.save(cmd, onboarding);
             }
           }
-          const status =
-            action === "beginOffboarding" ? "offboarding" : "ended";
           this.db
             .prepare(
-              "UPDATE ops_employment SET status=?,end_date=? WHERE tenant_id=? AND id=?",
+              "UPDATE ops_employment SET status=?,end_date=?,end_reason=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=? AND version=?",
             )
             .run(
-              status,
+              action === "beginOffboarding" ? "offboarding" : "ended",
               String(input.endDate),
+              String(input.reason),
+              cmd.now,
               cmd.ctx.tenantId,
               String(episode.id),
+              Number(episode.version),
             );
-          e.status = action === "beginOffboarding" ? "offboarding" : "exited";
-          d.endReason = String(input.reason);
-          if (action === "beginOffboarding")
-            d.offboardingCaseId = this.lifecycleCase(
+          if (action === "beginOffboarding") {
+            const caseId = this.lifecycleCase(
               cmd,
               e,
               String(episode.id),
               "offboarding",
               String(input.endDate),
             );
+            this.db
+              .prepare(
+                "UPDATE ops_employment SET offboarding_case_id=? WHERE tenant_id=? AND id=?",
+              )
+              .run(caseId, cmd.ctx.tenantId, String(episode.id));
+          }
         }
-        d.employmentEpisodes = this.episodes(cmd, e.id);
+        this.syncPerson(cmd, e);
       }
     }
     if (e.module === "cases") {
@@ -1317,8 +1727,16 @@ export class WorkspaceStore {
           e.status === "accepted" &&
           ["onboarding", "offboarding"].includes(String(d.caseType))
         ) {
-          const person = this.ref(cmd, "people", d.personId);
-          if (person.status !== d.caseType)
+          const episode = this.db
+            .prepare(
+              "SELECT status FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=?",
+            )
+            .get(
+              cmd.ctx.tenantId,
+              String(d.employmentEpisodeId),
+              String(d.personId),
+            );
+          if (episode?.status !== d.caseType)
             fail(
               "LIFECYCLE_ALREADY_APPLIED",
               "Odebrana sprawa została wykorzystana do przejścia osoby do kolejnego etapu. Utwórz osobną sprawę korekty.",
@@ -1343,23 +1761,25 @@ export class WorkspaceStore {
               "Zmiana daty startu wymaga sprawy onboardingu.",
             );
           const person = this.ref(cmd, "people", d.personId);
-          this.state(person, "onboarding");
-          if (person.data.currentEmploymentEpisodeId !== d.employmentEpisodeId)
-            fail("WRONG_LIFECYCLE", "Sprawa nie dotyczy bieżącej współpracy.");
-          const older = this.db
-            .prepare(
-              "SELECT end_date FROM ops_employment WHERE tenant_id=? AND person_id=? AND id!=? ORDER BY start_date DESC LIMIT 1",
-            )
-            .get(cmd.ctx.tenantId, person.id, String(d.employmentEpisodeId)) as
-            Row | undefined;
-          if (
-            older?.end_date &&
-            String(input.startDate) <= String(older.end_date)
-          )
-            fail(
-              "OVERLAPPING_EMPLOYMENT",
-              "Data startu musi następować po poprzedniej współpracy.",
-            );
+          const revisedEpisode = this.employmentEpisode(
+            cmd,
+            person.id,
+            {
+              employmentEpisodeId: d.employmentEpisodeId,
+              expectedEpisodeVersion: input.expectedEpisodeVersion,
+            },
+            ["onboarding"],
+          );
+          this.assertEmploymentStart(
+            cmd,
+            person.id,
+            String(revisedEpisode.kind),
+            String(input.startDate),
+            revisedEpisode.engagement_key
+              ? String(revisedEpisode.engagement_key)
+              : null,
+            String(revisedEpisode.id),
+          );
           const currentEpisode = this.db
             .prepare(
               "SELECT start_date FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=? AND status='onboarding'",
@@ -1383,7 +1803,7 @@ export class WorkspaceStore {
             );
           this.db
             .prepare(
-              "UPDATE ops_employment SET start_date=? WHERE tenant_id=? AND id=? AND person_id=? AND status='onboarding'",
+              "UPDATE ops_employment SET start_date=?,version=version+1 WHERE tenant_id=? AND id=? AND person_id=? AND status='onboarding'",
             )
             .run(
               String(input.startDate),
@@ -1393,7 +1813,7 @@ export class WorkspaceStore {
             );
           d.employmentStartDate = String(input.startDate);
           d.dueDate = String(input.startDate);
-          person.data.employmentEpisodes = this.episodes(cmd, person.id);
+          this.syncPerson(cmd, person);
           this.save(cmd, person);
         }
         if (input.ownerPrincipalId !== undefined) {
@@ -1676,22 +2096,26 @@ export class WorkspaceStore {
         this.state(e, "available");
         if (String(input.until) < this.companyDate(cmd))
           fail("RESERVATION_EXPIRED", "Data rezerwacji jest w przeszłości.");
-        const person = this.ref(cmd, "people", input.personId);
-        this.state(person, "onboarding", "active");
+        const episode = this.resourceEpisode(cmd, input, [
+          "onboarding",
+          "active",
+        ]);
         const allocation = randomUUID();
         this.db
           .prepare(
-            "INSERT INTO ops_allocations(tenant_id,id,asset_id,person_id,status,reserved_until,issued_on,returned_on) VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO ops_allocations(tenant_id,id,asset_id,person_id,status,reserved_until,issued_on,returned_on,employment_episode_id,case_id) VALUES(?,?,?,?,?,?,?,?,?,?)",
           )
           .run(
             cmd.ctx.tenantId,
             allocation,
             e.id,
-            person.id,
+            String(input.personId),
             "reserved",
             String(input.until),
             null,
             null,
+            String(episode.id),
+            typeof input.caseId === "string" ? input.caseId : null,
           );
         e.status = "reserved";
         d.reservationPurpose = String(input.purpose);
@@ -1721,8 +2145,25 @@ export class WorkspaceStore {
               "FUTURE_HANDOVER",
               "Nie można potwierdzić przyszłego wydania.",
             );
-          const recipient = this.ref(cmd, "people", input.personId);
-          this.state(recipient, "onboarding", "active");
+          const episode = this.resourceEpisode(cmd, input, [
+            "onboarding",
+            "active",
+          ]);
+          if (!allocation.employment_episode_id)
+            fail(
+              "LEGACY_ALLOCATION_UNRESOLVED",
+              "Rezerwacja nie ma ustalonego okresu współpracy. Zwolnij ją i przygotuj jawną nową rezerwację.",
+            );
+          if (
+            allocation.employment_episode_id !== episode.id ||
+            (input.caseId &&
+              allocation.case_id &&
+              allocation.case_id !== input.caseId)
+          )
+            fail(
+              "RESOURCE_EPISODE_MISMATCH",
+              "Wydanie musi dotyczyć okresu i sprawy wskazanych w rezerwacji.",
+            );
           if (
             this.companyDate(cmd) > String(allocation.reserved_until) ||
             String(input.issuedOn) > String(allocation.reserved_until)
@@ -1733,10 +2174,11 @@ export class WorkspaceStore {
             );
           this.db
             .prepare(
-              "UPDATE ops_allocations SET status='issued',issued_on=? WHERE tenant_id=? AND id=?",
+              "UPDATE ops_allocations SET status='issued',issued_on=?,case_id=COALESCE(case_id,?) WHERE tenant_id=? AND id=?",
             )
             .run(
               String(input.issuedOn),
+              typeof input.caseId === "string" ? input.caseId : null,
               cmd.ctx.tenantId,
               String(allocation.id),
             );
@@ -1782,13 +2224,7 @@ export class WorkspaceStore {
           d.releaseReason = String(input.reason);
         }
       }
-      d.allocations = (
-        this.db
-          .prepare(
-            "SELECT id,person_id AS personId,status,reserved_until AS reservedUntil,issued_on AS issuedOn,returned_on AS returnedOn FROM ops_allocations WHERE tenant_id=? AND asset_id=? ORDER BY rowid",
-          )
-          .all(cmd.ctx.tenantId, e.id) as Row[]
-      ).map(asJson);
+      d.allocations = this.allocations(cmd.ctx.tenantId, e.id);
     }
     if (e.module === "purchases") {
       if (action === "deactivate") {
@@ -1881,8 +2317,10 @@ export class WorkspaceStore {
           ).n,
         );
       if (action === "assign") {
-        const person = this.ref(cmd, "people", input.personId);
-        this.state(person, "onboarding", "active");
+        const episode = this.resourceEpisode(cmd, input, [
+          "onboarding",
+          "active",
+        ]);
         if (d.expiresOn && String(d.expiresOn) < this.companyDate(cmd))
           fail("LICENSE_EXPIRED", "Licencja wygasła.");
         if (count() >= Number(d.totalSeats))
@@ -1890,33 +2328,50 @@ export class WorkspaceStore {
         if (
           this.db
             .prepare(
-              "SELECT id FROM ops_license_seats WHERE tenant_id=? AND license_id=? AND person_id=? AND status='assigned'",
+              "SELECT id FROM ops_license_seats WHERE tenant_id=? AND license_id=? AND person_id=? AND (employment_episode_id=? OR employment_episode_id IS NULL) AND status='assigned'",
             )
-            .get(cmd.ctx.tenantId, e.id, person.id)
+            .get(
+              cmd.ctx.tenantId,
+              e.id,
+              String(input.personId),
+              String(episode.id),
+            )
         )
           fail("SEAT_ALREADY_ASSIGNED", "Osoba ma już przydział tej licencji.");
         this.db
           .prepare(
-            "INSERT INTO ops_license_seats(tenant_id,id,license_id,person_id,status,assigned_at,revoked_at) VALUES(?,?,?,?,?,?,?)",
+            "INSERT INTO ops_license_seats(tenant_id,id,license_id,person_id,status,assigned_at,revoked_at,employment_episode_id,case_id) VALUES(?,?,?,?,?,?,?,?,?)",
           )
           .run(
             cmd.ctx.tenantId,
             randomUUID(),
             e.id,
-            person.id,
+            String(input.personId),
             "assigned",
             cmd.now,
             null,
+            String(episode.id),
+            typeof input.caseId === "string" ? input.caseId : null,
           );
         d.lastAssignmentNote = String(input.note);
       }
       if (action === "revoke") {
-        this.ref(cmd, "people", input.personId);
+        const episode = this.resourceEpisode(cmd, input, [
+          "onboarding",
+          "active",
+          "offboarding",
+        ]);
         const result = this.db
           .prepare(
-            "UPDATE ops_license_seats SET status='revoked',revoked_at=? WHERE tenant_id=? AND license_id=? AND person_id=? AND status='assigned'",
+            "UPDATE ops_license_seats SET status='revoked',revoked_at=? WHERE tenant_id=? AND license_id=? AND person_id=? AND employment_episode_id=? AND status='assigned'",
           )
-          .run(cmd.now, cmd.ctx.tenantId, e.id, String(input.personId));
+          .run(
+            cmd.now,
+            cmd.ctx.tenantId,
+            e.id,
+            String(input.personId),
+            String(episode.id),
+          );
         if (!result.changes)
           fail("SEAT_NOT_ASSIGNED", "Nie ma aktywnego przydziału tej osoby.");
         d.revocationReason = String(input.reason);
@@ -1936,13 +2391,7 @@ export class WorkspaceStore {
         d.expiresOn = String(input.expiresOn);
         d.renewalEvidence = String(input.evidenceNote);
       }
-      d.assignments = (
-        this.db
-          .prepare(
-            "SELECT id,person_id AS personId,status,assigned_at AS assignedAt,revoked_at AS revokedAt FROM ops_license_seats WHERE tenant_id=? AND license_id=? ORDER BY rowid",
-          )
-          .all(cmd.ctx.tenantId, e.id) as Row[]
-      ).map(asJson);
+      d.assignments = this.licenseAssignments(cmd.ctx.tenantId, e.id);
       d.assignedSeats = count();
     }
     if (e.module === "sales") {
@@ -2273,7 +2722,10 @@ export class WorkspaceStore {
             "cancelTask",
           ].includes(action);
         const usesProfile =
-          lifecycle || (module === "cases" && action === "addTask");
+          lifecycle ||
+          (module === "cases" && ["addTask", "revise"].includes(action)) ||
+          (module === "assets" && ["reserve", "issue"].includes(action)) ||
+          (module === "licenses" && ["assign", "revoke"].includes(action));
         const taskConsistent = (
           ctx: ToolContext,
           input: JsonObject,
@@ -2348,7 +2800,7 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version: "3",
+          version: "4",
           ...(taskTransition
             ? {
                 canAccess: (
@@ -2389,9 +2841,10 @@ export class WorkspaceStore {
             ? {
                 prepareInput: (input: JsonObject, tenantId: string) => {
                   const profile = this.currentProfile(tenantId);
-                  const prepared: JsonObject = profile
-                    ? { ...input, profileVersion: profile.version }
-                    : { ...input };
+                  const prepared: JsonObject =
+                    profile && input.profileVersion === undefined
+                      ? { ...input, profileVersion: profile.version }
+                      : { ...input };
                   if (
                     module === "cases" &&
                     action === "addTask" &&
@@ -2419,11 +2872,11 @@ export class WorkspaceStore {
               );
             const input = asJson(parsed.data);
             const p = input as CommandInput;
-            const profile = usesProfile
-              ? this.pinnedProfile(ctx.tenantId, input)
-              : this.currentProfile(ctx.tenantId);
             this.db.exec("BEGIN IMMEDIATE");
             try {
+              const profile = usesProfile
+                ? this.pinnedProfile(ctx.tenantId, input)
+                : this.currentProfile(ctx.tenantId);
               const existing = this.ledger(ctx, toolId, input);
               if (existing) {
                 requireCommittedTask(ctx, input);
@@ -2490,6 +2943,14 @@ export class WorkspaceStore {
                     );
                   if (p.title !== undefined) e.title = p.title;
                   if (p.data) e.data = { ...e.data, ...p.data };
+                  if (e.module === "people") this.syncPerson(cmd, e);
+                  if (e.module === "assets")
+                    e.data.allocations = this.allocations(ctx.tenantId, e.id);
+                  if (e.module === "licenses")
+                    e.data.assignments = this.licenseAssignments(
+                      ctx.tenantId,
+                      e.id,
+                    );
                   e = this.save(cmd, e);
                 } else e = this.change(cmd, e, action, p);
               }
@@ -2628,7 +3089,11 @@ export class WorkspaceStore {
                   digest(JSON.parse(String(version.snapshot_json))) ===
                     change.hash &&
                   digest(this.fromRow(entity)) ===
-                    currentSnapshot.snapshot_hash,
+                    currentSnapshot.snapshot_hash &&
+                  this.relationalStateMatches(
+                    ctx.tenantId,
+                    this.fromRow(entity),
+                  ),
                 );
                 ok = ok && valid;
                 observed.push({

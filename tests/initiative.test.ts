@@ -57,6 +57,23 @@ function fixture(durable = false) {
     const tool = workspace
       .tools()
       .find((entry) => entry.id === `ops.${module}.${action}`)!;
+    if (
+      (module === "assets" && ["reserve", "issue"].includes(action)) ||
+      (module === "licenses" && ["assign", "revoke"].includes(action))
+    ) {
+      if (!input.employmentEpisodeId) {
+        const episodes = workspace
+          .listEmploymentEpisodes(principal(tenantId), String(input.personId))
+          .filter((episode) => episode.status !== "ended");
+        assert.equal(episodes.length, 1);
+        input = {
+          ...input,
+          employmentEpisodeId: episodes[0]!.id,
+          expectedEpisodeVersion: episodes[0]!.version,
+        };
+      }
+    }
+    input = tool.prepareInput?.(input, tenantId) ?? input;
     const result = await tool.execute(context(tenantId), input);
     return workspace.get(
       principal(tenantId),
@@ -120,6 +137,7 @@ function settings(
     rules: profile.rules,
     processTemplates: profile.processTemplates,
     roleBindings: profile.roleBindings,
+    employmentPolicy: profile.employmentPolicy,
   };
 }
 async function configure(
@@ -553,7 +571,7 @@ test("profile templates are strict, versioned and approved; replay reconciles wh
   }
 });
 
-test("legacy profile stays attributed to its original approval and requires explicit v2 configuration", async () => {
+test("legacy profile stays attributed to its original approval and requires explicit v3 configuration", async () => {
   const f = fixture(true);
   try {
     const current = f.initiatives.profile(principal());
@@ -603,7 +621,7 @@ test("legacy profile stays attributed to its original approval and requires expl
     const tool = f.initiatives
       .tools()
       .find((t) => t.id === "initiatives.configure")!;
-    assert.equal(tool.version, "2");
+    assert.equal(tool.version, "3");
     await assert.rejects(
       () => configure(f.initiatives, { companyName: "Only rename" }),
       code("INVALID_INITIATIVE_INPUT"),
@@ -614,7 +632,7 @@ test("legacy profile stays attributed to its original approval and requires expl
     });
     const configured = f.initiatives.profile(principal());
     assert.equal(configured.version, 8);
-    assert.equal(configured.definitionVersion, "2");
+    assert.equal(configured.definitionVersion, "3");
     assert.equal(configured.updatedApprovedBy, "reviewer");
     assert.equal(configured.needsConfiguration, undefined);
   } finally {
