@@ -22,6 +22,7 @@ import { WorkspacePage } from "./WorkspacePage";
 import { RunPage } from "./RunPage";
 import { ConversationPage } from "./ConversationPage";
 import { Initiatives, CompanySettings } from "./Initiatives";
+import { HumanTasks } from "./HumanTasks";
 
 function Login({
   status,
@@ -856,6 +857,7 @@ function Shell({
         ops: "Obserwowalność",
         settings: "Ustawienia",
         runs: "Wykonanie",
+        tasks: "Zadania i decyzje",
       } as Record<string, string>
     )[page ?? ""] ??
     "Przestrzeń pracy";
@@ -864,6 +866,8 @@ function Shell({
     content = <ConversationPage selectedId={sub} context={context} />;
   else if (page === "runs" && sub)
     content = <RunPage id={sub} context={context} />;
+  else if (page === "tasks")
+    content = <HumanTasks context={context} revision={revision} />;
   else if (page === "module" && module)
     content = (
       <WorkspacePage
@@ -936,6 +940,8 @@ function Shell({
           <div className="nav-section">PRZESTRZEŃ</div>
           {nav("overview", "Przegląd", "grid")}
           {nav("conversation", "Rozmowa z JARVIS", "chat")}
+          {context.principal.roles.includes("operator") &&
+            nav("tasks", "Zadania i decyzje", "people")}
           {catalog.some((item) => item.id === "cases") &&
             nav(
               "module/cases",

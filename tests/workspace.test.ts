@@ -36,6 +36,7 @@ const today = new Date().toISOString().slice(0, 10);
 const code = (expected: string) => (error: unknown) =>
   error instanceof DomainError && error.code === expected;
 function helper(store: WorkspaceStore, tenantId = "tenant-a") {
+  store.setPrincipalProvider((tenant) => [principal(tenant)]);
   const tools = new Map(store.tools().map((tool) => [tool.id, tool]));
   const invoke = async (
     module: string,
@@ -54,12 +55,58 @@ function helper(store: WorkspaceStore, tenantId = "tenant-a") {
   };
   const create = (module: string, title: string, data: JsonObject) =>
     invoke(module, "create", { title, data });
-  const action = (entity: Entity, action: string, fields: JsonObject = {}) =>
-    invoke(entity.module, action, {
-      id: entity.id,
-      expectedVersion: entity.version,
-      ...fields,
-    });
+  const action = async (
+    entity: Entity,
+    action: string,
+    fields: JsonObject = {},
+  ) => {
+    const input = { ...fields };
+    if (action === "addTask") {
+      input.kind ??= "work";
+      input.assigneePrincipalId ??= "human-reviewer";
+    }
+    if (action === "completeTask") {
+      let task = (entity.data.tasks as JsonObject[]).find(
+        (task) => task.id === input.taskId,
+      );
+      if (task && task.status === "unassigned") {
+        const updated = await invoke("cases", "transferTask", {
+          id: entity.id,
+          expectedVersion: entity.version,
+          taskId: task.id!,
+          expectedTaskVersion: task.version!,
+          assigneePrincipalId: "human-reviewer",
+          reason: "Jawny wykonawca scenariusza testowego",
+          humanConfirmed: true,
+        });
+        Object.assign(entity, updated);
+        task = (entity.data.tasks as JsonObject[]).find(
+          (item) => item.id === input.taskId,
+        );
+      }
+      if (task && task.status === "offered") {
+        const updated = await invoke("cases", "acceptTask", {
+          id: entity.id,
+          expectedVersion: entity.version,
+          taskId: task.id!,
+          expectedTaskVersion: task.version!,
+          humanConfirmed: true,
+        });
+        Object.assign(entity, updated);
+        task = (entity.data.tasks as JsonObject[]).find(
+          (item) => item.id === input.taskId,
+        );
+      }
+      input.expectedTaskVersion ??= task?.version ?? 1;
+    }
+    const raw = { id: entity.id, expectedVersion: entity.version, ...input };
+    const tool = tools.get(`ops.${entity.module}.${action}`)!;
+    return invoke(
+      entity.module,
+      action,
+      action === "addTask" ? tool.prepareInput!(raw, tenantId) : raw,
+    );
+  };
   const person = async (category = "internal") => {
     const p = await create("people", "Osoba testowa", {
       personCategory: category,
@@ -112,7 +159,10 @@ test("catalog exposes nine typed workflows with strict inputs and rejects spoofe
     );
     assert.ok(
       [...h.tools.values()].every(
-        (t) => t.scope && t.recovery === "reconcile" && t.effect === "write",
+        (t) =>
+          (t.scope || t.requiredScopesForInput) &&
+          t.recovery === "reconcile" &&
+          t.effect === "write",
       ),
     );
     const create = h.tools.get("ops.people.create")!;
@@ -383,7 +433,7 @@ test("acceptance binds scope revision, human evidence and all required dependenc
         evidenceNote: "Test",
         humanConfirmed: true,
       }),
-      code("TASK_DEPENDENCY_INCOMPLETE"),
+      code("TASK_DEPENDENCIES_OPEN"),
     );
     await assert.rejects(
       h.action(e, "addTask", {
@@ -391,7 +441,7 @@ test("acceptance binds scope revision, human evidence and all required dependenc
         required: true,
         dependsOn: [randomUUID()],
       }),
-      code("INVALID_TASK_DEPENDENCY"),
+      code("TASK_NOT_FOUND"),
     );
     e = await h.action(e, "completeTask", {
       taskId: first,
@@ -435,7 +485,13 @@ test("acceptance binds scope revision, human evidence and all required dependenc
       reason: "Zmiana celu",
     });
     assert.equal(e.data.scopeRevision, 2);
-    assert.deepEqual(e.data.tasks, []);
+    assert.equal((e.data.tasks as JsonObject[]).length, 2);
+    assert.ok(
+      (e.data.tasks as JsonObject[]).every(
+        (task) =>
+          task.status === "offered" && task.id !== first && task.id !== second,
+      ),
+    );
     assert.deepEqual(e.data.evidence, []);
     assert.equal((e.data.acceptances as JsonObject[]).length, 1);
     await assert.rejects(h.action(e, "submit"), code("ACCEPTANCE_NOT_READY"));
@@ -445,7 +501,7 @@ test("acceptance binds scope revision, human evidence and all required dependenc
         evidenceNote: "Stary",
         humanConfirmed: true,
       }),
-      code("TASK_NOT_OPEN"),
+      code("TASK_REVISION_CONFLICT"),
     );
   } finally {
     store.close();
@@ -480,17 +536,35 @@ test("employment episodes create real lifecycle cases, keep contractors separate
       String(p.data.onboardingCaseId),
     );
     assert.equal(onboarding.data.employmentKind, "contractor");
-    assert.equal((onboarding.data.tasks as JsonObject[]).length, 3);
+    assert.equal((onboarding.data.tasks as JsonObject[]).length, 4);
+    assert.ok(
+      (onboarding.data.tasks as JsonObject[]).every(
+        (task) => task.status === "unassigned" && task.assigneeId === null,
+      ),
+    );
     assert.equal(
       (onboarding.data.tasks as JsonObject[])[0]!.dueDate,
-      "2020-01-01",
+      "2019-12-29",
     );
     await assert.rejects(
       h.action(p, "activate", { humanDecision: true }),
       code("INVALID_TRANSITION"),
     );
-    await h.acceptCase(onboarding.id);
-    p = await h.action(p, "activate", { humanDecision: true });
+    await assert.rejects(
+      h.acceptCase(onboarding.id),
+      code("ACCEPTANCE_NOT_READY"),
+    );
+    const readiness = store.readiness(principal(), onboarding.id);
+    assert.equal(readiness.ready, false);
+    assert.equal(
+      readiness.requirements.filter(
+        (r) => r.required && r.status !== "satisfied",
+      ).length,
+      3,
+    );
+    // Cancelling an unfinished onboarding through offboarding is a supported
+    // independent workflow; this does not pretend onboarding was accepted.
+
     let license = await h.create("licenses", "Produkt", {
       product: "T",
       totalSeats: 1,
@@ -545,6 +619,252 @@ test("employment episodes create real lifecycle cases, keep contractors separate
     });
     assert.equal((p.data.employmentEpisodes as JsonObject[]).length, 2);
     assert.notEqual(p.data.onboardingCaseId, onboarding.id);
+  } finally {
+    store.close();
+  }
+});
+
+for (const cancellation of ["cancel", "beginOffboarding"] as const) {
+  test(`${cancellation} cancels all unfinished onboarding tasks atomically, preserves completed work and records one event per task`, async () => {
+    const dir = mkdtempSync(join(tmpdir(), "jarvis-task-cancellation-"));
+    const path = join(dir, "workspace.db");
+    const store = new WorkspaceStore(path);
+    const db = new DatabaseSync(path);
+    try {
+      const h = helper(store),
+        person = await h.person();
+      let onboarding = store.get(
+        principal(),
+        "cases",
+        String(person.data.onboardingCaseId),
+      );
+      const tasks = () => onboarding.data.tasks as JsonObject[];
+      onboarding = await h.action(onboarding, "completeTask", {
+        taskId: tasks()[0]!.id!,
+        evidenceNote: "Work completed before cancellation",
+        humanConfirmed: true,
+      });
+      for (const [index, action] of [
+        [1, "acceptTask"],
+        [2, "declineTask"],
+      ] as const) {
+        const id = tasks()[index]!.id!;
+        onboarding = await h.action(onboarding, "transferTask", {
+          taskId: id,
+          expectedTaskVersion: tasks()[index]!.version!,
+          assigneePrincipalId: principal().id,
+          reason: "Explicit worker assignment",
+          humanConfirmed: true,
+        });
+        onboarding = await h.action(onboarding, action, {
+          taskId: id,
+          expectedTaskVersion: tasks()[index]!.version!,
+          humanConfirmed: true,
+          ...(action === "declineTask"
+            ? { reason: "Cannot perform this task" }
+            : {}),
+        });
+      }
+      onboarding = await h.action(onboarding, "addTask", {
+        title: "Offered work",
+        required: false,
+      });
+      const before = structuredClone(tasks());
+      assert.deepEqual(before.map((task) => task.status).sort(), [
+        "accepted",
+        "completed",
+        "declined",
+        "offered",
+        "unassigned",
+      ]);
+      const eventsBefore = Number(
+        db
+          .prepare("SELECT count(*) AS n FROM ops_task_events WHERE case_id=?")
+          .get(onboarding.id)!.n,
+      );
+      const target = cancellation === "cancel" ? onboarding : person;
+      const tool = h.tools.get(`ops.${target.module}.${cancellation}`)!;
+      const command = {
+        id: target.id,
+        expectedVersion: target.version,
+        reason: "Explicit cancellation",
+        ...(cancellation === "beginOffboarding"
+          ? { endDate: today, humanDecision: true }
+          : {}),
+      };
+      const operation = { ...ctx(), approvedBy: "independent-reviewer" };
+      // Fail the last task after earlier task transitions have executed. Their
+      // writes and events must roll back together with the case and person.
+      db.exec(
+        `CREATE TRIGGER reject_last_cancellation BEFORE UPDATE ON ops_tasks WHEN NEW.id='${String(before.at(-1)!.id)}' AND NEW.status='cancelled' BEGIN SELECT RAISE(ABORT, 'synthetic cancellation rollback'); END;`,
+      );
+      await assert.rejects(
+        tool.execute(operation, command),
+        /synthetic cancellation rollback/,
+      );
+      assert.deepEqual(
+        store.get(principal(), "cases", onboarding.id).data.tasks,
+        before,
+      );
+      assert.equal(
+        store.get(principal(), "cases", onboarding.id).status,
+        "open",
+      );
+      assert.equal(
+        store.get(principal(), "people", person.id).status,
+        "onboarding",
+      );
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              "SELECT count(*) AS n FROM ops_task_events WHERE case_id=?",
+            )
+            .get(onboarding.id)!.n,
+        ),
+        eventsBefore,
+      );
+      db.exec("DROP TRIGGER reject_last_cancellation");
+      const result = await tool.execute(operation, command);
+      assert.equal((await tool.verify(operation, command, result)).ok, true);
+      const cancelled = store.get(principal(), "cases", onboarding.id);
+      assert.equal(cancelled.status, "cancelled");
+      for (const old of before) {
+        const task = (cancelled.data.tasks as JsonObject[]).find(
+          (task) => task.id === old.id,
+        )!;
+        if (old.status === "completed") assert.deepEqual(task, old);
+        else {
+          assert.equal(task.status, "cancelled");
+          assert.equal(task.version, Number(old.version) + 1);
+          const event = db
+            .prepare(
+              "SELECT * FROM ops_task_events WHERE task_id=? ORDER BY task_version DESC LIMIT 1",
+            )
+            .get(String(old.id))!;
+          assert.equal(event.action, "cancelTask");
+          assert.equal(event.from_status, old.status);
+          assert.equal(event.to_status, "cancelled");
+          assert.equal(event.requested_by, principal().id);
+          assert.equal(event.approved_by, "independent-reviewer");
+          assert.equal(event.operation_key, operation.operationKey);
+          assert.equal(event.reason, cancelled.data.cancellationReason);
+        }
+      }
+      assert.ok(
+        store
+          .listTasks(principal())
+          .filter((task) => task.caseId === onboarding.id)
+          .every((task) => task.allowedActions.length === 0),
+      );
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              "SELECT count(*) AS n FROM ops_task_events WHERE case_id=?",
+            )
+            .get(onboarding.id)!.n,
+        ),
+        eventsBefore + 4,
+      );
+      assert.deepEqual(await tool.execute(operation, command), result);
+      assert.equal(
+        Number(
+          db
+            .prepare(
+              "SELECT count(*) AS n FROM ops_task_events WHERE case_id=?",
+            )
+            .get(onboarding.id)!.n,
+        ),
+        eventsBefore + 4,
+      );
+      assert.equal(
+        store.get(principal(), "people", person.id).status,
+        cancellation === "beginOffboarding" ? "offboarding" : "onboarding",
+      );
+    } finally {
+      db.close();
+      store.close();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("employment exit rechecks the accepted offboarding document and keeps the episode open after source changes", async () => {
+  const store = new WorkspaceStore(":memory:");
+  try {
+    const h = helper(store);
+    let person = await h.person();
+    person = await h.action(person, "beginOffboarding", {
+      endDate: today,
+      reason: "Test offboarding",
+      humanDecision: true,
+    });
+    let offboarding = store.get(
+      principal(),
+      "cases",
+      String(person.data.offboardingCaseId),
+    );
+    offboarding = await h.action(offboarding, "revise", {
+      brief: String(offboarding.data.brief),
+      acceptanceCriteria: "Current approved settlement document",
+      reason: "Explicit typed settlement proof",
+      requirements: [
+        {
+          key: "settlement",
+          title: "Approved settlement",
+          kind: "document_approved",
+          required: true,
+          expected: { documentType: "report", currentVersionRequired: true },
+        },
+      ],
+    });
+    let document = await h.create("documents", "Synthetic settlement report", {
+      documentType: "report",
+      content: "Synthetic settlement content",
+      accessScope: "people",
+      linkedCaseId: offboarding.id,
+    });
+    document = await h.action(document, "submit");
+    document = await h.action(document, "approve", {
+      decision: "approved",
+      note: "Explicit report acceptance",
+      humanDecision: true,
+    });
+    offboarding = await h.action(offboarding, "bindEvidence", {
+      requirementId: store.readiness(principal(), offboarding.id)
+        .requirements[0]!.id,
+      sourceModule: "documents",
+      sourceId: document.id,
+      sourceVersion: document.version,
+    });
+    offboarding = await h.acceptCase(offboarding.id);
+    assert.equal(
+      store.readiness(principal(), offboarding.id).acceptanceCurrent,
+      true,
+    );
+    await h.action(document, "revise", {
+      content: "Changed settlement terms",
+      changeNote: "New revision after acceptance",
+    });
+    assert.equal(
+      store.readiness(principal(), offboarding.id).acceptanceCurrent,
+      false,
+    );
+    await assert.rejects(
+      h.action(person, "endEmployment", {
+        endDate: today,
+        reason: "Must recheck acceptance",
+        humanDecision: true,
+      }),
+      code("EXIT_READINESS_STALE"),
+    );
+    const unchanged = store.get(principal(), "people", person.id);
+    assert.equal(unchanged.status, "offboarding");
+    assert.equal(
+      (unchanged.data.employmentEpisodes as JsonObject[]).at(-1)!.status,
+      "offboarding",
+    );
   } finally {
     store.close();
   }
@@ -1106,6 +1426,9 @@ test("Core pins company profile version; lifecycle uses frozen template offsets 
   const tasks = [
     {
       key: "docs",
+      kind: "work" as const,
+      assigneeRole: "hr" as const,
+      requirementKeys: ["documents"],
       title: "Firmowa kontrola dokumentów",
       required: true,
       offsetDays: -2,
@@ -1113,6 +1436,9 @@ test("Core pins company profile version; lifecycle uses frozen template offsets 
     },
     {
       key: "ready",
+      kind: "decision" as const,
+      assigneeRole: "manager" as const,
+      requirementKeys: ["equipment", "access"],
       title: "Firmowa gotowość",
       required: true,
       offsetDays: 3,
@@ -1123,6 +1449,12 @@ test("Core pins company profile version; lifecycle uses frozen template offsets 
     seenTenants.push(tenantId);
     return {
       version: profileVersion,
+      definitionVersion: "2",
+      roleBindings: {
+        hr: "human-reviewer",
+        it: "human-reviewer",
+        manager: "human-reviewer",
+      },
       processTemplates: { onboarding: tasks, offboarding: tasks },
     };
   });
@@ -1238,6 +1570,9 @@ test("company calendar handles Polish midnight separately from a UTC tenant; leg
   const template = [
     {
       key: "readiness",
+      kind: "work" as const,
+      assigneeRole: "hr" as const,
+      requirementKeys: [],
       title: "Gotowość",
       required: true,
       offsetDays: 0,
@@ -1246,38 +1581,14 @@ test("company calendar handles Polish midnight separately from a UTC tenant; leg
   ];
   store.setProfileProvider((tenantId) => ({
     version: 1,
+    definitionVersion: "2",
+    roleBindings: {},
     ...(tenantId === "tenant-b" ? { timezone: "UTC" } : {}),
     processTemplates: { onboarding: template, offboarding: template },
   }));
   try {
     const pl = helper(store),
       utc = helper(store, "tenant-b");
-    const onboard = async (h: ReturnType<typeof helper>) => {
-      let person = await h.create("people", "Osoba kalendarza", {
-        personCategory: "internal",
-      });
-      person = await h.action(person, "startEmployment", {
-        employmentKind: "internal",
-        profileVersion: 1,
-        startDate: "2026-09-08",
-        role: "Test",
-        humanDecision: true,
-      });
-      await h.acceptCase(String(person.data.onboardingCaseId));
-      return person;
-    };
-    const polishPerson = await onboard(pl),
-      utcPerson = await onboard(utc);
-    assert.equal(
-      (await pl.action(polishPerson, "activate", { humanDecision: true }))
-        .status,
-      "active",
-      "profile without timezone defaults to Europe/Warsaw",
-    );
-    await assert.rejects(
-      utc.action(utcPerson, "activate", { humanDecision: true }),
-      code("START_DATE_NOT_REACHED"),
-    );
     const polishCase = await pl.create("cases", "Praca Polska", {
       caseType: "general",
       brief: "Test",
@@ -1301,6 +1612,21 @@ test("company calendar handles Polish midnight separately from a UTC tenant; leg
       }),
       code("FUTURE_WORKLOG"),
     );
+    // Onboarding remains open; license/calendar checks do not require or prove readiness.
+    const onboard = async (h: ReturnType<typeof helper>) => {
+      const person = await h.create("people", "Osoba kalendarza", {
+        personCategory: "internal",
+      });
+      return h.action(person, "startEmployment", {
+        employmentKind: "internal",
+        profileVersion: 1,
+        startDate: "2026-09-08",
+        role: "Test",
+        humanDecision: true,
+      });
+    };
+    const polishPerson = await onboard(pl),
+      utcPerson = await onboard(utc);
     const polishLicense = await pl.create("licenses", "Ważność Polska", {
       product: "Test",
       totalSeats: 1,

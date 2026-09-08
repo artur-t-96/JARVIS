@@ -69,6 +69,12 @@ export function createApp({
     requestTimeout: 30_000,
     trustProxy: false,
   });
+  const activePrincipals = (tenantId: string) =>
+    (config.mode === "accounts" && accounts
+      ? accounts.principals()
+      : config.principals
+    ).filter((actor) => actor.tenantId === tenantId);
+  workspace?.setPrincipalProvider(activePrincipals);
   const principal = (req: FastifyRequest): Principal => {
     if (config.mode === "accounts" && accounts) {
       engine.setPrincipals(accounts.principals());
@@ -382,6 +388,7 @@ export function createApp({
       engine,
       tools,
       principal,
+      principals: activePrincipals,
       conversations,
       diagnostics,
       initiatives,

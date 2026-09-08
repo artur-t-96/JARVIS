@@ -22,6 +22,8 @@ import {
 import { EntityContent, RecordDownload } from "./EntityContent";
 import { LaboratoryPanel } from "./LaboratoryPanel";
 import { DocumentTemplate } from "./DocumentTemplate";
+import { CaseReadiness } from "./CaseReadiness";
+import { HumanTasks } from "./HumanTasks";
 
 type FormSpec = {
   title: string;
@@ -31,6 +33,18 @@ type FormSpec = {
   dataForm: boolean;
   initialValues?: Record<string, unknown>;
 };
+const actionFields = (
+  module: ModuleDefinition,
+  action: ModuleDefinition["actions"][number],
+) =>
+  (action.fields ?? []).filter(
+    (field) =>
+      !(
+        module.id === "cases" &&
+        action.id === "addTask" &&
+        ["assigneeId", "assigneePrincipalId"].includes(field.key)
+      ),
+  );
 function CommandForm({
   module,
   spec,
@@ -46,6 +60,13 @@ function CommandForm({
     ...spec.initialValues,
   }));
   const refs = useReferences(spec.fields, spec.entity);
+  const assignees = useResource<{
+    assignees: { id: string; label: string }[];
+  }>(
+    spec.entity && spec.fields.some((field) => field.key === "ownerPrincipalId")
+      ? `/api/cases/${encodeURIComponent(spec.entity.id)}/owners`
+      : null,
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [idempotencyKey] = useState(requestKey);
@@ -91,12 +112,10 @@ function CommandForm({
       required: field.required,
       disabled: busy,
     };
-    const options = referenceOptions(
-      field.key,
-      refs.records,
-      values,
-      spec.entity,
-    );
+    const options =
+      field.key === "ownerPrincipalId"
+        ? (assignees.data?.assignees ?? [])
+        : referenceOptions(field.key, refs.records, values, spec.entity);
     const set = (value: unknown) =>
       setValues((current) => ({
         ...current,
@@ -177,11 +196,15 @@ function CommandForm({
               onChange={(event) => set(event.target.value)}
             >
               <option value="">
-                {options.length
-                  ? "Wybierz rekord…"
-                  : field.key === "employmentEpisodeId"
-                    ? "Najpierw wybierz osobę…"
-                    : "Brak dostępnych rekordów"}
+                {field.key === "ownerPrincipalId"
+                  ? assignees.loading
+                    ? "Pobieranie kont…"
+                    : "Wybierz konto właściciela…"
+                  : options.length
+                    ? "Wybierz rekord…"
+                    : field.key === "employmentEpisodeId"
+                      ? "Najpierw wybierz osobę…"
+                      : "Brak dostępnych rekordów"}
               </option>
               {options.map((option) => (
                 <option key={option.id} value={option.id}>
@@ -191,8 +214,9 @@ function CommandForm({
             </select>
             {!options.length && (
               <small>
-                Dodaj potrzebny rekord w odpowiednim obszarze, a następnie wróć
-                do tej operacji.
+                {field.key === "ownerPrincipalId"
+                  ? "Właściciel musi mieć dostęp do całej sprawy. JARVIS sprawdzi uprawnienia konta przed zapisem."
+                  : "Dodaj potrzebny rekord w odpowiednim obszarze, a następnie wróć do tej operacji."}
               </small>
             )}
           </>
@@ -239,6 +263,7 @@ function CommandForm({
       <form onSubmit={submit} className="command-form">
         <div className="sheet-body">
           {error && <Notice tone="error">{error}</Notice>}
+          {assignees.error && <Notice tone="error">{assignees.error}</Notice>}
           {refs.errors.map((error) => (
             <Notice key={error}>{error}</Notice>
           ))}
@@ -366,7 +391,7 @@ export function WorkspacePage({
       setForm({
         title: action.label,
         action: id,
-        fields: action.fields ?? [],
+        fields: actionFields(module, action),
         entity: item,
         dataForm: false,
         initialValues,
@@ -422,6 +447,13 @@ export function WorkspacePage({
                   </button>
                 )}
               </div>
+              {item.module === "cases" && (
+                <CaseReadiness
+                  item={item}
+                  context={context}
+                  revision={revision}
+                />
+              )}
               <div className="detail-grid">
                 <section className="card">
                   <div className="card-heading">
@@ -489,7 +521,21 @@ export function WorkspacePage({
                     </p>
                     <div className="action-list">
                       {module.actions
-                        .filter((action) => allowedTool(action.id))
+                        .filter(
+                          (action) =>
+                            allowedTool(action.id) &&
+                            !(
+                              module.id === "cases" &&
+                              [
+                                "acceptTask",
+                                "declineTask",
+                                "transferTask",
+                                "completeTask",
+                                "cancelTask",
+                                "bindEvidence",
+                              ].includes(action.id)
+                            ),
+                        )
                         .map((action) => (
                           <button
                             className="action-row"
@@ -498,7 +544,7 @@ export function WorkspacePage({
                               setForm({
                                 title: action.label,
                                 action: action.id,
-                                fields: action.fields ?? [],
+                                fields: actionFields(module, action),
                                 entity: item,
                                 dataForm: false,
                               })
@@ -527,10 +573,18 @@ export function WorkspacePage({
                   </div>
                 </aside>
               </div>
+              {item.module === "cases" && (
+                <HumanTasks
+                  context={context}
+                  revision={revision + item.version}
+                  caseId={item.id}
+                />
+              )}
               <EntityContent
                 item={item}
                 onAction={showAction}
                 allowedTool={allowedTool}
+                hideTasks={item.module === "cases"}
               />
             </>
           )

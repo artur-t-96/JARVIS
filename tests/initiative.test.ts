@@ -12,7 +12,11 @@ import {
   type Principal,
   type ToolContext,
 } from "../src/contracts.js";
-import { InitiativeStore, type CompanySettings } from "../src/initiative.js";
+import {
+  InitiativeStore,
+  baselineProcessTemplates,
+  type CompanySettings,
+} from "../src/initiative.js";
 import { WorkspaceStore, type Entity } from "../src/workspace.js";
 
 const principal = (tenantId = "tenant-a", scopes = ["*"]): Principal => ({
@@ -40,6 +44,7 @@ function fixture(durable = false) {
   const workspace = new WorkspaceStore(
     durable ? join(directory, "operations.sqlite") : ":memory:",
   );
+  workspace.setPrincipalProvider((tenantId) => [principal(tenantId)]);
   const path = durable ? join(directory, "initiatives.sqlite") : ":memory:";
   let now = Date.parse("2099-01-02T12:00:00.000Z");
   let initiatives = new InitiativeStore(path, workspace, { clock: () => now });
@@ -114,6 +119,7 @@ function settings(
     quietHours: profile.quietHours,
     rules: profile.rules,
     processTemplates: profile.processTemplates,
+    roleBindings: profile.roleBindings,
   };
 }
 async function configure(
@@ -193,6 +199,7 @@ test("scans real overdue tasks/cases, expired reservations, licenses and severe 
     });
     caseItem = await ctx.change(caseItem, "addTask", {
       title: "Weryfikacja człowieka",
+      kind: "work",
       dueDate: "2099-01-01",
       assigneeId: person.id,
       required: true,
@@ -437,6 +444,9 @@ test("profile templates are strict, versioned and approved; replay reconciles wh
         {
           key: "access",
           title: "Sprawdź dostęp dzień wcześniej",
+          assigneeRole: "it" as const,
+          kind: "work" as const,
+          requirementKeys: ["access"],
           required: true,
           offsetDays: -1,
           dependsOn: [],
@@ -444,6 +454,9 @@ test("profile templates are strict, versioned and approved; replay reconciles wh
         {
           key: "ready",
           title: "Odbierz gotowość",
+          assigneeRole: "manager" as const,
+          kind: "decision" as const,
+          requirementKeys: ["access"],
           required: true,
           offsetDays: 0,
           dependsOn: ["access"],
@@ -537,5 +550,129 @@ test("profile templates are strict, versioned and approved; replay reconciles wh
     );
   } finally {
     ctx.close();
+  }
+});
+
+test("legacy profile stays attributed to its original approval and requires explicit v2 configuration", async () => {
+  const f = fixture(true);
+  try {
+    const current = f.initiatives.profile(principal());
+    const { roleBindings: _bindings, ...legacy } = current;
+    const historical = {
+      ...legacy,
+      definitionVersion: "1",
+      version: 7,
+      updatedAt: "2026-01-01T12:00:00.000Z",
+      updatedBy: "original-requester",
+      updatedApprovedBy: "original-approver",
+      processTemplates: {
+        onboarding: [
+          {
+            key: "old",
+            title: "Legacy checklist",
+            required: true,
+            offsetDays: 0,
+            dependsOn: [],
+          },
+        ],
+        offboarding: [
+          {
+            key: "old",
+            title: "Legacy close",
+            required: true,
+            offsetDays: 0,
+            dependsOn: [],
+          },
+        ],
+      },
+    };
+    const sql = new DatabaseSync(f.path);
+    sql
+      .prepare("INSERT INTO initiative_profiles VALUES(?,?)")
+      .run("tenant-a", JSON.stringify(historical));
+    sql.close();
+    f.reopen();
+    const read = f.initiatives.profile(principal());
+    assert.equal(read.needsConfiguration, true);
+    assert.equal(read.definitionVersion, "1");
+    assert.equal(read.version, 7);
+    assert.equal(read.updatedBy, "original-requester");
+    assert.equal(read.updatedApprovedBy, "original-approver");
+    assert.deepEqual(read.roleBindings, {});
+    assert.deepEqual(read.processTemplates, historical.processTemplates);
+    const tool = f.initiatives
+      .tools()
+      .find((t) => t.id === "initiatives.configure")!;
+    assert.equal(tool.version, "2");
+    await assert.rejects(
+      () => configure(f.initiatives, { companyName: "Only rename" }),
+      code("INVALID_INITIATIVE_INPUT"),
+    );
+    await configure(f.initiatives, {
+      roleBindings: { hr: "requester", it: "requester", manager: "requester" },
+      processTemplates: baselineProcessTemplates("contractor"),
+    });
+    const configured = f.initiatives.profile(principal());
+    assert.equal(configured.version, 8);
+    assert.equal(configured.definitionVersion, "2");
+    assert.equal(configured.updatedApprovedBy, "reviewer");
+    assert.equal(configured.needsConfiguration, undefined);
+  } finally {
+    f.close();
+  }
+});
+
+test("declined and overdue task produces one current owner obligation across restart", async () => {
+  const f = fixture(true);
+  try {
+    let c = await f.create("cases", "Jawna sprawa", {
+      caseType: "general",
+      brief: "Zakres",
+      acceptanceCriteria: "Odbiór",
+    });
+    c = await f.change(c, "addTask", {
+      title: "Potwierdź pracę",
+      kind: "work",
+      required: true,
+      assigneePrincipalId: "requester",
+      dueDate: "2099-01-01",
+    });
+    const task = (c.data.tasks as JsonObject[])[0]!;
+    c = await f.change(c, "declineTask", {
+      taskId: task.id,
+      expectedTaskVersion: task.version,
+      reason: "Nie mogę wykonać",
+      humanConfirmed: true,
+    });
+    f.initiatives.scan(principal());
+    const first = f.initiatives
+      .list(principal())
+      .filter((i) => i.sourceItemId === task.id);
+    assert.equal(first.length, 1);
+    assert.match(first[0]!.title, /Odmowa/);
+    assert.equal(first[0]!.status, "open");
+    f.reopen();
+    f.initiatives.scan(principal());
+    const after = f.initiatives
+      .list(principal())
+      .filter((i) => i.sourceItemId === task.id);
+    assert.equal(after.length, 1);
+    assert.equal(after[0]!.id, first[0]!.id);
+    assert.equal(after[0]!.version, first[0]!.version);
+    const declined = (c.data.tasks as JsonObject[])[0]!;
+    c = await f.change(c, "cancelTask", {
+      taskId: task.id,
+      expectedTaskVersion: declined.version,
+      reason: "Jawna rezygnacja",
+      humanConfirmed: true,
+    });
+    f.initiatives.scan(principal());
+    assert.equal(
+      f.initiatives.list(principal()).find((i) => i.id === first[0]!.id)
+        ?.status,
+      "resolved",
+    );
+  } finally {
+    f.close();
   }
 });

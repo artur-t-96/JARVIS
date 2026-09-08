@@ -13,6 +13,14 @@ import {
 } from "./contracts.js";
 import { migrateDatabase } from "./migrations.js";
 import { type Entity, WorkspaceStore } from "./workspace.js";
+import {
+  processTemplateTaskSchema,
+  processTemplatesSchema,
+  roleBindingsSchema,
+  baselineProcessTemplates,
+} from "./workspace-models.js";
+
+export { baselineProcessTemplates } from "./workspace-models.js";
 
 const rules = [
   "overdue_case",
@@ -24,41 +32,6 @@ const rules = [
 type Rule = (typeof rules)[number];
 const modules = ["cases", "assets", "licenses", "it"] as const;
 const clockTime = z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/);
-const templateTaskSchema = z
-  .object({
-    key: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
-    title: z.string().trim().min(1).max(200),
-    required: z.boolean(),
-    offsetDays: z.number().int().min(-365).max(365),
-    dependsOn: z.array(z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/)).max(30),
-  })
-  .strict();
-const templateSchema = z
-  .array(templateTaskSchema)
-  .min(1)
-  .max(30)
-  .superRefine((tasks, context) => {
-    const seen = new Set<string>();
-    for (const [index, task] of tasks.entries()) {
-      if (
-        seen.has(task.key) ||
-        new Set(task.dependsOn).size !== task.dependsOn.length ||
-        task.dependsOn.some((key) => !seen.has(key))
-      )
-        context.addIssue({
-          code: "custom",
-          message:
-            "Klucze muszą być unikalne; zależności mogą wskazywać tylko wcześniejsze zadania.",
-          path: [index],
-        });
-      seen.add(task.key);
-    }
-    if (!tasks.some((task) => task.required))
-      context.addIssue({
-        code: "custom",
-        message: "Szablon musi zawierać obowiązkowe zadanie.",
-      });
-  });
 const settingsSchema = z
   .object({
     companyName: z.string().trim().min(1).max(160),
@@ -87,13 +60,12 @@ const settingsSchema = z
         high_severity_incident: z.boolean(),
       })
       .strict(),
-    processTemplates: z
-      .object({ onboarding: templateSchema, offboarding: templateSchema })
-      .strict(),
+    roleBindings: roleBindingsSchema,
+    processTemplates: processTemplatesSchema,
   })
   .strict();
 export type CompanySettings = z.infer<typeof settingsSchema>;
-export type ProcessTemplateTask = z.infer<typeof templateTaskSchema>;
+export type ProcessTemplateTask = z.infer<typeof processTemplateTaskSchema>;
 export interface CompanyProfile extends CompanySettings {
   tenantId: string;
   version: number;
@@ -101,6 +73,7 @@ export interface CompanyProfile extends CompanySettings {
   updatedBy: string | null;
   updatedApprovedBy: string | null;
   definitionVersion: string;
+  needsConfiguration?: boolean;
 }
 export interface Initiative {
   id: string;
@@ -115,6 +88,7 @@ export interface Initiative {
   version: number;
   dueDate: string | null;
   ownerId: string | null;
+  ownerPrincipalId?: string | null;
   sourceVersion: number;
   sourceUpdatedAt: string;
   fingerprint: string;
@@ -140,6 +114,7 @@ type Candidate = Pick<
   | "severity"
   | "dueDate"
   | "ownerId"
+  | "ownerPrincipalId"
   | "sourceVersion"
   | "sourceUpdatedAt"
   | "sourceFingerprint"
@@ -244,7 +219,18 @@ export class InitiativeStore {
     const row = this.db
       .prepare("SELECT record_json FROM initiative_profiles WHERE tenant_id=?")
       .get(tenantId);
-    if (row) return JSON.parse(String(row.record_json)) as CompanyProfile;
+    if (row) {
+      const stored = JSON.parse(String(row.record_json)) as CompanyProfile;
+      // Read old profiles without inventing bindings or a migration approval. Their
+      // original version/authors remain intact and lifecycle rejects definition 1.
+      if (stored.definitionVersion !== "2")
+        return {
+          ...stored,
+          roleBindings: stored.roleBindings ?? {},
+          needsConfiguration: true,
+        };
+      return stored;
+    }
     return {
       tenantId,
       version: 0,
@@ -259,58 +245,12 @@ export class InitiativeStore {
         license_expiry: true,
         high_severity_incident: true,
       },
-      processTemplates: {
-        onboarding: [
-          {
-            key: "documents",
-            title: "Potwierdź warunki i dokumenty współpracy",
-            required: true,
-            offsetDays: 0,
-            dependsOn: [],
-          },
-          {
-            key: "tools",
-            title: "Przygotuj narzędzia i materiały do pracy",
-            required: true,
-            offsetDays: 0,
-            dependsOn: [],
-          },
-          {
-            key: "readiness",
-            title: "Potwierdź gotowość na pierwszy dzień",
-            required: true,
-            offsetDays: 0,
-            dependsOn: ["documents", "tools"],
-          },
-        ],
-        offboarding: [
-          {
-            key: "handover",
-            title: "Przekaż obowiązki i materiały",
-            required: true,
-            offsetDays: 0,
-            dependsOn: [],
-          },
-          {
-            key: "resources",
-            title: "Rozlicz sprzęt, licencje i lokalne uprawnienia",
-            required: true,
-            offsetDays: 0,
-            dependsOn: [],
-          },
-          {
-            key: "closure",
-            title: "Potwierdź kompletność zakończenia współpracy",
-            required: true,
-            offsetDays: 0,
-            dependsOn: ["handover", "resources"],
-          },
-        ],
-      },
+      roleBindings: {},
+      processTemplates: baselineProcessTemplates("internal"),
       updatedAt: null,
       updatedBy: null,
       updatedApprovedBy: null,
-      definitionVersion: "1",
+      definitionVersion: "2",
     };
   }
 
@@ -517,7 +457,7 @@ export class InitiativeStore {
         const toolId = `initiatives.${action}`;
         return {
           id: toolId,
-          version: "1",
+          version: action === "configure" ? "2" : "1",
           scope: action === "configure" ? "company" : "initiatives",
           effect: "write",
           recovery: "reconcile",
@@ -574,7 +514,7 @@ export class InitiativeStore {
                   updatedAt: now,
                   updatedBy: ctx.actorId!,
                   updatedApprovedBy: ctx.approvedBy!,
-                  definitionVersion: "1",
+                  definitionVersion: "2",
                 };
                 this.db
                   .prepare(
@@ -926,10 +866,12 @@ export class InitiativeStore {
       >,
       relevant: unknown,
       sourceItemId: string | null = null,
+      mandatory = false,
     ) => {
-      if (!profile.rules[rule]) return;
+      if (!mandatory && !profile.rules[rule]) return;
       found.push({
         ...fields,
+        ownerPrincipalId: textValue(entity.data.ownerPrincipalId),
         rule,
         module: entity.module,
         sourceId: entity.id,
@@ -964,27 +906,30 @@ export class InitiativeStore {
         );
       for (const task of listData(data.tasks))
         if (
-          task.status === "open" &&
-          validDate(task.dueDate) &&
-          task.dueDate < today
+          !["completed", "cancelled"].includes(String(task.status)) &&
+          (task.status === "declined" ||
+            (validDate(task.dueDate) && task.dueDate < today))
         )
           add(
             "overdue_task",
             {
-              title: `Zadanie po terminie: ${String(task.title)}`,
-              summary: `Zadanie w sprawie „${entity.title}” wymaga potwierdzenia przez wykonawcę.`,
+              title: `${task.status === "declined" ? "Odmowa zadania" : "Zadanie po terminie"}: ${String(task.title)}`,
+              summary: `Właściciel sprawy „${entity.title}” musi ustalić wykonawcę i dalsze działanie.`,
               severity: task.required ? "high" : "medium",
-              dueDate: task.dueDate,
-              ownerId: textValue(task.assigneeId) ?? textValue(data.ownerId),
+              dueDate: textValue(task.dueDate),
+              ownerId: textValue(data.ownerId),
             },
             {
               id: task.id,
               dueDate: task.dueDate,
               assigneeId: task.assigneeId ?? null,
+              assigneePrincipalId: task.assigneePrincipalId ?? null,
+              status: task.status,
               required: task.required,
               scopeRevision: data.scopeRevision,
             },
             textValue(task.id),
+            task.status === "declined",
           );
     }
     if (entity.module === "assets" && entity.status === "reserved")

@@ -2784,6 +2784,229 @@ tbody tr:hover {
   gap: 23px;
   margin-top: 23px;
 }
+.readiness-card {
+  margin-bottom: 24px;
+}
+.readiness-card .card-heading,
+.human-tasks-card .card-heading {
+  align-items: flex-start;
+}
+.readiness-indicator,
+.requirement-state,
+.task-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border-radius: 6px;
+  padding: 6px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  background: #f1f3f4;
+  color: #435267;
+  line-height: 1.45;
+}
+.readiness-indicator.confirmed,
+.requirement-state.satisfied,
+.task-state.completed {
+  background: #edf5ef;
+  color: #235d44;
+}
+.readiness-indicator.attention,
+.requirement-state.missing,
+.requirement-state.stale,
+.task-state.unassigned,
+.task-state.declined {
+  background: #fff4e5;
+  color: #865319;
+}
+.requirement-state.failed {
+  background: #fff0ed;
+  color: #9a372a;
+}
+.requirement-list,
+.human-task-list {
+  border-top: 1px solid var(--line);
+}
+.requirement-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 22px 0;
+  border-bottom: 1px solid var(--line);
+}
+.requirement-symbol {
+  flex: 0 0 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: #f2f4f7;
+  color: #53637a;
+}
+.requirement-symbol.confirmed {
+  color: #235d44;
+  background: #edf5ef;
+}
+.requirement-body {
+  flex: 1;
+  min-width: 0;
+}
+.requirement-body h3 {
+  margin: 5px 0 0;
+}
+.requirement-body > p {
+  margin: 10px 0;
+  line-height: 1.65;
+}
+.requirement-next {
+  color: #76511f;
+}
+.requirement-source {
+  margin: 15px 0;
+}
+.requirement-source summary,
+.task-history summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  padding: 5px 0;
+}
+.requirement-source dl {
+  margin: 10px 0;
+  display: grid;
+  gap: 8px;
+}
+.requirement-source dt {
+  font-size: 12px;
+  color: var(--muted);
+}
+.requirement-source dd {
+  margin: 4px 0 0;
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.readiness-explanation {
+  margin: 18px 0 0;
+  line-height: 1.6;
+}
+.readiness-task-blockers {
+  border-left: 3px solid #d4aa66;
+  background: #fdf8ef;
+  padding: 14px 18px;
+  margin-bottom: 20px;
+}
+.readiness-task-blockers ul {
+  padding-left: 20px;
+  margin: 8px 0 0;
+  line-height: 1.65;
+}
+.human-tasks-card {
+  margin-top: 24px;
+}
+.task-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.task-filters select {
+  min-height: 40px;
+  max-width: 100%;
+}
+.human-task-entry {
+  padding: 24px 0;
+  border-bottom: 1px solid var(--line);
+}
+.human-task-entry:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.human-task-entry h3 {
+  margin: 6px 0 0;
+}
+.human-task-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 18px 32px;
+  margin: 18px 0;
+}
+.human-task-meta dt {
+  color: var(--muted);
+  font-size: 12px;
+}
+.human-task-meta dd {
+  margin: 5px 0 0;
+  font-size: 13px;
+}
+.overdue-label {
+  display: inline-block;
+  margin-left: 9px;
+  color: #9a372a;
+  font-weight: 600;
+}
+.task-dependency-note {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: #76511f;
+}
+.task-dependency-note svg {
+  flex-shrink: 0;
+}
+.task-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+  margin-top: 17px;
+}
+.task-history {
+  margin-top: 17px;
+}
+.task-history ol {
+  padding-left: 20px;
+}
+.task-history li {
+  padding: 8px 0;
+  font-size: 13px;
+}
+.task-history time {
+  display: block;
+  color: var(--muted);
+  margin-top: 5px;
+}
+.task-history li p {
+  margin: 7px 0;
+}
+@media (max-width: 700px) {
+  .readiness-card .card-heading,
+  .readiness-card .task-heading,
+  .human-task-entry .task-heading {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .requirement-row {
+    gap: 10px;
+  }
+  .requirement-symbol {
+    flex-basis: 29px;
+    height: 31px;
+  }
+  .task-actions .button {
+    flex: 1 1 140px;
+    justify-content: center;
+  }
+  .task-filters {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+  .task-filters select {
+    width: 100%;
+  }
+  .requirement-state {
+    max-width: 100%;
+  }
+}
 .task-heading {
   display: flex;
   justify-content: space-between;

@@ -44,12 +44,20 @@ export function exportArtifact(
         "Pakiet wymaga odbioru aktualnej wersji sprawy.",
         409,
       );
+    const readiness = workspace.readiness(p, id);
+    if (!readiness.acceptanceCurrent)
+      throw new DomainError(
+        "CASE_ACCEPTANCE_STALE",
+        "Dowody albo zakres odbioru nie są aktualne. Sprawdź gotowość sprawy przed eksportem pakietu.",
+        409,
+      );
     body =
       JSON.stringify(
         {
           format: "jarvis-case-package",
           formatVersion: 1,
           case: entity,
+          readiness,
           settlement: entity.data.settlementDraft ?? null,
           financialPosting: false,
           paymentExecuted: false,

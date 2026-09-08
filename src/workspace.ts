@@ -18,9 +18,26 @@ import {
   createDataSchemas,
   moduleIds,
   workspaceCatalog,
+  processTemplatesSchema,
+  roleBindingsSchema,
+  baselineProcessTemplates,
+  type TaskRole,
+  type RoleBindings,
   type ModuleDefinition,
   type ModuleId,
 } from "./workspace-models.js";
+import {
+  CaseReadinessStore,
+  migrateReadiness,
+  type AcceptanceReadiness,
+} from "./case-readiness.js";
+import {
+  WorkspaceTasks,
+  taskTablesSql,
+  roleScopes,
+  type TaskAction,
+  type TaskTransition,
+} from "./workspace-tasks.js";
 export type { ModuleDefinition } from "./workspace-models.js";
 
 export interface Entity {
@@ -43,62 +60,15 @@ type CommandInput = {
 };
 export interface LifecycleProfile {
   version: number;
+  definitionVersion: string;
   timezone?: string;
-  processTemplates: {
-    onboarding: {
-      key: string;
-      title: string;
-      required: boolean;
-      offsetDays: number;
-      dependsOn: string[];
-    }[];
-    offboarding: {
-      key: string;
-      title: string;
-      required: boolean;
-      offsetDays: number;
-      dependsOn: string[];
-    }[];
-  };
+  roleBindings: RoleBindings;
+  processTemplates: z.infer<typeof processTemplatesSchema>;
 }
-const lifecycleTemplateSchema = z
-  .array(
-    z
-      .object({
-        key: z.string().regex(/^[a-z][a-z0-9_-]{0,39}$/),
-        title: z.string().trim().min(1).max(200),
-        required: z.boolean(),
-        offsetDays: z.number().int().min(-365).max(365),
-        dependsOn: z.array(z.string()).max(30),
-      })
-      .strict(),
-  )
-  .min(1)
-  .max(30)
-  .superRefine((tasks, ctx) => {
-    const seen = new Set<string>();
-    for (const [index, task] of tasks.entries()) {
-      if (
-        seen.has(task.key) ||
-        new Set(task.dependsOn).size !== task.dependsOn.length ||
-        task.dependsOn.some((key) => !seen.has(key))
-      )
-        ctx.addIssue({
-          code: "custom",
-          path: [index],
-          message: "Niepoprawne zależności szablonu.",
-        });
-      seen.add(task.key);
-    }
-    if (!tasks.some((task) => task.required))
-      ctx.addIssue({
-        code: "custom",
-        message: "Wymagane zadanie obowiązkowe.",
-      });
-  });
 const lifecycleProfileSchema = z
   .object({
     version: z.number().int().min(0),
+    definitionVersion: z.literal("2"),
     timezone: z
       .string()
       .min(1)
@@ -110,13 +80,9 @@ const lifecycleProfileSchema = z
         } catch {
           return false;
         }
-      }, "Niepoprawna strefa czasowa"),
-    processTemplates: z
-      .object({
-        onboarding: lifecycleTemplateSchema,
-        offboarding: lifecycleTemplateSchema,
-      })
-      .strict(),
+      }),
+    roleBindings: roleBindingsSchema,
+    processTemplates: processTemplatesSchema,
   })
   .strict();
 interface Command {
@@ -170,6 +136,9 @@ const editableSchemas: Record<ModuleId, z.ZodType> = {
 export class WorkspaceStore {
   private readonly db: DatabaseSync;
   private profileProvider?: (tenantId: string) => LifecycleProfile;
+  private principalProvider?: (tenantId: string) => Principal[];
+  private readonly taskStore: WorkspaceTasks;
+  private readonly readinessStore: CaseReadinessStore;
   constructor(
     dbPath: string,
     private readonly options: { clock?: () => number } = {},
@@ -214,8 +183,107 @@ export class WorkspaceStore {
               `CREATE TABLE ops_worklogs(tenant_id TEXT NOT NULL,id TEXT NOT NULL,case_id TEXT NOT NULL,scope_revision INTEGER NOT NULL,description TEXT NOT NULL,minutes INTEGER NOT NULL CHECK(minutes>=0),performed_on TEXT NOT NULL,amount_minor INTEGER,currency TEXT,reported_by TEXT NOT NULL,approved_by TEXT,created_at TEXT NOT NULL,PRIMARY KEY(tenant_id,id),FOREIGN KEY(tenant_id,case_id) REFERENCES ops_entities(tenant_id,id));`,
             ),
         },
+        {
+          version: 3,
+          name: "Typed case readiness and human task identity",
+          up: (db) => {
+            db.exec("ALTER TABLE ops_tasks RENAME TO ops_tasks_legacy");
+            db.exec(taskTablesSql);
+            db.exec(`INSERT INTO ops_tasks(tenant_id,id,case_id,scope_revision,title,assignee_id,required,status,completed_by,completed_at,evidence_note,due_date,depends_on_json,kind,version,required_scopes_json,requirement_keys_json,provenance)
+              SELECT tenant_id,id,case_id,scope_revision,title,assignee_id,required,CASE WHEN status='completed' THEN 'completed' ELSE 'unassigned' END,completed_by,completed_at,evidence_note,due_date,depends_on_json,'work',1,'["cases"]','[]','legacy' FROM ops_tasks_legacy;
+              DROP TABLE ops_tasks_legacy;`);
+            const legacyTasks = db
+              .prepare(
+                "SELECT t.tenant_id,t.id,t.assignee_id,e.data_json FROM ops_tasks t JOIN ops_entities e ON e.tenant_id=t.tenant_id AND e.id=t.case_id",
+              )
+              .all() as Row[];
+            for (const task of legacyTasks) {
+              const scopes = new Set([
+                "cases",
+                ...this.entityScopes(
+                  "cases",
+                  JSON.parse(String(task.data_json)),
+                  String(task.tenant_id),
+                ),
+                ...(task.assignee_id ? ["people"] : []),
+              ]);
+              db.prepare(
+                "UPDATE ops_tasks SET required_scopes_json=? WHERE tenant_id=? AND id=?",
+              ).run(
+                canonical([...scopes]),
+                String(task.tenant_id),
+                String(task.id),
+              );
+            }
+            migrateReadiness(db);
+          },
+        },
       ],
     });
+    this.readinessStore = new CaseReadinessStore(this.db, (tenant, e) => {
+      const owner = this.livePrincipal(
+        tenant,
+        typeof e.data.ownerPrincipalId === "string"
+          ? e.data.ownerPrincipalId
+          : undefined,
+      );
+      return !!owner && this.canManageCase(owner, e.id);
+    });
+    this.taskStore = new WorkspaceTasks(
+      this.db,
+      undefined,
+      (principal, caseId) => this.canManageCase(principal, caseId),
+    );
+  }
+  setPrincipalProvider(provider: (tenantId: string) => Principal[]) {
+    this.principalProvider = provider;
+    this.taskStore.setPrincipalProvider(provider);
+  }
+  private livePrincipal(tenant: string, id?: string): Principal | undefined {
+    const matches = (this.principalProvider?.(tenant) ?? []).filter(
+      (p) => p.tenantId === tenant && p.id === id,
+    );
+    return matches.length === 1 ? matches[0] : undefined;
+  }
+  private canManageCase(principal: Principal, caseId: string): boolean {
+    if (!principal.roles.includes("operator")) return false;
+    try {
+      this.get(principal, "cases", caseId);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  listTasks(principal: Principal) {
+    const today = this.companyDate({
+      now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      profile: this.currentProfile(principal.tenantId),
+    });
+    return this.taskStore.project(principal, { today });
+  }
+  taskAssignees(principal: Principal, taskId: string) {
+    return this.taskStore.eligibleAssignees(principal, taskId);
+  }
+  readiness(principal: Principal, caseId: string) {
+    const e = this.get(principal, "cases", caseId);
+    const { bindings: _bindings, ...result } = this.readinessStore.evaluate(
+      principal.tenantId,
+      e,
+      new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+    );
+    return {
+      ...result,
+      requirements: result.requirements.map((requirement) => {
+        if (!requirement.source) return requirement;
+        try {
+          this.get(principal, requirement.source.module, requirement.source.id);
+          return requirement;
+        } catch {
+          const { source: _source, ...safe } = requirement;
+          return safe;
+        }
+      }),
+    };
   }
   setProfileProvider(provider: (tenantId: string) => LifecycleProfile) {
     this.profileProvider = provider;
@@ -223,13 +291,16 @@ export class WorkspaceStore {
   private currentProfile(tenantId: string): LifecycleProfile | undefined {
     if (!this.profileProvider) return undefined;
     const profile = this.profileProvider(tenantId);
+    if (profile.definitionVersion !== "2") return undefined;
     return lifecycleProfileSchema.parse({
       version: profile.version,
+      definitionVersion: profile.definitionVersion,
       timezone: profile.timezone ?? "Europe/Warsaw",
+      roleBindings: profile.roleBindings,
       processTemplates: profile.processTemplates,
     });
   }
-  private companyDate(cmd: Command): string {
+  private companyDate(cmd: Pick<Command, "now" | "profile">): string {
     const parts = new Intl.DateTimeFormat("en", {
       timeZone: cmd.profile?.timezone ?? "UTC",
       year: "numeric",
@@ -244,6 +315,14 @@ export class WorkspaceStore {
     tenantId: string,
     input: JsonObject,
   ): LifecycleProfile | undefined {
+    if (
+      this.profileProvider &&
+      this.profileProvider(tenantId).definitionVersion !== "2"
+    )
+      fail(
+        "PROFILE_UPGRADE_REQUIRED",
+        "Konfiguracja firmy wymaga zatwierdzonego uzupełnienia ról i typowanych zadań.",
+      );
     const profile = this.currentProfile(tenantId);
     if (profile && input.profileVersion !== profile.version)
       fail(
@@ -322,7 +401,8 @@ export class WorkspaceStore {
             principal.scopes?.includes("*") || principal.scopes?.includes(s),
         ),
       )
-      .slice(0, 500);
+      .slice(0, 500)
+      .map((entity) => this.projectEntity(principal.tenantId, entity));
   }
   get(principal: Principal, module: string, id: string): Entity {
     const key = this.module(module);
@@ -334,6 +414,12 @@ export class WorkspaceStore {
       principal.tenantId,
     ))
       this.scope(principal, scope);
+    return this.projectEntity(principal.tenantId, entity);
+  }
+  private projectEntity(tenant: string, entity: Entity): Entity {
+    // Project migrated rows without rewriting historical entity snapshots.
+    if (entity.module === "cases")
+      this.caseState({ ctx: { tenantId: tenant } }, entity);
     return entity;
   }
   summary(principal: Principal) {
@@ -440,6 +526,35 @@ export class WorkspaceStore {
     scopes.push(...this.entityScopes(module, data, tenant));
     if (module === "cases" && action === "addTask" && input.assigneeId)
       scopes.push("people");
+    if (module === "cases" && action === "bindEvidence") {
+      const sourceModule = this.module(String(input.sourceModule));
+      const source = this.read(tenant, sourceModule, String(input.sourceId));
+      scopes.push(
+        sourceModule,
+        ...this.entityScopes(sourceModule, source.data, tenant),
+      );
+    }
+    if (module === "cases" && (action === "create" || action === "revise")) {
+      const definitions = (
+        action === "create" ? data.requirements : input.requirements
+      ) as JsonObject[] | undefined;
+      for (const definition of definitions ?? []) {
+        const expected = definition.expected as JsonObject;
+        for (const [field, target] of [
+          ["assetId", "assets"],
+          ["documentId", "documents"],
+          ["purchaseId", "purchases"],
+        ] as const) {
+          if (typeof expected[field] === "string") {
+            const source = this.read(tenant, target, String(expected[field]));
+            scopes.push(
+              target,
+              ...this.entityScopes(target, source.data, tenant),
+            );
+          }
+        }
+      }
+    }
     if (module === "documents") {
       if (data.ownerId) scopes.push("people");
       if (data.linkedCaseId) {
@@ -484,7 +599,7 @@ export class WorkspaceStore {
         "Wymagana jawna decyzja człowieka i tożsamość wykonawcy.",
         403,
       );
-    cmd.actor = cmd.ctx.approvedBy ?? cmd.ctx.actorId;
+    cmd.actor = cmd.ctx.actorId;
   }
   private ref(cmd: Command, module: ModuleId, value: unknown): Entity {
     if (typeof value !== "string")
@@ -628,6 +743,7 @@ export class WorkspaceStore {
         if (data.caseType === "offboarding" && episode.status !== "offboarding")
           fail("WRONG_LIFECYCLE", "Najpierw rozpocznij offboarding osoby.");
         data.employmentKind = String(episode.kind);
+        data.employmentStartDate = String(episode.start_date);
       }
       status = "open";
       data = {
@@ -771,7 +887,17 @@ export class WorkspaceStore {
       data.actions = [];
       data.externalActionsPerformed = false;
     }
+    const definitions = module === "cases" ? data.requirements : undefined;
+    if (module === "cases") delete data.requirements;
     const e = this.insert(cmd, module, title, data, status);
+    if (module === "cases")
+      this.readinessStore.initialize(
+        cmd.ctx.tenantId,
+        e,
+        definitions,
+        cmd.ctx.actorId ?? "system",
+        cmd.now,
+      );
     if (module === "documents") {
       this.documentVersion(cmd, e, String(data.content), 1);
       e.data.versions = this.docVersions(cmd, e.id);
@@ -846,27 +972,17 @@ export class WorkspaceStore {
         dueDate,
       },
     );
-    const titles =
-      type === "onboarding"
-        ? [
-            "Potwierdź warunki i dokumenty współpracy",
-            "Przygotuj narzędzia i materiały do pracy",
-            "Potwierdź gotowość na pierwszy dzień",
-          ]
-        : [
-            "Przekaż obowiązki i materiały",
-            "Rozlicz sprzęt, licencje i lokalne uprawnienia",
-            "Potwierdź kompletność zakończenia współpracy",
-          ];
     const template =
       cmd.profile?.processTemplates[type] ??
-      titles.map((title, index) => ({
-        key: `step_${index}`,
-        title,
-        required: true,
-        offsetDays: 0,
-        dependsOn: index === 2 ? ["step_0", "step_1"] : [],
-      }));
+      baselineProcessTemplates(
+        person.data.personCategory === "contractor" ? "contractor" : "internal",
+      )[type];
+    c.data.ownerPrincipalId =
+      this.taskStore.resolveRole(
+        cmd.ctx.tenantId,
+        cmd.profile?.roleBindings ?? {},
+        "manager",
+      ) ?? null;
     c.data.profileVersion = cmd.profile?.version ?? null;
     c.data.processTemplateSnapshot = JSON.parse(
       canonical({
@@ -886,23 +1002,26 @@ export class WorkspaceStore {
           "INVALID_TEMPLATE_DATE",
           "Termin szablonu wykracza poza obsługiwany zakres.",
         );
-      this.db
-        .prepare("INSERT INTO ops_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
-        .run(
-          cmd.ctx.tenantId,
-          taskId,
-          c.id,
-          1,
-          task.title,
-          person.id,
-          task.required ? 1 : 0,
-          "open",
-          null,
-          null,
-          null,
-          deadline,
-          canonical(task.dependsOn.map((key) => taskIds[key])),
-        );
+      this.taskStore.insert(
+        { ctx: cmd.ctx, now: cmd.now, caseId: c.id, scopeRevision: 1 },
+        {
+          id: taskId,
+          title: task.title,
+          required: task.required,
+          kind: task.kind,
+          assigneeRole: task.assigneeRole,
+          assigneePrincipalId: this.taskStore.resolveRole(
+            cmd.ctx.tenantId,
+            cmd.profile?.roleBindings ?? {},
+            task.assigneeRole,
+          ),
+          requiredScopes: roleScopes[task.assigneeRole],
+          requirementKeys: task.requirementKeys,
+          dueDate: deadline,
+          dependsOn: task.dependsOn.map((key) => taskIds[key]!),
+          allowUnassigned: true,
+        },
+      );
       taskIds[task.key] = taskId;
     }
     this.caseState(cmd, c);
@@ -947,23 +1066,20 @@ export class WorkspaceStore {
         .all(cmd.ctx.tenantId, id) as Row[]
     ).map(asJson);
   }
-  private caseState(cmd: Command, e: Entity) {
+  private caseState(cmd: { ctx: { tenantId: string } }, e: Entity) {
     const params = [cmd.ctx.tenantId, e.id, Number(e.data.scopeRevision)];
-    e.data.tasks = (
-      this.db
-        .prepare(
-          "SELECT id,title,assignee_id AS assigneeId,required,status,completed_by AS completedBy,completed_at AS completedAt,evidence_note AS evidenceNote,due_date AS dueDate,depends_on_json FROM ops_tasks WHERE tenant_id=? AND case_id=? AND scope_revision=? ORDER BY rowid",
-        )
-        .all(...params) as Row[]
-    ).map((r) => {
-      const { depends_on_json, ...row } = r;
-      return {
-        ...asJson(row),
-        required: Boolean(r.required),
-        dependsOn: JSON.parse(String(depends_on_json)) as Json,
-        confirmationKind: "human_attestation",
-      };
-    });
+    e.data.tasks = this.taskStore
+      .rows(cmd.ctx.tenantId, e.id, Number(e.data.scopeRevision))
+      .map((row) => asJson(row));
+    e.data.requirements = this.readinessStore
+      .requirements(cmd.ctx.tenantId, e.id, Number(e.data.scopeRevision))
+      .map(({ id, key, title, kind, required }) => ({
+        id,
+        key,
+        title,
+        kind,
+        required,
+      }));
     e.data.evidence = (
       this.db
         .prepare(
@@ -987,23 +1103,51 @@ export class WorkspaceStore {
     e.data.acceptances = (
       this.db
         .prepare(
-          "SELECT id,scope_revision AS scopeRevision,decision,note,decided_by AS decidedBy,created_at AS createdAt FROM ops_acceptances WHERE tenant_id=? AND case_id=? ORDER BY rowid",
+          "SELECT id,scope_revision AS scopeRevision,decision,note,decided_by AS decidedBy,created_at AS createdAt,scope_hash AS scopeHash,bindings_hash AS bindingsHash,contract_version AS contractVersion,requested_by AS requestedBy,approved_by AS approvedBy FROM ops_acceptances WHERE tenant_id=? AND case_id=? ORDER BY rowid",
         )
         .all(cmd.ctx.tenantId, e.id) as Row[]
     ).map(asJson);
   }
-  private readyForAcceptance(cmd: Command, e: Entity) {
+  private readyForAcceptance(cmd: Command, e: Entity): AcceptanceReadiness {
     this.caseState(cmd, e);
-    const tasks = arr(e.data.tasks);
-    if (
-      !tasks.length ||
-      tasks.some((t) => t.required && t.status !== "completed") ||
-      !arr(e.data.evidence).length
-    )
+    const result = this.readinessStore.evaluate(cmd.ctx.tenantId, e, cmd.now);
+    if (!result.ready)
       fail(
         "ACCEPTANCE_NOT_READY",
-        "Odbiór wymaga zadań, ukończenia wszystkich obowiązkowych zadań i dowodu dla bieżącej rewizji.",
+        "Bieżąca rewizja nie jest gotowa do odbioru. Sprawdź zadania i typowane wymagania źródłowe.",
       );
+    return result;
+  }
+  private taskContext(cmd: Command, e: Entity) {
+    const principal = this.livePrincipal(cmd.ctx.tenantId, cmd.ctx.actorId);
+    return {
+      ctx: cmd.ctx,
+      now: cmd.now,
+      caseId: e.id,
+      scopeRevision: Number(e.data.scopeRevision),
+      canManage: !!principal && this.canManageCase(principal, e.id),
+      ...(typeof e.data.ownerPrincipalId === "string"
+        ? { ownerPrincipalId: e.data.ownerPrincipalId }
+        : {}),
+    };
+  }
+  private cancelCase(cmd: Command, e: Entity, reason: string) {
+    for (const task of this.taskStore.rows(
+      cmd.ctx.tenantId,
+      e.id,
+      Number(e.data.scopeRevision),
+    )) {
+      if (!["completed", "cancelled"].includes(task.status))
+        this.taskStore.transition(this.taskContext(cmd, e), "cancelTask", {
+          taskId: task.id,
+          expectedTaskVersion: task.version,
+          humanConfirmed: true,
+          reason,
+        });
+    }
+    this.caseState(cmd, e);
+    e.status = "cancelled";
+    e.data.cancellationReason = reason;
   }
   private change(
     cmd: Command,
@@ -1027,6 +1171,22 @@ export class WorkspaceStore {
           this.state(e, "onboarding");
           const onboarding = this.ref(cmd, "cases", d.onboardingCaseId);
           this.state(onboarding, "accepted");
+          const readiness = this.readinessStore.evaluate(
+            cmd.ctx.tenantId,
+            onboarding,
+            cmd.now,
+          );
+          if (
+            onboarding.data.caseType !== "onboarding" ||
+            onboarding.data.personId !== e.id ||
+            onboarding.data.employmentEpisodeId !== episode.id ||
+            d.currentEmploymentEpisodeId !== episode.id ||
+            !readiness.acceptanceCurrent
+          )
+            fail(
+              "ACTIVATION_READINESS_STALE",
+              "Odbiór nie potwierdza aktualnej gotowości tej osoby i współpracy. Wymagana nowa ocena lub rewizja.",
+            );
           if (String(episode.start_date) > this.companyDate(cmd))
             fail(
               "START_DATE_NOT_REACHED",
@@ -1059,6 +1219,22 @@ export class WorkspaceStore {
               );
             const offboarding = this.ref(cmd, "cases", d.offboardingCaseId);
             this.state(offboarding, "accepted");
+            const readiness = this.readinessStore.evaluate(
+              cmd.ctx.tenantId,
+              offboarding,
+              cmd.now,
+            );
+            if (
+              offboarding.data.caseType !== "offboarding" ||
+              offboarding.data.personId !== e.id ||
+              offboarding.data.employmentEpisodeId !== episode.id ||
+              d.currentEmploymentEpisodeId !== episode.id ||
+              !readiness.acceptanceCurrent
+            )
+              fail(
+                "EXIT_READINESS_STALE",
+                "Odbiór nie potwierdza aktualnego rozliczenia tej osoby i współpracy. Wymagana nowa ocena lub rewizja.",
+              );
             if (
               this.db
                 .prepare(
@@ -1093,9 +1269,11 @@ export class WorkspaceStore {
                 onboarding.status,
               )
             ) {
-              onboarding.status = "cancelled";
-              onboarding.data.cancellationReason =
-                "Rozpoczęto offboarding przed ukończeniem onboardingu.";
+              this.cancelCase(
+                cmd,
+                onboarding,
+                "Rozpoczęto offboarding przed ukończeniem onboardingu.",
+              );
               this.save(cmd, onboarding);
             }
           }
@@ -1145,7 +1323,92 @@ export class WorkspaceStore {
               "Odebrana sprawa została wykorzystana do przejścia osoby do kolejnego etapu. Utwórz osobną sprawę korekty.",
             );
         }
-        const revision = Number(d.scopeRevision) + 1;
+        const previousRevision = Number(d.scopeRevision);
+        const previousRequirements = this.readinessStore.definitions(
+          cmd.ctx.tenantId,
+          e,
+        );
+        const previousTasks = this.taskStore.rows(
+          cmd.ctx.tenantId,
+          e.id,
+          previousRevision,
+        );
+        const revision = previousRevision + 1;
+        let deadlineShiftDays = 0;
+        if (input.startDate !== undefined) {
+          if (d.caseType !== "onboarding")
+            fail(
+              "START_DATE_ONBOARDING_ONLY",
+              "Zmiana daty startu wymaga sprawy onboardingu.",
+            );
+          const person = this.ref(cmd, "people", d.personId);
+          this.state(person, "onboarding");
+          if (person.data.currentEmploymentEpisodeId !== d.employmentEpisodeId)
+            fail("WRONG_LIFECYCLE", "Sprawa nie dotyczy bieżącej współpracy.");
+          const older = this.db
+            .prepare(
+              "SELECT end_date FROM ops_employment WHERE tenant_id=? AND person_id=? AND id!=? ORDER BY start_date DESC LIMIT 1",
+            )
+            .get(cmd.ctx.tenantId, person.id, String(d.employmentEpisodeId)) as
+            Row | undefined;
+          if (
+            older?.end_date &&
+            String(input.startDate) <= String(older.end_date)
+          )
+            fail(
+              "OVERLAPPING_EMPLOYMENT",
+              "Data startu musi następować po poprzedniej współpracy.",
+            );
+          const currentEpisode = this.db
+            .prepare(
+              "SELECT start_date FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=? AND status='onboarding'",
+            )
+            .get(cmd.ctx.tenantId, String(d.employmentEpisodeId), person.id) as
+            Row | undefined;
+          if (!currentEpisode)
+            fail(
+              "EMPLOYMENT_REQUIRED",
+              "Brak bieżącej współpracy do zmiany daty startu.",
+            );
+          deadlineShiftDays = Math.round(
+            (Date.parse(`${String(input.startDate)}T00:00:00Z`) -
+              Date.parse(`${String(currentEpisode.start_date)}T00:00:00Z`)) /
+              86_400_000,
+          );
+          if (!Number.isFinite(deadlineShiftDays))
+            fail(
+              "INVALID_START_DATE",
+              "Brak poprzedniej daty startu do przesunięcia terminów.",
+            );
+          this.db
+            .prepare(
+              "UPDATE ops_employment SET start_date=? WHERE tenant_id=? AND id=? AND person_id=? AND status='onboarding'",
+            )
+            .run(
+              String(input.startDate),
+              cmd.ctx.tenantId,
+              String(d.employmentEpisodeId),
+              person.id,
+            );
+          d.employmentStartDate = String(input.startDate);
+          d.dueDate = String(input.startDate);
+          person.data.employmentEpisodes = this.episodes(cmd, person.id);
+          this.save(cmd, person);
+        }
+        if (input.ownerPrincipalId !== undefined) {
+          const owner = this.livePrincipal(
+            cmd.ctx.tenantId,
+            String(input.ownerPrincipalId),
+          );
+          if (!owner || !this.canManageCase(owner, e.id))
+            fail(
+              "CASE_OWNER_UNAVAILABLE",
+              "Właściciel odbioru musi mieć aktywne konto z dostępem do pełnej sprawy.",
+              403,
+            );
+          d.ownerPrincipalId = owner.id;
+        }
+        if (input.dueDate !== undefined) d.dueDate = String(input.dueDate);
         d.scopeRevision = revision;
         d.brief = String(input.brief);
         d.acceptanceCriteria = String(input.acceptanceCriteria);
@@ -1155,6 +1418,9 @@ export class WorkspaceStore {
             revision,
             brief: d.brief,
             acceptanceCriteria: d.acceptanceCriteria,
+            dueDate: d.dueDate ?? null,
+            employmentStartDate: d.employmentStartDate ?? null,
+            ownerPrincipalId: d.ownerPrincipalId ?? null,
             reason: String(input.reason),
             createdAt: cmd.now,
           },
@@ -1162,11 +1428,61 @@ export class WorkspaceStore {
         e.status = "open";
         d.currentAcceptance = null;
         d.settlementDraft = null;
+        if (d.caseType === "onboarding") {
+          const episode = this.db
+            .prepare(
+              "SELECT start_date FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=?",
+            )
+            .get(
+              cmd.ctx.tenantId,
+              String(d.employmentEpisodeId),
+              String(d.personId),
+            ) as Row | undefined;
+          if (!episode)
+            fail("EMPLOYMENT_REQUIRED", "Brak właściwej współpracy.");
+          d.employmentStartDate = String(episode.start_date);
+        }
+        this.readinessStore.initialize(
+          cmd.ctx.tenantId,
+          e,
+          input.requirements ??
+            (previousRequirements.length ? previousRequirements : undefined),
+          cmd.ctx.actorId ?? "system",
+          cmd.now,
+        );
+        const ids = new Map(
+          previousTasks.map((task) => [task.id, randomUUID()]),
+        );
+        for (const task of previousTasks)
+          this.taskStore.insert(this.taskContext(cmd, e), {
+            id: ids.get(task.id)!,
+            title: task.title,
+            required: task.required,
+            kind: task.kind,
+            ...(task.assigneeId ? { assigneeId: task.assigneeId } : {}),
+            ...(task.assigneePrincipalId
+              ? { assigneePrincipalId: task.assigneePrincipalId }
+              : {}),
+            ...(task.assigneeRole ? { assigneeRole: task.assigneeRole } : {}),
+            requiredScopes: task.requiredScopes,
+            requirementKeys: task.requirementKeys,
+            ...(task.dueDate
+              ? {
+                  dueDate: new Date(
+                    Date.parse(`${task.dueDate}T00:00:00Z`) +
+                      deadlineShiftDays * 86_400_000,
+                  )
+                    .toISOString()
+                    .slice(0, 10),
+                }
+              : {}),
+            dependsOn: task.dependsOn.map((id) => ids.get(id)!),
+            allowUnassigned: true,
+          });
         this.caseState(cmd, e);
       } else if (action === "cancel") {
         this.state(e, "open", "needs_changes", "awaiting_acceptance");
-        e.status = "cancelled";
-        d.cancellationReason = String(input.reason);
+        this.cancelCase(cmd, e, String(input.reason));
       } else if (action === "submit") {
         this.state(e, "open", "needs_changes");
         this.readyForAcceptance(cmd, e);
@@ -1174,11 +1490,22 @@ export class WorkspaceStore {
       } else if (action === "accept") {
         this.state(e, "awaiting_acceptance");
         this.human(cmd, input);
-        this.readyForAcceptance(cmd, e);
+        if (d.ownerPrincipalId && d.ownerPrincipalId !== cmd.ctx.actorId)
+          fail(
+            "CASE_ACCEPTOR_REQUIRED",
+            "Odbiór wymaga działania wskazanego właściciela odbioru.",
+            403,
+          );
+        const readiness =
+          input.decision === "accepted"
+            ? this.readyForAcceptance(cmd, e)
+            : this.readinessStore.evaluate(cmd.ctx.tenantId, e, cmd.now);
         const decision = String(input.decision),
           acceptanceId = randomUUID();
         this.db
-          .prepare("INSERT INTO ops_acceptances VALUES(?,?,?,?,?,?,?,?)")
+          .prepare(
+            "INSERT INTO ops_acceptances(tenant_id,id,case_id,scope_revision,decision,note,decided_by,created_at,scope_hash,bindings_hash,bindings_json,contract_version,requested_by,approved_by,person_id,employment_episode_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+          )
           .run(
             cmd.ctx.tenantId,
             acceptanceId,
@@ -1188,6 +1515,16 @@ export class WorkspaceStore {
             String(input.note),
             cmd.actor,
             cmd.now,
+            readiness.scopeHash,
+            readiness.bindingsHash,
+            canonical(readiness.bindings),
+            "p03",
+            cmd.ctx.actorId ?? null,
+            cmd.ctx.approvedBy ?? null,
+            typeof d.personId === "string" ? d.personId : null,
+            typeof d.employmentEpisodeId === "string"
+              ? d.employmentEpisodeId
+              : null,
           );
         e.status = decision === "accepted" ? "accepted" : "needs_changes";
         d.currentAcceptance = {
@@ -1196,6 +1533,11 @@ export class WorkspaceStore {
           decision,
           note: String(input.note),
           decidedBy: cmd.actor,
+          requestedBy: cmd.ctx.actorId ?? null,
+          approvedBy: cmd.ctx.approvedBy ?? null,
+          scopeHash: readiness.scopeHash,
+          bindingsHash: readiness.bindingsHash,
+          contractVersion: "p03",
           createdAt: cmd.now,
         };
         this.caseState(cmd, e);
@@ -1256,96 +1598,59 @@ export class WorkspaceStore {
         }
         if (action === "addTask") {
           this.optionalRef(cmd, "people", input.assigneeId);
-          const dependencies = (input.dependsOn ?? []) as string[];
-          if (new Set(dependencies).size !== dependencies.length)
-            fail("DUPLICATE_DEPENDENCY", "Zależności nie mogą się powtarzać.");
-          for (const dependency of dependencies) {
-            if (
-              !this.db
-                .prepare(
-                  "SELECT id FROM ops_tasks WHERE tenant_id=? AND id=? AND case_id=? AND scope_revision=?",
-                )
-                .get(
-                  cmd.ctx.tenantId,
-                  dependency,
-                  e.id,
-                  Number(d.scopeRevision),
-                )
-            )
-              fail(
-                "INVALID_TASK_DEPENDENCY",
-                "Zależność musi wskazywać zadanie tej samej rewizji sprawy.",
-              );
-          }
-          this.db
-            .prepare("INSERT INTO ops_tasks VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            .run(
-              cmd.ctx.tenantId,
-              randomUUID(),
-              e.id,
-              Number(d.scopeRevision),
-              String(input.title),
-              input.assigneeId ? String(input.assigneeId) : null,
-              input.required ? 1 : 0,
-              "open",
-              null,
-              null,
-              null,
-              input.dueDate ? String(input.dueDate) : null,
-              canonical(dependencies),
-            );
+          const role = input.assigneeRole as TaskRole | undefined;
+          this.taskStore.insert(this.taskContext(cmd, e), {
+            title: String(input.title),
+            required: Boolean(input.required),
+            kind: input.kind as "work",
+            ...(typeof input.assigneeId === "string"
+              ? { assigneeId: input.assigneeId }
+              : {}),
+            ...(typeof input.assigneePrincipalId === "string"
+              ? { assigneePrincipalId: input.assigneePrincipalId }
+              : {}),
+            ...(role ? { assigneeRole: role } : {}),
+            requiredScopes: role
+              ? roleScopes[role]
+              : [
+                  ...new Set([
+                    "cases",
+                    ...this.entityScopes("cases", d, cmd.ctx.tenantId),
+                  ]),
+                ],
+            requirementKeys: (input.requirementKeys ?? []) as string[],
+            ...(typeof input.dueDate === "string"
+              ? { dueDate: input.dueDate }
+              : {}),
+            dependsOn: (input.dependsOn ?? []) as string[],
+          });
         }
-        if (action === "completeTask") {
-          this.human(cmd, input);
-          const task = this.db
-            .prepare(
-              "SELECT * FROM ops_tasks WHERE tenant_id=? AND id=? AND case_id=? AND scope_revision=? AND status='open'",
-            )
-            .get(
-              cmd.ctx.tenantId,
-              String(input.taskId),
-              e.id,
-              Number(d.scopeRevision),
-            ) as Row | undefined;
-          if (!task)
-            fail(
-              "TASK_NOT_OPEN",
-              "Zadanie nie należy do bieżącej rewizji albo jest już ukończone.",
-            );
-          for (const dependency of JSON.parse(
-            String(task.depends_on_json),
-          ) as string[]) {
-            if (
-              !this.db
-                .prepare(
-                  "SELECT id FROM ops_tasks WHERE tenant_id=? AND id=? AND case_id=? AND scope_revision=? AND status='completed'",
-                )
-                .get(
-                  cmd.ctx.tenantId,
-                  dependency,
-                  e.id,
-                  Number(d.scopeRevision),
-                )
-            )
-              fail(
-                "TASK_DEPENDENCY_INCOMPLETE",
-                "Najpierw ukończ zadania wymagane przed tym krokiem.",
-              );
-          }
-          this.db
-            .prepare(
-              "UPDATE ops_tasks SET status='completed',completed_by=?,completed_at=?,evidence_note=? WHERE tenant_id=? AND id=? AND case_id=? AND scope_revision=? AND status='open'",
-            )
-            .run(
-              cmd.actor,
-              cmd.now,
-              String(input.evidenceNote),
-              cmd.ctx.tenantId,
-              String(input.taskId),
-              e.id,
-              Number(d.scopeRevision),
-            );
-        }
+        if (
+          [
+            "acceptTask",
+            "declineTask",
+            "transferTask",
+            "completeTask",
+            "cancelTask",
+          ].includes(action)
+        )
+          this.taskStore.transition(
+            this.taskContext(cmd, e),
+            action as TaskAction,
+            input as unknown as TaskTransition,
+          );
+        if (action === "bindEvidence")
+          this.readinessStore.bind(
+            cmd.ctx,
+            e,
+            input as unknown as {
+              requirementId: string;
+              sourceModule: string;
+              sourceId: string;
+              sourceVersion: number;
+            },
+            cmd.now,
+          );
         if (action === "addEvidence") {
           this.human(cmd, input);
           this.db
@@ -1374,7 +1679,9 @@ export class WorkspaceStore {
         this.state(person, "onboarding", "active");
         const allocation = randomUUID();
         this.db
-          .prepare("INSERT INTO ops_allocations VALUES(?,?,?,?,?,?,?,?)")
+          .prepare(
+            "INSERT INTO ops_allocations(tenant_id,id,asset_id,person_id,status,reserved_until,issued_on,returned_on) VALUES(?,?,?,?,?,?,?,?)",
+          )
           .run(
             cmd.ctx.tenantId,
             allocation,
@@ -1588,7 +1895,9 @@ export class WorkspaceStore {
         )
           fail("SEAT_ALREADY_ASSIGNED", "Osoba ma już przydział tej licencji.");
         this.db
-          .prepare("INSERT INTO ops_license_seats VALUES(?,?,?,?,?,?,?)")
+          .prepare(
+            "INSERT INTO ops_license_seats(tenant_id,id,license_id,person_id,status,assigned_at,revoked_at) VALUES(?,?,?,?,?,?,?)",
+          )
           .run(
             cmd.ctx.tenantId,
             randomUUID(),
@@ -1953,6 +2262,68 @@ export class WorkspaceStore {
           "people.beginOffboarding",
           "recruitment.hire",
         ].includes(`${module}.${action}`);
+        const taskTransition =
+          module === "cases" &&
+          [
+            "acceptTask",
+            "declineTask",
+            "transferTask",
+            "completeTask",
+            "cancelTask",
+          ].includes(action);
+        const usesProfile =
+          lifecycle || (module === "cases" && action === "addTask");
+        const taskConsistent = (
+          ctx: ToolContext,
+          input: JsonObject,
+        ): boolean => {
+          if (!taskTransition) return true;
+          try {
+            const current = this.taskStore.get(
+              ctx.tenantId,
+              String(input.taskId),
+            );
+            let source = this.read(ctx.tenantId, "cases", current.caseId);
+            if (source.data.scopeRevision !== current.scopeRevision) {
+              const historical = this.db
+                .prepare(
+                  "SELECT snapshot_json,snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND json_extract(snapshot_json,'$.data.scopeRevision')=? ORDER BY version DESC LIMIT 1",
+                )
+                .get(ctx.tenantId, current.caseId, current.scopeRevision) as
+                Row | undefined;
+              if (!historical) return false;
+              source = JSON.parse(String(historical.snapshot_json)) as Entity;
+              if (digest(source) !== historical.snapshot_hash) return false;
+            }
+            const snapshot = arr(source.data.tasks).find(
+              (task) => task.id === current.id,
+            );
+            const event = this.taskStore
+              .history(ctx.tenantId, current.id)
+              .at(-1);
+            return (
+              canonical(current) === canonical(snapshot) &&
+              !!event &&
+              event.taskVersion === current.version &&
+              event.toStatus === current.status &&
+              event.assigneePrincipalId === current.assigneePrincipalId &&
+              event.performedBy === current.performedBy
+            );
+          } catch {
+            return false;
+          }
+        };
+        const requireCommittedTask = (ctx: ToolContext, input: JsonObject) => {
+          if (
+            taskTransition &&
+            !this.taskStore.verifyCommitted(ctx, String(input.taskId))
+          )
+            fail(
+              "TASK_RECEIPT_FORBIDDEN",
+              "Brak aktualnych uprawnień do potwierdzonej operacji zadania.",
+              403,
+            );
+        };
         const requiredScopes =
           module === "people" && action !== "create" && action !== "update"
             ? ["cases"]
@@ -1966,24 +2337,73 @@ export class WorkspaceStore {
                       ["assign", "revoke"].includes(action))
                   ? ["people"]
                   : [];
+        const definition = catalog.find((m) => m.id === module)!;
+        const actionLabel =
+          action === "create"
+            ? "Utwórz rekord"
+            : action === "update"
+              ? "Zapisz zmiany"
+              : (definition.actions.find((item) => item.id === action)?.label ??
+                action);
         return {
           id: toolId,
-          version: "2",
-          scope: module,
+          version: "3",
+          ...(taskTransition
+            ? {
+                canAccess: (
+                  principal: Principal,
+                  input: JsonObject,
+                  context?: import("./contracts.js").ToolAccessContext,
+                ) =>
+                  this.taskStore.canAccess(
+                    principal,
+                    input,
+                    context,
+                    action as TaskAction,
+                  ),
+              }
+            : { scope: module }),
           requiredScopes,
-          requiredScopesForInput: (input: JsonObject, tenantId: string) =>
-            this.inputScopes(module, action, input, tenantId),
+          requiredScopesForInput: (input: JsonObject, tenantId: string) => {
+            if (!taskTransition)
+              return this.inputScopes(module, action, input, tenantId);
+            const task = this.taskStore.get(tenantId, String(input.taskId));
+            if (task.caseId !== input.id)
+              fail(
+                "TASK_NOT_FOUND",
+                "Zadanie nie należy do wskazanej sprawy.",
+                404,
+              );
+            // Transfer is allowed either to the current worker or a full-case
+            // manager. The domain adapter enforces that OR using live identity.
+            return ["transferTask", "cancelTask"].includes(action)
+              ? []
+              : task.requiredScopes;
+          },
           effect: "write",
           recovery: "reconcile",
-          description: `${catalog.find((m) => m.id === module)!.label}: ${action}.${["people.startEmployment", "people.beginOffboarding", "recruitment.hire"].includes(`${module}.${action}`) ? " Tworzy powiązaną sprawę lifecycle i obowiązkowe zadania człowieka." : module === "sales" && action === "handoff" ? " Tworzy sprawę realizacji oraz zamyka powiązaną szansę jako wygraną." : ""} Zmienia wyłącznie lokalne dane JARVIS.`,
+          description: `${definition.label}: ${actionLabel}.${["people.startEmployment", "people.beginOffboarding", "recruitment.hire"].includes(`${module}.${action}`) ? " Tworzy powiązaną sprawę i obowiązkowe zadania człowieka." : module === "sales" && action === "handoff" ? " Tworzy sprawę realizacji oraz zamyka powiązaną szansę jako wygraną." : ""} Zmienia wyłącznie lokalne dane JARVIS.`,
           inputSchema,
-          ...(lifecycle
+          ...(usesProfile
             ? {
                 prepareInput: (input: JsonObject, tenantId: string) => {
                   const profile = this.currentProfile(tenantId);
-                  return profile
+                  const prepared: JsonObject = profile
                     ? { ...input, profileVersion: profile.version }
-                    : input;
+                    : { ...input };
+                  if (
+                    module === "cases" &&
+                    action === "addTask" &&
+                    !Object.hasOwn(input, "assigneePrincipalId")
+                  )
+                    prepared.assigneePrincipalId = input.assigneeRole
+                      ? (this.taskStore.resolveRole(
+                          tenantId,
+                          profile?.roleBindings ?? {},
+                          input.assigneeRole as TaskRole,
+                        ) ?? null)
+                      : null;
+                  return prepared;
                 },
               }
             : {}),
@@ -1998,13 +2418,19 @@ export class WorkspaceStore {
               );
             const input = asJson(parsed.data);
             const p = input as CommandInput;
-            const profile = lifecycle
+            const profile = usesProfile
               ? this.pinnedProfile(ctx.tenantId, input)
               : this.currentProfile(ctx.tenantId);
             this.db.exec("BEGIN IMMEDIATE");
             try {
               const existing = this.ledger(ctx, toolId, input);
               if (existing) {
+                requireCommittedTask(ctx, input);
+                if (!taskConsistent(ctx, input))
+                  fail(
+                    "TASK_STATE_INCONSISTENT",
+                    "Bieżący stan zadania nie odpowiada zapisanej historii.",
+                  );
                 this.db.exec("COMMIT");
                 return JSON.parse(String(existing.receipt_json)) as ToolResult;
               }
@@ -2066,14 +2492,26 @@ export class WorkspaceStore {
                   e = this.save(cmd, e);
                 } else e = this.change(cmd, e, action, p);
               }
+              const task = taskTransition
+                ? this.taskStore.get(ctx.tenantId, String(input.taskId))
+                : undefined;
               const receipt: ToolResult = {
-                data: {
-                  entityId: e.id,
-                  module: e.module,
-                  version: e.version,
-                  status: e.status,
-                  title: e.title,
-                },
+                data: task
+                  ? {
+                      entityId: e.id,
+                      module: e.module,
+                      version: e.version,
+                      taskId: task.id,
+                      taskVersion: task.version,
+                      status: task.status,
+                    }
+                  : {
+                      entityId: e.id,
+                      module: e.module,
+                      version: e.version,
+                      status: e.status,
+                      title: e.title,
+                    },
               };
               const changes = cmd.changes.map((v) => ({
                 id: v.id,
@@ -2124,6 +2562,14 @@ export class WorkspaceStore {
             if (lifecycle)
               this.pinnedProfile(ctx.tenantId, asJson(parsed.data));
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            if (row) {
+              requireCommittedTask(ctx, asJson(parsed.data));
+              if (!taskConsistent(ctx, asJson(parsed.data)))
+                fail(
+                  "TASK_STATE_INCONSISTENT",
+                  "Bieżący stan zadania nie odpowiada zapisanej historii.",
+                );
+            }
             return row
               ? {
                   status: "applied",
@@ -2137,7 +2583,12 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
-            let ok = Boolean(row && canonical(result) === row.receipt_json);
+            if (row) requireCommittedTask(ctx, asJson(parsed.data));
+            let ok = Boolean(
+              row &&
+              canonical(result) === row.receipt_json &&
+              taskConsistent(ctx, asJson(parsed.data)),
+            );
             const observed: JsonObject[] = [];
             if (row) {
               const changes = JSON.parse(String(row.changes_json)) as {
