@@ -725,31 +725,32 @@ export function WorkspacePage({
                     </span>
                   </div>
                 </div>
-                {allowedTool("update") && (
-                  <button
-                    className="button secondary"
-                    onClick={() =>
-                      setForm({
-                        title:
-                          module.id === "assets"
-                            ? "Zmień dane ewidencji"
-                            : "Zmień nazwę",
-                        action: "update",
-                        fields:
-                          module.id === "assets"
-                            ? module.fields.filter((f) =>
-                                ["manufacturer", "model"].includes(f.key),
-                              )
-                            : [],
-                        entity: item,
-                        dataForm: true,
-                      })
-                    }
-                  >
-                    <Icon name="edit" size={17} />
-                    Edytuj
-                  </button>
-                )}
+                {allowedTool("update") &&
+                  !(module.id === "assets" && item.status === "retired") && (
+                    <button
+                      className="button secondary"
+                      onClick={() =>
+                        setForm({
+                          title:
+                            module.id === "assets"
+                              ? "Zmień dane ewidencji"
+                              : "Zmień nazwę",
+                          action: "update",
+                          fields:
+                            module.id === "assets"
+                              ? module.fields.filter((f) =>
+                                  ["manufacturer", "model"].includes(f.key),
+                                )
+                              : [],
+                          entity: item,
+                          dataForm: true,
+                        })
+                      }
+                    >
+                      <Icon name="edit" size={17} />
+                      Edytuj
+                    </button>
+                  )}
               </div>
               {item.module === "cases" && (
                 <CaseReadiness
@@ -828,6 +829,27 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            (module.id !== "assets" ||
+                              action.id === "assignCustodian" ||
+                              (action.id === "reserve" &&
+                                item.status === "available" &&
+                                item.data.condition === "good") ||
+                              ([
+                                "issue",
+                                "release",
+                                "expireReservation",
+                              ].includes(action.id) &&
+                                item.status === "reserved") ||
+                              (action.id === "return" &&
+                                item.status === "issued") ||
+                              (["move", "sendToService", "retire"].includes(
+                                action.id,
+                              ) &&
+                                ["available", "maintenance"].includes(
+                                  item.status,
+                                )) ||
+                              (action.id === "markRepaired" &&
+                                item.status === "maintenance")) &&
                             !(
                               module.id === "assets" &&
                               action.id.endsWith("ForTask")
