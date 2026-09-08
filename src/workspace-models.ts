@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { documentSourceSchema } from "./document-sources.js";
+export { documentSourceSchema } from "./document-sources.js";
 import {
   accessKeySchema,
   accessMembersSchema,
@@ -239,24 +241,6 @@ export function baselineProcessTemplates(
     ],
   };
 }
-export const documentSourceSchema = z
-  .object({
-    module: z.enum([
-      "people",
-      "cases",
-      "assets",
-      "purchases",
-      "licenses",
-      "sales",
-      "recruitment",
-      "documents",
-      "it",
-    ]),
-    id,
-    version: z.number().int().min(1),
-    observedAt: z.string().datetime({ offset: true }),
-  })
-  .strict();
 export const createDataSchemas = {
   people: z
     .object({
@@ -867,7 +851,9 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     revise: z
       .object({
         ...base,
+        title: z.string().trim().min(1).max(160).optional(),
         content: z.string().trim().min(1).max(50_000),
+        sources: z.array(documentSourceSchema).max(20).optional(),
         changeNote: text,
       })
       .strict(),

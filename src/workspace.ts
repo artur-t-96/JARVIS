@@ -3,6 +3,7 @@ import {
   accessTaskActions,
   type AccessTaskAction,
 } from "./task-access.js";
+import { DocumentSources, migrateDocumentContext } from "./document-sources.js";
 import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
 import { AccessRegister, migrateAccessRegister } from "./access-register.js";
 import {
@@ -334,6 +335,11 @@ export class WorkspaceStore {
           name: "Versioned access catalog and human attestations",
           up: migrateAccessRegister,
         },
+        {
+          version: 9,
+          name: "Immutable document revision context and case scope sources",
+          up: migrateDocumentContext,
+        },
       ],
     });
     this.registerStore = new AssetRegister(this.db);
@@ -580,6 +586,37 @@ export class WorkspaceStore {
   catalog(): ModuleDefinition[] {
     return workspaceCatalog();
   }
+  documentScope(principal: Principal, caseId: string) {
+    this.get(principal, "cases", caseId);
+    this.scope(principal, "documents");
+    const sources = new DocumentSources(this.db);
+    return {
+      ...sources.scope(principal.tenantId, caseId),
+      source: sources.request(
+        principal.tenantId,
+        { kind: "case_scope", module: "cases", id: caseId },
+        new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      ),
+    };
+  }
+  documentReadiness(principal: Principal, documentId: string) {
+    return new DocumentSources(this.db).assessment(
+      principal.tenantId,
+      this.get(principal, "documents", documentId),
+    );
+  }
+  documentRefresh(principal: Principal, documentId: string) {
+    const e = this.get(principal, "documents", documentId),
+      sources = new DocumentSources(this.db);
+    const now = new Date(this.options.clock?.() ?? Date.now()).toISOString();
+    return {
+      id: e.id,
+      expectedVersion: e.version,
+      sources: arr(e.data.sources).map((s) =>
+        sources.request(principal.tenantId, s, now),
+      ),
+    };
+  }
   private scope(principal: Principal, module: string) {
     if (
       !principal.id ||
@@ -753,6 +790,8 @@ export class WorkspaceStore {
     ).map(asJson);
   }
   private relationalStateMatches(tenant: string, entity: Entity): boolean {
+    if (entity.module === "documents")
+      return new DocumentSources(this.db).integrity(tenant, entity);
     if (entity.module === "cases")
       return (
         canonical(entity.data.accessGrantRefs ?? []) ===
@@ -847,7 +886,12 @@ export class WorkspaceStore {
     if (module === "it" && data.ownerId) scopes.push("people");
     if (module === "documents") {
       if (tenant)
-        for (const source of arr(data.sources)) {
+        for (const source of [
+          ...arr(data.sources),
+          ...arr(data.versions).flatMap((v) =>
+            arr((v.context as JsonObject | null)?.sources),
+          ),
+        ]) {
           const sourceModule = this.module(String(source.module));
           const linked = this.read(tenant, sourceModule, String(source.id));
           scopes.push(
@@ -974,6 +1018,14 @@ export class WorkspaceStore {
       }
     }
     if (module === "documents") {
+      if (action === "revise" && input.sources !== undefined)
+        scopes.push(
+          ...this.entityScopes(
+            "documents",
+            { ...data, sources: input.sources },
+            tenant,
+          ),
+        );
       if (data.ownerId) scopes.push("people");
       if (data.linkedCaseId) {
         const linked = this.read(tenant, "cases", String(data.linkedCaseId));
@@ -1271,32 +1323,12 @@ export class WorkspaceStore {
       data.decisions = [];
     }
     if (module === "documents") {
-      const seen = new Set<string>();
-      data.sources = arr(data.sources).map((source) => {
-        const key = `${source.module}:${source.id}`;
-        if (seen.has(key))
-          fail("DUPLICATE_SOURCE", "Źródło dokumentu się powtarza.");
-        seen.add(key);
-        const record = this.ref(
-          cmd,
-          this.module(String(source.module)),
-          source.id,
-        );
-        if (record.version !== source.version)
-          fail(
-            "SOURCE_VERSION_CHANGED",
-            "Źródło zmieniło wersję. Przygotuj dokument ponownie.",
-          );
-        if (
-          Date.parse(String(source.observedAt)) > Date.parse(cmd.now) ||
-          Date.parse(String(source.observedAt)) < Date.parse(record.updatedAt)
-        )
-          fail(
-            "INVALID_SOURCE_OBSERVATION",
-            "Data odczytu źródła nie odpowiada zapisanej wersji.",
-          );
-        return { ...source, snapshotHash: digest(record), verifiedAt: cmd.now };
-      });
+      data.sources = new DocumentSources(this.db).capture(
+        cmd.ctx.tenantId,
+        data.sources,
+        cmd.now,
+      );
+      data.sourceContract = "p09a1";
       this.optionalRef(cmd, "people", data.ownerId);
       this.optionalRef(cmd, "cases", data.linkedCaseId);
       data.revision = 1;
@@ -1865,8 +1897,16 @@ export class WorkspaceStore {
     content: string,
     revision: number,
   ) {
+    const context = new DocumentSources(this.db).context(e);
+    if (Buffer.byteLength(canonical(context)) > 2_000_000)
+      fail(
+        "DOCUMENT_CONTEXT_TOO_LARGE",
+        "Źródła przekraczają rozmiar kontekstu dokumentu. Wybierz węższy zakres lub oddzielne materiały.",
+      );
     this.db
-      .prepare("INSERT INTO ops_document_versions VALUES(?,?,?,?,?,?,?,?,?)")
+      .prepare(
+        "INSERT INTO ops_document_versions(tenant_id,document_id,revision,content,content_hash,status,decided_by,decision_note,decided_at,context_json,context_hash,created_by,created_at,approved_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+      )
       .run(
         cmd.ctx.tenantId,
         e.id,
@@ -1877,16 +1917,26 @@ export class WorkspaceStore {
         null,
         null,
         null,
+        canonical(context),
+        digest(context),
+        cmd.ctx.actorId ?? null,
+        cmd.now,
+        null,
       );
   }
   private docVersions(cmd: Command, id: string): JsonObject[] {
     return (
       this.db
         .prepare(
-          "SELECT revision,content,content_hash AS contentHash,status,decided_by AS decidedBy,decision_note AS decisionNote,decided_at AS decidedAt FROM ops_document_versions WHERE tenant_id=? AND document_id=? ORDER BY revision",
+          "SELECT revision,content,content_hash AS contentHash,status,decided_by AS decidedBy,decision_note AS decisionNote,decided_at AS decidedAt,context_json,context_hash AS contextHash,created_by AS createdBy,created_at AS createdAt,approved_by AS approvedBy FROM ops_document_versions WHERE tenant_id=? AND document_id=? ORDER BY revision",
         )
         .all(cmd.ctx.tenantId, id) as Row[]
-    ).map(asJson);
+    ).map(({ context_json, ...row }) =>
+      asJson({
+        ...row,
+        context: context_json ? JSON.parse(String(context_json)) : null,
+      }),
+    );
   }
   private caseState(cmd: { ctx: { tenantId: string } }, e: Entity) {
     const params = [cmd.ctx.tenantId, e.id, Number(e.data.scopeRevision)];
@@ -3021,6 +3071,19 @@ export class WorkspaceStore {
       if (action === "revise") {
         this.state(e, "draft", "review", "approved", "rejected");
         const revision = Number(d.revision) + 1;
+        if (input.title !== undefined) e.title = String(input.title);
+        if (input.sources !== undefined)
+          d.sources = new DocumentSources(this.db).capture(
+            cmd.ctx.tenantId,
+            input.sources,
+            cmd.now,
+          );
+        new DocumentSources(this.db).assertAcyclic(
+          cmd.ctx.tenantId,
+          e.id,
+          arr(d.sources),
+        );
+        d.sourceContract = "p09a1";
         this.documentVersion(cmd, e, String(input.content), revision);
         d.revision = revision;
         d.content = String(input.content);
@@ -3029,6 +3092,7 @@ export class WorkspaceStore {
       }
       if (action === "submit") {
         this.state(e, "draft");
+        new DocumentSources(this.db).assertReady(cmd.ctx.tenantId, e);
         e.status = "review";
         this.db
           .prepare(
@@ -3039,16 +3103,19 @@ export class WorkspaceStore {
       if (action === "approve") {
         this.state(e, "review");
         this.human(cmd, input);
+        if (input.decision === "approved")
+          new DocumentSources(this.db).assertReady(cmd.ctx.tenantId, e);
         e.status = String(input.decision);
         this.db
           .prepare(
-            "UPDATE ops_document_versions SET status=?,decided_by=?,decision_note=?,decided_at=? WHERE tenant_id=? AND document_id=? AND revision=?",
+            "UPDATE ops_document_versions SET status=?,decided_by=?,decision_note=?,decided_at=?,approved_by=? WHERE tenant_id=? AND document_id=? AND revision=?",
           )
           .run(
             e.status,
             cmd.actor,
             String(input.note),
             cmd.now,
+            cmd.ctx.approvedBy ?? null,
             cmd.ctx.tenantId,
             e.id,
             Number(d.revision),
@@ -3383,6 +3450,64 @@ export class WorkspaceStore {
               "Brak spójnego zdarzenia poświadczenia dostępu.",
             );
         };
+        const requireDocumentAuthority = (
+          ctx: ToolContext,
+          input: JsonObject,
+        ) => {
+          if (module !== "documents") return;
+          const actor = this.livePrincipal(ctx.tenantId, ctx.actorId);
+          if (!actor?.roles.includes("operator"))
+            fail(
+              "DOCUMENT_ACTOR_FORBIDDEN",
+              "Wymagane aktywne konto operatora dokumentu.",
+              403,
+            );
+          for (const area of [
+            "documents",
+            ...this.inputScopes(module, action, input, ctx.tenantId),
+          ])
+            this.scope(actor, area);
+        };
+        const requireCommittedDocument = (
+          ctx: ToolContext,
+          row: Row | undefined,
+        ) => {
+          if (module !== "documents" || !row) return;
+          const changes = JSON.parse(String(row.changes_json)) as {
+            id: string;
+            version: number;
+            hash: string;
+          }[];
+          for (const change of changes) {
+            const current = this.read(ctx.tenantId, "documents", change.id);
+            const saved = this.db
+              .prepare(
+                "SELECT snapshot_json,snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+              )
+              .get(ctx.tenantId, change.id, change.version) as Row | undefined;
+            const latest = this.db
+              .prepare(
+                "SELECT snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+              )
+              .get(ctx.tenantId, change.id, current.version) as Row | undefined;
+            if (
+              !saved ||
+              saved.snapshot_hash !== change.hash ||
+              digest(JSON.parse(String(saved.snapshot_json))) !== change.hash ||
+              latest?.snapshot_hash !== digest(current) ||
+              !new DocumentSources(this.db).integrity(ctx.tenantId, current)
+            )
+              fail(
+                "DOCUMENT_STATE_INCONSISTENT",
+                "Nie można potwierdzić zapisanej rewizji i pochodzenia dokumentu.",
+              );
+          }
+          if (!changes.length)
+            fail(
+              "DOCUMENT_STATE_INCONSISTENT",
+              "Brak zapisanego wyniku dokumentu.",
+            );
+        };
         const requiredScopes =
           taskCustody || taskAccess
             ? ["it"]
@@ -3410,23 +3535,26 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version: taskAccess
-            ? "1"
-            : accessMutation ||
-                (module === "it" &&
-                  [
-                    "reviseAccessBundle",
-                    "reviseApplication",
-                    "retireAccessDefinition",
-                  ].includes(action))
-              ? "8"
-              : module === "assets"
-                ? action === "replaceReservation"
-                  ? "7"
-                  : "6"
-                : module === "cases" && action === "bindEvidence"
-                  ? "6"
-                  : "4",
+          version:
+            module === "documents"
+              ? "9"
+              : taskAccess
+                ? "1"
+                : accessMutation ||
+                    (module === "it" &&
+                      [
+                        "reviseAccessBundle",
+                        "reviseApplication",
+                        "retireAccessDefinition",
+                      ].includes(action))
+                  ? "8"
+                  : module === "assets"
+                    ? action === "replaceReservation"
+                      ? "7"
+                      : "6"
+                    : module === "cases" && action === "bindEvidence"
+                      ? "6"
+                      : "4",
           ...(taskAccess
             ? {
                 canAccess: (
@@ -3572,10 +3700,12 @@ export class WorkspaceStore {
                 400,
               );
             const input = asJson(parsed.data);
+            requireDocumentAuthority(ctx, input);
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
             try {
               const existing = this.ledger(ctx, toolId, input);
+              requireCommittedDocument(ctx, existing);
               // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
               const profile =
@@ -3619,6 +3749,14 @@ export class WorkspaceStore {
                     "Rekord zmienił się. Odczytaj aktualną wersję.",
                   );
                 if (
+                  module === "documents" &&
+                  !new DocumentSources(this.db).integrity(ctx.tenantId, e)
+                )
+                  fail(
+                    "DOCUMENT_STATE_INCONSISTENT",
+                    "Historia i kontekst dokumentu są niespójne.",
+                  );
+                if (
                   module === "assets" &&
                   !this.registerStore.verify(ctx.tenantId, e)
                 )
@@ -3627,6 +3765,11 @@ export class WorkspaceStore {
                     "Historia ewidencji urządzenia jest niespójna.",
                   );
                 if (action === "update") {
+                  if (module === "documents")
+                    fail(
+                      "REVISION_REQUIRED",
+                      "Zmień nazwę lub treść dokumentu przez nową rewizję.",
+                    );
                   if (
                     module === "it" &&
                     ["application", "access_bundle"].includes(
@@ -3895,6 +4038,8 @@ export class WorkspaceStore {
             if (lifecycle)
               this.pinnedProfile(ctx.tenantId, asJson(parsed.data));
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            requireDocumentAuthority(ctx, asJson(parsed.data));
+            requireCommittedDocument(ctx, row);
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
               requireCommittedCustody(ctx, asJson(parsed.data));
@@ -3918,6 +4063,8 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            requireDocumentAuthority(ctx, asJson(parsed.data));
+            requireCommittedDocument(ctx, row);
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
               if (accessMutation && !taskAccess)
