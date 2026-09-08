@@ -44,6 +44,7 @@ export interface Principal {
   id: string;
   tenantId: string;
   roles: ("operator" | "approver" | "viewer")[];
+  scopes?: string[];
 }
 export interface Policy {
   tenantId: string;
@@ -69,6 +70,8 @@ export interface Verification {
 }
 export interface ToolContext {
   tenantId: string;
+  actorId?: string;
+  approvedBy?: string;
   runId: string;
   stepId: string;
   operationKey: string;
@@ -84,6 +87,10 @@ export interface ToolDefinition {
   description: string;
   effect: "read" | "write";
   recovery: "idempotent" | "reconcile" | "manual";
+  scope?: string;
+  requiredScopes?: string[];
+  requiredScopesForInput?: (input: JsonObject, tenantId: string) => string[];
+  prepareInput?: (input: JsonObject, tenantId: string) => JsonObject;
   inputSchema: z.ZodType;
   execute(ctx: ToolContext, input: JsonObject): Promise<ToolResult>;
   reconcile?(ctx: ToolContext, input: JsonObject): Promise<Reconciliation>;
@@ -112,3 +119,21 @@ export class DomainError extends Error {
 }
 export class OutcomeUnknownError extends Error {}
 export class RetryableError extends Error {}
+
+export function hasToolAccess(
+  principal: Principal,
+  tool: ToolDefinition,
+  input?: JsonObject,
+): boolean {
+  const scopes = [
+    ...(tool.scope ? [tool.scope] : []),
+    ...(tool.requiredScopes ?? []),
+    ...(input
+      ? (tool.requiredScopesForInput?.(input, principal.tenantId) ?? [])
+      : []),
+  ];
+  return scopes.every(
+    (scope) =>
+      principal.scopes?.includes("*") || principal.scopes?.includes(scope),
+  );
+}

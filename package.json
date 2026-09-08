@@ -16,11 +16,17 @@
     "check": "npm run typecheck && npm test && npm run build",
     "demo": "tsx scripts/demo.ts",
     "format": "prettier --write src tests scripts public docs .github README.md AGENTS.md package.json tsconfig.json",
-    "format:check": "prettier --check src tests scripts public docs .github README.md AGENTS.md package.json tsconfig.json"
+    "format:check": "prettier --check src tests scripts public docs .github README.md AGENTS.md package.json tsconfig.json",
+    "backup": "tsx scripts/backup.ts",
+    "restore": "tsx scripts/restore.ts"
   },
   "dependencies": {
     "fastify": "^5.6.0",
-    "zod": "^4.1.0"
+    "zod": "^4.1.0",
+    "@opentelemetry/api": "^1.9.1",
+    "@opentelemetry/sdk-metrics": "^2.11.0",
+    "@opentelemetry/sdk-trace-base": "^2.11.0",
+    "@opentelemetry/sdk-node": "^0.222.0"
   },
   "devDependencies": {
     "@types/node": "^22.18.0",
