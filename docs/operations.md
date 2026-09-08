@@ -33,3 +33,9 @@ Backup i restore używają tej samej wyłącznej blokady co runtime. Backup wyko
 Po przerwanym restore pozostaje `.restore-in-progress`. Runtime nie wystartuje z takim katalogiem. Zachowaj go do diagnozy i powtórz odtworzenie do innego pustego katalogu. Nie kasuj znacznika, aby uruchomić częściowe dane. Martwy PID lokalnego właściciela zwykłej blokady jest odzyskiwany automatycznie. Nierozpoznawalna blokada, inny host lub pozostawiona `.jarvis-lock-gate` wymaga ręcznego sprawdzenia, że żaden proces nie korzysta z danych, przed usunięciem wyłącznie pliku blokady. Nie usuwaj aktywnej blokady.
 
 Po odtworzeniu baza może zawierać operację, której wynik nie był znany w chwili awarii. Najpierw uzgodnij jej stan z niezależnym trwałym źródłem efektu; nie wykonuj zapisu ponownie na podstawie samego timeoutu. Test infrastruktury odtwarza ukończoną operację oraz drugie zadanie czekające na dokładnie tę samą zgodę i sprawdza brak zdublowania efektów.
+
+## Korelacja operacji
+
+`Diagnostics.withWorkerTick` obejmuje rzeczywisty tick serwera; `withSpan` pozwala tworzyć jawne zagnieżdżone zakresy. Kontekst należy do operacji asynchronicznej. Niezwiązany log HTTP nie otrzymuje identyfikatora działającego równolegle workera, a zakończony span nie jest przypisywany do późniejszej pracy. Same `workerTickStarted/Completed` aktualizują heartbeat, bez aktywowania kontekstu dla dowolnych innych logów.
+
+Ta poprawka jest częścią P02 [roadmapy](roadmap.md). Nadal działa wyłącznie ograniczony bufor w pamięci. Własne spany HTTP/wykonań/modelu, eksport do Collectora i trwały stos OSS mają odrębny odbiór.
