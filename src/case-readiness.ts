@@ -9,6 +9,8 @@ import { DocumentSources } from "./document-sources.js";
 import type { DocumentFiles } from "./document-files.js";
 import {
   laboratoryTest,
+  laboratoryTlsTest,
+  laboratoryTlsTarget,
   type LaboratoryProofReader,
 } from "./laboratory-contract.js";
 
@@ -312,10 +314,20 @@ export class CaseReadinessStore {
             ? [
                 {
                   key: "service_http",
-                  title: "Niezależny test HTTP po zatwierdzonej naprawie",
+                  title:
+                    (e.data.laboratoryContext as JsonObject).targetId ===
+                    laboratoryTlsTarget
+                      ? "Niezależny test certyfikatu i HTTPS po odnowieniu"
+                      : "Niezależny test HTTP po zatwierdzonej naprawie",
                   kind: "test_passed",
                   required: true,
-                  expected: { testKey: laboratoryTest },
+                  expected: {
+                    testKey:
+                      (e.data.laboratoryContext as JsonObject).targetId ===
+                      laboratoryTlsTarget
+                        ? laboratoryTlsTest
+                        : laboratoryTest,
+                  },
                 },
               ]
             : []),
@@ -326,7 +338,11 @@ export class CaseReadinessStore {
         (item) =>
           item.kind === "test_passed" &&
           item.required &&
-          item.expected.testKey === laboratoryTest,
+          item.expected.testKey ===
+            ((e.data.laboratoryContext as JsonObject).targetId ===
+            laboratoryTlsTarget
+              ? laboratoryTlsTest
+              : laboratoryTest),
       )
     )
       error(
@@ -429,7 +445,9 @@ export class CaseReadinessStore {
   ) {
     if (requirement.kind === "test_passed" && module === "laboratory") {
       if (
-        requirement.expected.testKey !== laboratoryTest ||
+        ![laboratoryTest, laboratoryTlsTest].some(
+          (key) => key === requirement.expected.testKey,
+        ) ||
         !this.laboratoryProof
       )
         error(
@@ -594,7 +612,9 @@ export class CaseReadinessStore {
         source.identity.current !== true ||
         source.identity.scopeHash !==
           this.evaluate(ctx.tenantId, e, now).scopeHash ||
-        !e.data.laboratoryContext)
+        !e.data.laboratoryContext ||
+        source.identity.fixture !==
+          (e.data.laboratoryContext as JsonObject).targetId)
     )
       error(
         "LAB_PROOF_CHANGED",
@@ -689,7 +709,11 @@ export class CaseReadinessStore {
           (r) =>
             r.kind === "test_passed" &&
             r.required &&
-            r.expected.testKey === laboratoryTest,
+            r.expected.testKey ===
+              ((e.data.laboratoryContext as JsonObject).targetId ===
+              laboratoryTlsTarget
+                ? laboratoryTlsTest
+                : laboratoryTest),
         ))
     )
       taskBlockers.push(
@@ -763,7 +787,9 @@ export class CaseReadinessStore {
         if (
           requirement.kind === "delivery_received" ||
           (requirement.kind === "test_passed" &&
-            requirement.expected.testKey !== laboratoryTest)
+            ![laboratoryTest, laboratoryTlsTest].some(
+              (key) => key === requirement.expected.testKey,
+            ))
         )
           return {
             ...result,

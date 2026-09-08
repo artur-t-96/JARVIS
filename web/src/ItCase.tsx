@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { WorkspaceStore } from "../../src/workspace";
-import { LaboratoryStatus } from "./LaboratoryPanel";
+import { LaboratoryStatus, certificateErrorLabel } from "./LaboratoryPanel";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Entity, type Run } from "./types";
@@ -11,15 +11,18 @@ export function ItCaseCard({
   item,
   view,
   onRepair,
+  onInspect,
   onBind,
   busy = false,
 }: {
   item: Entity;
   view: ItCaseView;
   onRepair?: () => void;
+  onInspect?: () => void;
   onBind?: (id: string) => void;
   busy?: boolean;
 }) {
+  const tls = view.laboratory.protocol === "HTTPS";
   const observation = view.context.observation as Record<string, unknown>,
     closed = ["accepted", "cancelled"].includes(item.status);
   const requirement = view.readiness.requirements.find(
@@ -36,20 +39,38 @@ export function ItCaseCard({
       </p>
       <p>
         <strong>Obserwacja źródłowa:</strong>{" "}
-        {observation.httpStatus === null
-          ? "brak odpowiedzi"
-          : `HTTP ${String(observation.httpStatus)}`}{" "}
+        {tls && (observation.tls as Record<string, unknown>)?.errorCode
+          ? certificateErrorLabel(
+              (observation.tls as Record<string, unknown>).errorCode,
+            )
+          : observation.httpStatus === null
+            ? "brak odpowiedzi"
+            : `HTTP ${String(observation.httpStatus)}`}{" "}
         · {dateLabel(String(observation.observedAt), true)}
       </p>
       <p>
         <strong>Diagnoza operatora i zakres:</strong> {String(item.data.brief)}
       </p>
       <p>
-        <strong>Procedura:</strong> przywrócenie własnej usługi HTTP; wersja{" "}
-        {String(view.context.procedureVersion)}. Test osobno odczytuje odpowiedź
-        i wersję usługi.
+        <strong>Procedura:</strong>{" "}
+        {tls
+          ? "odnowienie certyfikatu własnej usługi HTTPS"
+          : "przywrócenie własnej usługi HTTP"}
+        ; wersja {String(view.context.procedureVersion)}.{" "}
+        {tls
+          ? "Test sprawdza nazwę, daty, łańcuch zaufania, odcisk i odpowiedź HTTPS."
+          : "Test osobno odczytuje odpowiedź i wersję usługi."}
       </p>
       <LaboratoryStatus laboratory={view.laboratory} />
+      {onInspect && (
+        <button
+          className="button secondary"
+          disabled={busy}
+          onClick={onInspect}
+        >
+          Sprawdź bieżący stan
+        </button>
+      )}
       {!closed && onRepair && (
         <button
           className="button primary"
@@ -76,9 +97,11 @@ export function ItCaseCard({
             {test.result === "negative"
               ? "Test nie potwierdził naprawy."
               : "Wynik testu nie został potwierdzony przez Core."}{" "}
-            {test.httpStatus === null
-              ? "Brak odpowiedzi HTTP"
-              : `HTTP ${test.httpStatus}`}{" "}
+            {test.tlsErrorCode
+              ? certificateErrorLabel(test.tlsErrorCode)
+              : test.httpStatus === null
+                ? "Brak odpowiedzi HTTP"
+                : `HTTP ${test.httpStatus}`}{" "}
             · {dateLabel(test.observedAt, true)} · rewizja {test.scopeRevision}
             <button
               className="text-button"
@@ -93,12 +116,14 @@ export function ItCaseCard({
           <div className="requirement-body">
             <h3>
               {proof.identity.current
-                ? "Pozytywny i aktualny test HTTP"
+                ? tls
+                  ? "Pozytywny i aktualny test certyfikatu oraz HTTPS"
+                  : "Pozytywny i aktualny test HTTP"
                 : "Historyczny wynik — wymaga ponownej kontroli"}
             </h3>
             <p>
-              HTTP {String(proof.identity.httpStatus)} · wersja{" "}
-              {String(proof.identity.version)} ·{" "}
+              {view.laboratory.protocol} {String(proof.identity.httpStatus)} ·
+              wersja {String(proof.identity.version)} ·{" "}
               {dateLabel(String(proof.identity.observedAt), true)}
             </p>
             <p className="small">
@@ -176,8 +201,14 @@ export function ItCase({ item, context }: { item: Entity; context: Context }) {
           view={view}
           busy={busy}
           onRepair={
-            allowed("lab.repairCase")
-              ? () => void command("lab.repairCase", view.repairInput)
+            allowed(view.laboratory.procedureId)
+              ? () =>
+                  void command(view.laboratory.procedureId, view.repairInput)
+              : undefined
+          }
+          onInspect={
+            allowed(view.laboratory.inspectTool)
+              ? () => void command(view.laboratory.inspectTool, {})
               : undefined
           }
           onBind={

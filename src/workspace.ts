@@ -10,6 +10,10 @@ import {
   laboratoryCaseInputSchema,
   laboratoryScopeSchema,
   laboratoryTarget,
+  laboratoryTlsTarget,
+  laboratoryTargetSchema,
+  laboratoryDefinition,
+  type LaboratoryTarget,
 } from "./laboratory-contract.js";
 import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
 import { AccessRegister, migrateAccessRegister } from "./access-register.js";
@@ -504,8 +508,10 @@ export class WorkspaceStore {
         if (
           !scope ||
           scope.targetId !== pins.targetId ||
-          scope.procedureId !== "lab.repairCase" ||
-          scope.procedureVersion !== "1" ||
+          scope.procedureId !==
+            laboratoryDefinition(pins.targetId).procedureId ||
+          scope.procedureVersion !==
+            laboratoryDefinition(pins.targetId).procedureVersion ||
           !this.entityConsistent(ctx.tenantId, c) ||
           c.version !== pins.expectedCaseVersion ||
           readiness.scopeRevision !== pins.scopeRevision ||
@@ -524,7 +530,10 @@ export class WorkspaceStore {
       },
     });
   }
-  laboratoryOverview(principal: Principal) {
+  laboratoryOverview(
+    principal: Principal,
+    target: LaboratoryTarget = laboratoryTarget,
+  ) {
     if (!(principal.scopes?.includes("*") || principal.scopes?.includes("it")))
       fail("SCOPE_REQUIRED", "Brak dostępu do IT.", 403);
     if (!this.laboratory)
@@ -533,7 +542,7 @@ export class WorkspaceStore {
       .prepare(
         "SELECT id FROM ops_entities WHERE tenant_id=? AND module='cases' AND json_extract(data_json,'$.laboratoryContext.targetId')=? AND status IN ('open','needs_changes','awaiting_acceptance')",
       )
-      .get(principal.tenantId, laboratoryTarget) as { id: string } | undefined;
+      .get(principal.tenantId, target) as { id: string } | undefined;
     let activeCase: { id: string; title: string } | null = null;
     if (row) {
       try {
@@ -547,6 +556,7 @@ export class WorkspaceStore {
       ...this.laboratory.view(
         principal.tenantId,
         new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+        target,
       ),
       activeCase,
     };
@@ -555,7 +565,10 @@ export class WorkspaceStore {
     const item = this.get(principal, "cases", caseId);
     if (!item.data.laboratoryContext)
       fail("LAB_CASE_REQUIRED", "Sprawa nie dotyczy laboratorium.", 409);
-    const laboratory = this.laboratoryOverview(principal),
+    const target = laboratoryTargetSchema.parse(
+      (item.data.laboratoryContext as JsonObject).targetId,
+    );
+    const laboratory = this.laboratoryOverview(principal, target),
       readiness = this.readiness(principal, caseId),
       now = new Date(this.options.clock?.() ?? Date.now()).toISOString();
     return {
@@ -567,8 +580,15 @@ export class WorkspaceStore {
         expectedCaseVersion: item.version,
         scopeRevision: readiness.scopeRevision,
         scopeHash: readiness.scopeHash,
-        targetId: laboratoryTarget,
+        targetId: target,
         expectedVersion: laboratory.observed?.version ?? null,
+        ...(target === laboratoryTlsTarget
+          ? {
+              expectedFingerprint:
+                laboratory.observed?.tls?.configuredCertificate.fingerprint ??
+                null,
+            }
+          : {}),
       },
       proofs: this.laboratory!.proofs(
         principal.tenantId,
@@ -1705,6 +1725,7 @@ export class WorkspaceStore {
             scope.observationId,
             scope.observationHash,
             cmd.now,
+            scope.targetId,
           ),
         };
         data.ownerPrincipalId = cmd.ctx.actorId;
@@ -4454,9 +4475,9 @@ export class WorkspaceStore {
                         ? "7"
                         : "6"
                       : module === "cases" && action === "bindEvidence"
-                        ? "7"
+                        ? "8"
                         : module === "cases" && action === "create"
-                          ? "5"
+                          ? "6"
                           : "4",
           ...(taskAccess
             ? {

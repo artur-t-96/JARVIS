@@ -1,3 +1,4 @@
+import { laboratoryTargetSchema } from "./laboratory-contract.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import {
@@ -184,7 +185,11 @@ export function registerWorkspaceApi(
     ),
   }));
   app.get("/api/laboratory", async (req) => ({
-    laboratory: workspace.laboratoryOverview(principal(req)),
+    laboratory: workspace.laboratoryOverview(
+      principal(req),
+      z.object({ target: laboratoryTargetSchema.optional() }).parse(req.query)
+        .target,
+    ),
   }));
   app.get("/api/cases/:id/laboratory", async (req) => ({
     laboratoryCase: workspace.laboratoryCase(

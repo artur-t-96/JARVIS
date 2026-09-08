@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
+import {
+  laboratoryTarget,
+  laboratoryDefinition,
+  type LaboratoryTarget,
+} from "../../src/laboratory-contract.js";
 import { LocalLaboratory } from "../../src/laboratory.js";
 import { type JsonObject, type ToolDefinition } from "../../src/contracts.js";
 import { custodyFixture, custodyNow } from "./custody-fixture.js";
@@ -8,11 +13,13 @@ import { custodyFixture, custodyNow } from "./custody-fixture.js";
 export async function itCaseFixture(
   directory: string,
   options: {
+    target?: LaboratoryTarget;
     clock?: () => number;
     engineClock?: () => number;
     wrap?: (tool: ToolDefinition) => ToolDefinition;
   } = {},
 ) {
+  const target = options.target ?? laboratoryTarget;
   const clock = options.clock ?? (() => custodyNow),
     laboratory = new LocalLaboratory(join(directory, "laboratory.sqlite"), {
       clock,
@@ -38,7 +45,12 @@ export async function itCaseFixture(
         title: "Synthetic HTTP",
         summary: "Own laboratory only",
         steps: [
-          { id: "inspect", title: "HTTP", toolId: "lab.inspect", input: {} },
+          {
+            id: "inspect",
+            title: "HTTP",
+            toolId: laboratoryDefinition(target).inspectTool,
+            input: {},
+          },
         ],
       },
       randomUUID(),
@@ -49,10 +61,14 @@ export async function itCaseFixture(
       f.engine.getRun(f.actor("manager", tenant), run.id).status,
       "completed",
     );
-    return f.workspace.laboratoryOverview(f.actor("manager", tenant)).observed!;
+    return f.workspace.laboratoryOverview(f.actor("manager", tenant), target)
+      .observed!;
   };
   const openingInput = (tenant = "synthetic-a"): JsonObject => {
-    const view = f.workspace.laboratoryOverview(f.actor("manager", tenant)),
+    const view = f.workspace.laboratoryOverview(
+        f.actor("manager", tenant),
+        target,
+      ),
       o = view.observed!;
     return {
       title: `Synthetic IT case ${tenant}`,

@@ -6,12 +6,28 @@ import { dateLabel, type Context, type Run } from "./types";
 import { Icon, Notice, Sheet } from "./ui";
 
 export type LaboratoryView = ReturnType<WorkspaceStore["laboratoryOverview"]>;
+export function certificateErrorLabel(code: unknown) {
+  const labels: Record<string, string> = {
+    CERT_HAS_EXPIRED: "Certyfikat wygasł",
+    CERT_NOT_YET_VALID: "Certyfikat jeszcze nie obowiązuje",
+    ERR_TLS_CERT_ALTNAME_INVALID: "Nazwa usługi nie odpowiada certyfikatowi",
+    UNABLE_TO_VERIFY_LEAF_SIGNATURE: "Wystawca certyfikatu nie jest zaufany",
+    SELF_SIGNED_CERT_IN_CHAIN: "Łańcuch certyfikatu nie jest zaufany",
+    DEPTH_ZERO_SELF_SIGNED_CERT: "Certyfikat nie ma zaufanego wystawcy",
+    TLS_UNAVAILABLE: "Nie udało się sprawdzić połączenia TLS",
+    LAB_TLS_KEY_UNAVAILABLE:
+      "Brak prywatnego klucza tej instalacji laboratorium",
+    RESULT_MISMATCH: "Odpowiedź usługi nie potwierdza oczekiwanego certyfikatu",
+  };
+  return labels[String(code)] ?? "Wymagana ponowna weryfikacja certyfikatu";
+}
 export function LaboratoryStatus({
   laboratory,
 }: {
   laboratory: LaboratoryView;
 }) {
   const observed = laboratory.observed;
+  const tls = laboratory.protocol === "HTTPS";
   return (
     <div>
       <h3>{laboratory.title}</h3>
@@ -24,15 +40,49 @@ export function LaboratoryStatus({
               ? "Oczekiwanie na zakończenie weryfikacji odczytu"
               : observed.healthy
                 ? "Usługa odpowiada poprawnie"
-                : "Wykryta niedostępność usługi"}
+                : tls
+                  ? "Wykryty problem z certyfikatem lub usługą"
+                  : "Wykryta niedostępność usługi"}
       </p>
       {observed && (
         <p className="small muted">
-          {observed.httpStatus === null
-            ? "Brak poprawnej odpowiedzi HTTP"
-            : `HTTP ${observed.httpStatus}`}{" "}
+          {tls && observed.tls?.errorCode
+            ? certificateErrorLabel(observed.tls.errorCode)
+            : observed.httpStatus === null
+              ? "Brak poprawnej odpowiedzi HTTP"
+              : `HTTP ${observed.httpStatus}`}{" "}
           · wersja {observed.version} · {dateLabel(observed.observedAt, true)}
         </p>
+      )}
+      {observed?.tls && (
+        <details>
+          <summary>Dane certyfikatu i połączenia</summary>
+          <p>
+            {observed.tls.authorized
+              ? "Nazwa, daty i łańcuch zweryfikowane przez TLS."
+              : "Połączenie nie potwierdza zaufanego certyfikatu."}
+          </p>
+          <p className="small muted">Nazwa: {observed.tls.serverName}</p>
+          <p className="small muted">
+            Certyfikat skonfigurowany:{" "}
+            {dateLabel(observed.tls.configuredCertificate.validFrom, true)} —{" "}
+            {dateLabel(observed.tls.configuredCertificate.validTo, true)}
+          </p>
+          <p className="small muted">
+            Odcisk skonfigurowanego certyfikatu:{" "}
+            <code>{observed.tls.configuredCertificate.fingerprint}</code>
+          </p>
+          {observed.tls.peerFingerprint ? (
+            <p className="small muted">
+              Odcisk potwierdzony w połączeniu:{" "}
+              <code>{observed.tls.peerFingerprint}</code>
+            </p>
+          ) : (
+            <p className="small muted">
+              Odcisk serwera nie został potwierdzony w zaufanym połączeniu.
+            </p>
+          )}
+        </details>
       )}
       <p className="small muted">
         Źródło: własne laboratorium JARVIS · aktualność do{" "}
@@ -42,8 +92,25 @@ export function LaboratoryStatus({
   );
 }
 export function LaboratoryPanel({ context }: { context: Context }) {
+  return (
+    <>
+      {(["jarvis-local-service", "jarvis-local-tls"] as const).map((target) => (
+        <LaboratoryTargetPanel key={target} target={target} context={context} />
+      ))}
+    </>
+  );
+}
+function LaboratoryTargetPanel({
+  context,
+  target,
+}: {
+  context: Context;
+  target: "jarvis-local-service" | "jarvis-local-tls";
+}) {
+  const tls = target === "jarvis-local-tls";
+  const [failure, setFailure] = useState("expired");
   const resource = useResource<{ laboratory: LaboratoryView }>(
-    "/api/laboratory",
+    "/api/laboratory?target=" + target,
     0,
     5000,
   );
@@ -58,6 +125,8 @@ export function LaboratoryPanel({ context }: { context: Context }) {
     context.tools.some((tool) => tool.id === id);
   const laboratory = resource.data?.laboratory,
     observed = laboratory?.observed;
+  const inspectTool = laboratory?.inspectTool ?? "";
+  const failureTool = laboratory?.failureTool ?? "";
   if (!context.tools.some((tool) => tool.id.startsWith("lab."))) return null;
   async function command(toolId: string, input: Record<string, unknown>) {
     setBusy(true);
@@ -79,13 +148,16 @@ export function LaboratoryPanel({ context }: { context: Context }) {
     event.preventDefault();
     if (!laboratory || !observed) return;
     void command("ops.cases.create", {
-      title: "Przywrócenie usługi laboratorium",
+      title: tls
+        ? "Odnowienie certyfikatu laboratorium"
+        : "Przywrócenie usługi laboratorium",
       data: {
         caseType: "it",
         brief: diagnosis,
         dueDate,
-        acceptanceCriteria:
-          "HTTP 200 dla własnej usługi po zatwierdzonej naprawie; aktualny niezależny test i odbiór właściciela.",
+        acceptanceCriteria: tls
+          ? "Nazwa, daty i łańcuch certyfikatu oraz HTTP 200 potwierdzone niezależnym testem po zatwierdzonym odnowieniu; osobny odbiór właściciela."
+          : "HTTP 200 dla własnej usługi po zatwierdzonej naprawie; aktualny niezależny test i odbiór właściciela.",
         laboratory: {
           targetId: laboratory.targetId,
           observationId: observed.id,
@@ -100,7 +172,11 @@ export function LaboratoryPanel({ context }: { context: Context }) {
     <section className="card laboratory-panel">
       <div>
         <span className="eyebrow">WYDZIELONE LABORATORIUM JARVIS</span>
-        <h2>Od awarii do odebranej naprawy</h2>
+        <h2>
+          {tls
+            ? "Odnowienie certyfikatu HTTPS"
+            : "Od awarii do odebranej naprawy"}
+        </h2>
         <p className="muted">
           Obserwacja, diagnoza, uzgodniony zakres, zatwierdzona procedura i
           niezależny wynik.
@@ -111,14 +187,14 @@ export function LaboratoryPanel({ context }: { context: Context }) {
         <Notice tone="error">{error || resource.error}</Notice>
       )}
       <div className="button-group">
-        {allowed("lab.inspect") && (
+        {allowed(inspectTool) && (
           <button
             className="button secondary"
             disabled={busy}
-            onClick={() => void command("lab.inspect", {})}
+            onClick={() => void command(inspectTool, {})}
           >
             <Icon name="pulse" size={17} />
-            Sprawdź usługę
+            {tls ? "Sprawdź certyfikat i HTTPS" : "Sprawdź usługę"}
           </button>
         )}
         {laboratory?.activeCase ? (
@@ -146,13 +222,33 @@ export function LaboratoryPanel({ context }: { context: Context }) {
             </button>
           )
         )}
-        {allowed("lab.simulateFailure") && (
+        {tls && allowed(failureTool) && (
+          <label className="field">
+            <span>Przypadek testowy</span>
+            <select
+              value={failure}
+              onChange={(e) => setFailure(e.target.value)}
+            >
+              <option value="expired">Certyfikat wygasł</option>
+              <option value="wrong_name">Niewłaściwa nazwa</option>
+              <option value="untrusted">Nieufny wystawca</option>
+            </select>
+          </label>
+        )}
+        {allowed(failureTool) && (
           <button
             className="text-button"
             disabled={busy || !observed?.current || !observed.verified}
             onClick={() =>
-              void command("lab.simulateFailure", {
+              void command(failureTool, {
                 expectedVersion: observed?.version,
+                ...(tls
+                  ? {
+                      failure,
+                      expectedFingerprint:
+                        observed?.tls?.configuredCertificate.fingerprint,
+                    }
+                  : {}),
               })
             }
           >
@@ -176,7 +272,9 @@ export function LaboratoryPanel({ context }: { context: Context }) {
               <LaboratoryStatus laboratory={laboratory} />
               <p>
                 Właściciel odbioru: {context.principal.id}. Procedura przywróci
-                odpowiedź HTTP własnej usługi i wykona osobny test.
+                {tls
+                  ? " certyfikat własnej usługi. Test sprawdzi nazwę, daty, zaufany łańcuch i odpowiedź HTTPS."
+                  : " odpowiedź HTTP własnej usługi i wykona osobny test."}
               </p>
               <label className="field">
                 <span>Diagnoza i oczekiwany rezultat</span>

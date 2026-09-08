@@ -9,7 +9,10 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { tsImport } from "tsx/esm/api";
 import { itCaseFixture } from "./helpers/it-case-fixture.js";
 import { custodyNow } from "./helpers/custody-fixture.js";
-import { laboratoryFreshnessMs } from "../src/laboratory-contract.js";
+import {
+  laboratoryFreshnessMs,
+  laboratoryTlsTarget,
+} from "../src/laboratory-contract.js";
 const { ItCaseCard } = await tsImport("../web/src/ItCase.tsx", {
   parentURL: import.meta.url,
   tsconfig: fileURLToPath(new URL("../tsconfig.web.json", import.meta.url)),
@@ -42,6 +45,35 @@ test("IT UI distinguishes diagnosis, approved procedure, test and receipt withou
       html(),
       /Pozytywny i aktualny test HTTP|Powiąż test z odbiorem/,
     );
+  } finally {
+    await f.close();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("certificate UI separates configured metadata from a verified TLS peer", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "jarvis-cert-ui-")),
+    f = await itCaseFixture(dir, { target: laboratoryTlsTarget });
+  try {
+    const id = await f.open(),
+      html = () =>
+        renderToStaticMarkup(
+          createElement(ItCaseCard, {
+            item: f.get("cases", id),
+            view: f.view(id),
+            onRepair() {},
+            onBind() {},
+            onInspect() {},
+          }),
+        );
+    assert.match(html(), /Certyfikat wygasł/);
+    assert.match(html(), /Odcisk serwera nie został potwierdzony/);
+    assert.doesNotMatch(html(), /Pozytywny i aktualny test/);
+    await f.complete("lab.renewCertificate", f.view(id).repairInput);
+    assert.match(html(), /Nazwa, daty i łańcuch zweryfikowane przez TLS/);
+    assert.match(html(), /Odcisk potwierdzony w połączeniu/);
+    assert.match(html(), /Pozytywny i aktualny test certyfikatu oraz HTTPS/);
+    assert.doesNotMatch(html(), /PRIVATE KEY|encryptedKey|encrypted_key/);
   } finally {
     await f.close();
     rmSync(dir, { recursive: true, force: true });

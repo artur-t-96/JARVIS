@@ -70,6 +70,10 @@ ID sprawy/wykonania/kroku/usage mogą być polami korelacji śladów i logów. N
 
 PDF osadza Noto Sans Regular/Bold na OFL-1.1. Źródłowy commit `ffebf8c1ee449e544955a7e813c54f9b73848eac`, URL i SHA każdego fontu oraz licencja są w `assets/fonts/`. DOCX używa zwykłego tekstu, bez makr, zewnętrznych obrazów i aktywnych relacji. Próbę obejmującą polskie znaki, osiem eksportów i dziewięć wyrenderowanych stron opisuje [odbiór P09a2](delivery-state.md#p09a2--odbiór-podglądu). Nie wymaga serwera biurowego ani wysyłania dokumentów do dostawcy modelu.
 
+## Certyfikaty — P07b
+
+[@peculiar/x509 2.1.0](https://github.com/PeculiarVentures/x509), MIT, oraz wymagany `reflect-metadata` 0.2.2, Apache-2.0, generują rzeczywiste certyfikaty własnego laboratorium. Kryptografię zapewnia WebCrypto w Node22.23.0. Zależności są przypięte w `package-lock.json`. Weryfikacja połączenia korzysta z Node HTTPS/TLS i jawnego lokalnego CA; nie zastępujemy jej samym porównaniem dat lub flagą rekordu. Klucze opakowuje standardowe AES-256-GCM z Node. [Kontrakt P07b](p07-design.md) i [dziennik](delivery-state.md) rozdzielają implementację od rzeczywistego odbioru.
+
 ## Warunek uznania integracji za wykonaną
 
 Wersjonowane konfiguracje i panele, manifest binariów, własne procesy, realna telemetria, dowód trwałości po restarcie, próba awarii odbiornika, kontrola listenerów/eksportu i pomiar zasobów. Samo dodanie zależności npm, linku do Grafany lub zrzutu przykładowego dashboardu nie wystarcza.

@@ -18,6 +18,17 @@ Panel rozdziela obserwację, diagnozę, proponowaną procedurę, wynik wykonania
 
 Własny serwer HTTPS z lokalnym kluczem, prawdziwym X.509 i weryfikacją nazwy, dat oraz łańcucha. Biblioteka OSS zastąpi własne kodowanie certyfikatów. Zaufanie obowiązuje tylko klienta laboratorium; systemowy magazyn zaufania pozostaje niezmieniony. Przypadki obejmą wygaśnięcie, niewłaściwą nazwę i nieufnego wystawcę. Dodatni test nie może wyłączać weryfikacji TLS. Certyfikat, jego odcisk, procedura i skutek rotacji podlegają tym samym zgodom, odzyskiwaniu i kopiom co usługa HTTP.
 
+Kontrakt implementacji P07b:
+
+- Cel `jarvis-local-tls`, odczyt `lab.inspectCertificate`, procedura `lab.renewCertificate` v1, test `jarvis.lab.tls`. Zgoda zawiera wcześniejszą wersję i SHA-256 certyfikatu oraz sprawę i rewizję. Zmiana któregokolwiek przypięcia blokuje zapis. Osobna kontrolowana awaria wybiera wyłącznie trzy zdefiniowane przypadki.
+- `@peculiar/x509` 2.1.0 generuje CA i certyfikaty ECDSA P-256. Node HTTPS/TLS sprawdza połączenie z jedynym własnym listenerem loopback: nazwa, termin, jawnie podany lokalny CA, odcisk, wersja i odpowiedź HTTP. `rejectUnauthorized:true`, nowe połączenie dla każdego testu, bez zmian w systemowym zaufaniu i bez przyjmowania URL.
+- Firmy mają odrębne CA, nazwy i materiały kluczy. Metadane skonfigurowanego certyfikatu są rozdzielone od odcisku faktycznie potwierdzonego w zaufanym połączeniu. Nieudany handshake nie jest dowodem odczytania certyfikatu serwera.
+- Laboratory v3 dodaje dwa rejestry materiałów. Klucze prywatne są szyfrowane AES-256-GCM z powiązaniem do firmy, roli i konkretnego certyfikatu. Lokalny klucz opakowujący `laboratory-wrapping.key`, 0600, pozostaje poza zwykłą kopią danych i Git. Odtworzenie bazy wymaga oddzielnego odzyskania tego samego klucza. Jego brak lub podmiana blokują aktualną gotowość; nie generujemy zastępczego klucza dla istniejących materiałów.
+- Certyfikat, zaszyfrowany klucz i receipt skutku są zapisywane w jednej transakcji. Nowe połączenie odczytuje zatwierdzony materiał z bazy. Po przerwaniu procesu odzyskiwanie uzgadnia ten sam certyfikat zamiast wykonywać kolejną rotację.
+- Core przekazuje czytnikowi dowodu także odciski poszczególnych elementów rzeczywistej weryfikacji. Obserwacja z ponownie obliczonym lokalnym hashem nie może zmienić czasu ani treści wyniku potwierdzonego przez Core. Dotyczy to również dotychczasowego HTTP.
+
+Podstawa techniczna: [biblioteka X.509](https://github.com/PeculiarVentures/x509), [weryfikacja TLS w Node 22](https://nodejs.org/docs/latest-v22.x/api/tls.html). Odbiór obejmuje oba cele, izolację firm, odmowę, utratę uprawnień, zmianę odcisku/zakresu, ujemny test, brak klucza, restart i SIGKILL. Wyniki zapisujemy w dzienniku po wykonaniu.
+
 ## Odbiór i dostarczenie
 
 - Dwie firmy: rzeczywista awaria → diagnoza → sprawa → zgoda innego konta → naprawa → niezależny test → powiązanie → odbiór.

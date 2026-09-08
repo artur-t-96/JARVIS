@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { LocalLaboratory } from "../src/laboratory.js";
 
-test("laboratory v2 preserves existing tenant states and immutable effect receipts", async () => {
+test("laboratory v3 preserves existing tenant states and immutable effect receipts", async () => {
   const dir = mkdtempSync(join(tmpdir(), "jarvis-lab-migration-")),
     path = join(dir, "laboratory.sqlite");
   const old = new DatabaseSync(path);
@@ -36,7 +36,7 @@ test("laboratory v2 preserves existing tenant states and immutable effect receip
       current
         .prepare("SELECT max(version) n FROM schema_versions_laboratory")
         .get()!.n,
-      2,
+      3,
     );
     assert.equal(
       lab.view("a").observed,

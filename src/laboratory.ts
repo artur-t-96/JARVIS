@@ -2,7 +2,13 @@ import { createServer, type Server } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { randomBytes, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import {
+  LaboratoryTls,
+  type CertificateFailure,
+  type TlsObservation,
+} from "./laboratory-tls.js";
+import { LaboratoryKeyring } from "./laboratory-keyring.js";
 import { z } from "zod";
 import { hash } from "./engine.js";
 import { migrateDatabase } from "./migrations.js";
@@ -18,21 +24,25 @@ import {
   laboratoryCaseInputSchema,
   laboratoryFreshnessMs,
   laboratoryTarget,
+  laboratoryTlsTarget,
+  laboratoryDefinition,
+  type LaboratoryTarget,
   type LaboratoryCasePolicy,
   type LaboratoryProofSource,
   type StepEvidenceReader,
 } from "./laboratory-contract.js";
 
-interface Observation extends JsonObject {
+type Observation = JsonObject & {
   id: string;
-  fixture: typeof laboratoryTarget;
+  fixture: LaboratoryTarget;
   healthy: boolean;
   version: number;
   httpStatus: number | null;
   observedAt: string;
   environment: "jarvis-laboratory";
-  check: "http" | "unreachable";
-}
+  check: "http" | "tls" | "unreachable";
+  tls?: TlsObservation;
+};
 interface StoredObservation {
   observation: Observation;
   runId: string;
@@ -50,11 +60,18 @@ interface StoredObservation {
   outputHash: string;
   verificationHash: string;
 }
+const observationEvidence = (observation: Observation) => ({
+  source: `jarvis-laboratory/${observation.fixture === laboratoryTlsTarget ? "tls" : "http"}`,
+  summary: `HTTP ${observation.httpStatus}`,
+  observedAt: observation.observedAt,
+  data: observation,
+});
 
 /** A real HTTP fixture owned entirely by this JARVIS installation, never another application. */
 export class LocalLaboratory {
   private db: DatabaseSync;
   private server: Server;
+  private readonly tls: LaboratoryTls;
   private token = randomBytes(32).toString("hex");
   private origin = "";
   private casePolicy?: LaboratoryCasePolicy;
@@ -89,8 +106,17 @@ export class LocalLaboratory {
             CREATE INDEX laboratory_case_observations ON laboratory_observations(tenant_id,case_id);
           `),
         },
+        {
+          version: 3,
+          name: "Private certificate fixture and wrapped signing keys",
+          up: LaboratoryTls.migrate,
+        },
       ],
     });
+    this.tls = new LaboratoryTls(
+      this.db,
+      new LaboratoryKeyring(join(dirname(path), "laboratory-wrapping.key")),
+    );
     this.server = createServer((req, res) => {
       if (
         req.headers.authorization !== `Bearer ${this.token}` ||
@@ -113,7 +139,13 @@ export class LocalLaboratory {
         "Content-Type": "application/json",
         "Cache-Control": "no-store",
       });
-      res.end(JSON.stringify({ fixture: "jarvis-local-service", ...row }));
+      res.end(
+        JSON.stringify({
+          fixture: "jarvis-local-service",
+          healthy: row.healthy,
+          version: row.version,
+        }),
+      );
     });
   }
   setCasePolicy(policy: LaboratoryCasePolicy) {
@@ -133,20 +165,34 @@ export class LocalLaboratory {
     const address = this.server.address();
     if (!address || typeof address === "string") throw new Error("Lab failed");
     this.origin = `http://127.0.0.1:${address.port}`;
+    await this.tls.start();
   }
-  private state(tenantId: string) {
+  private state(tenantId: string, target: LaboratoryTarget = laboratoryTarget) {
+    if (target === laboratoryTlsTarget) return this.tls.state(tenantId);
     const r = this.db
       .prepare("SELECT * FROM laboratory_state WHERE tenant_id=?")
       .get(tenantId) as { healthy: number; version: number } | undefined;
-    return { healthy: Boolean(r?.healthy), version: r?.version ?? 0 };
+    return {
+      healthy: Boolean(r?.healthy),
+      version: r?.version ?? 0,
+      certificate: null,
+      keyAvailable: true,
+    };
   }
-  private async inspect(ctx: ToolContext): Promise<Observation> {
+  private async inspect(
+    ctx: ToolContext,
+    target: LaboratoryTarget = laboratoryTarget,
+  ): Promise<Observation> {
     ctx.signal.throwIfAborted();
     const base = {
       id: randomUUID(),
-      fixture: laboratoryTarget,
+      fixture: target,
       environment: "jarvis-laboratory" as const,
     };
+    if (target === laboratoryTlsTarget) {
+      const observed = await this.tls.inspect(ctx.tenantId, ctx.signal);
+      return { ...base, ...observed, observedAt: this.now(), check: "tls" };
+    }
     try {
       const response = await fetch(
         `${this.origin}/health/${encodeURIComponent(ctx.tenantId)}`,
@@ -202,10 +248,18 @@ export class LocalLaboratory {
       toolVersion,
       actorId: ctx.actorId ?? null,
       approvedBy: ctx.approvedBy ?? null,
-      caseId: toolId === "lab.repairCase" ? String(input.caseId) : null,
+      caseId:
+        toolId === laboratoryDefinition(observation.fixture).procedureId
+          ? String(input.caseId)
+          : null,
       scopeRevision:
-        toolId === "lab.repairCase" ? Number(input.scopeRevision) : null,
-      scopeHash: toolId === "lab.repairCase" ? String(input.scopeHash) : null,
+        toolId === laboratoryDefinition(observation.fixture).procedureId
+          ? Number(input.scopeRevision)
+          : null,
+      scopeHash:
+        toolId === laboratoryDefinition(observation.fixture).procedureId
+          ? String(input.scopeHash)
+          : null,
       input,
       inputHash: hash(input),
       outputHash: hash(result),
@@ -262,27 +316,36 @@ export class LocalLaboratory {
       outcome.toolVersion === record.toolVersion &&
       outcome.inputHash === record.inputHash &&
       outcome.outputHash === record.outputHash &&
+      outcome.evidenceHashes.includes(
+        hash(observationEvidence(record.observation)),
+      ) &&
       outcome.verificationHash === record.verificationHash
     );
   }
   private fresh(observation: Observation, now: string) {
     const age = Date.parse(now) - Date.parse(observation.observedAt);
-    return age >= 0 && age <= laboratoryFreshnessMs && this.server.listening;
+    return (
+      age >= 0 &&
+      age <= laboratoryFreshnessMs &&
+      (observation.fixture === laboratoryTlsTarget
+        ? this.tls.listening
+        : this.server.listening)
+    );
   }
-  view(tenant: string, now = this.now()) {
+  view(
+    tenant: string,
+    now = this.now(),
+    target: LaboratoryTarget = laboratoryTarget,
+  ) {
     const row = this.db
       .prepare(
-        "SELECT id FROM laboratory_observations WHERE tenant_id=? ORDER BY rowid DESC LIMIT 1",
+        "SELECT id FROM laboratory_observations WHERE tenant_id=? AND json_extract(record_json,'$.observation.fixture')=? ORDER BY rowid DESC LIMIT 1",
       )
-      .get(tenant) as { id: string } | undefined;
+      .get(tenant, target) as { id: string } | undefined;
     const saved = row ? this.readObservation(tenant, row.id) : undefined;
-    const current = this.state(tenant);
+    const current = this.state(tenant, target);
     return {
-      targetId: laboratoryTarget,
-      title: "Usługa HTTP laboratorium JARVIS",
-      protocol: "HTTP",
-      procedureId: "lab.repairCase",
-      procedureVersion: "1",
+      ...laboratoryDefinition(target),
       freshnessSeconds: laboratoryFreshnessMs / 1000,
       observed: saved
         ? {
@@ -291,7 +354,12 @@ export class LocalLaboratory {
             runId: saved.record.runId,
             current:
               this.fresh(saved.record.observation, now) &&
-              current.version === saved.record.observation.version,
+              current.version === saved.record.observation.version &&
+              (target !== laboratoryTlsTarget ||
+                (current.keyAvailable &&
+                  current.certificate?.fingerprint ===
+                    saved.record.observation.tls?.configuredCertificate
+                      .fingerprint)),
             verified: this.verified(tenant, saved.record),
           }
         : null,
@@ -302,14 +370,16 @@ export class LocalLaboratory {
     id: string,
     expectedHash: string,
     now: string,
+    target: LaboratoryTarget = laboratoryTarget,
   ): JsonObject {
     const saved = this.readObservation(tenant, id),
       observation = saved.record.observation;
     if (
+      observation.fixture !== target ||
       saved.hash !== expectedHash ||
       !this.verified(tenant, saved.record) ||
       !this.fresh(observation, now) ||
-      this.state(tenant).version !== observation.version ||
+      this.state(tenant, target).version !== observation.version ||
       observation.healthy
     )
       throw new DomainError(
@@ -341,7 +411,7 @@ export class LocalLaboratory {
       .get(tenant, r.operationKey) as
       { input_hash: string; result_json: string } | undefined;
     if (
-      r.toolId !== "lab.repairCase" ||
+      r.toolId !== laboratoryDefinition(observation.fixture).procedureId ||
       r.toolVersion !== "1" ||
       r.caseId !== caseId ||
       r.scopeRevision !== revision ||
@@ -357,8 +427,8 @@ export class LocalLaboratory {
         "Dowód nie potwierdza zatwierdzonej naprawy i zakończonej weryfikacji tej sprawy.",
         409,
       );
-    const state = this.state(tenant),
-      last = this.view(tenant, now).observed;
+    const state = this.state(tenant, observation.fixture),
+      last = this.view(tenant, now, observation.fixture).observed;
     const current =
       this.fresh(observation, now) &&
       observation.healthy &&
@@ -366,9 +436,12 @@ export class LocalLaboratory {
       state.healthy &&
       state.version === observation.version &&
       !!last?.healthy &&
-      last.version === state.version;
+      last.version === state.version &&
+      (observation.fixture !== laboratoryTlsTarget ||
+        (observation.tls?.authorized === true &&
+          observation.tls.peerFingerprint === state.certificate?.fingerprint));
     return {
-      title: `Test HTTP po naprawie · ${observation.observedAt}`,
+      title: `Test ${laboratoryDefinition(observation.fixture).protocol} po naprawie · ${observation.observedAt}`,
       version: 1,
       revision,
       hash: saved.hash,
@@ -415,6 +488,7 @@ export class LocalLaboratory {
         scopeRevision: r.scopeRevision,
         observedAt: r.observation.observedAt,
         httpStatus: r.observation.httpStatus,
+        tlsErrorCode: r.observation.tls?.errorCode ?? null,
         result: this.verified(tenant, r)
           ? "positive"
           : this.matchesOutcome(tenant, r)
@@ -439,22 +513,26 @@ export class LocalLaboratory {
     return r ? (JSON.parse(r.result_json) as ToolResult) : undefined;
   }
   tools(): ToolDefinition[] {
-    const inspect: ToolDefinition = {
-      id: "lab.inspect",
+    const inspect = (target: LaboratoryTarget): ToolDefinition => ({
+      id: laboratoryDefinition(target).inspectTool,
       scope: "it",
       version: "1",
-      description: "Sprawdź HTTP własnego laboratorium JARVIS",
+      description:
+        target === laboratoryTlsTarget
+          ? "Sprawdź certyfikat i HTTPS własnego laboratorium JARVIS"
+          : "Sprawdź HTTP własnego laboratorium JARVIS",
       effect: "read",
       recovery: "idempotent",
       inputSchema: z.object({}).strict(),
-      execute: async (ctx) => ({ data: await this.inspect(ctx) }),
+      execute: async (ctx) => ({ data: await this.inspect(ctx, target) }),
       verify: async (ctx, input, result) => {
         const verification: Verification = {
-          ok: result.data.fixture === "jarvis-local-service",
-          summary: "Odczytano faktyczny status HTTP lokalnej usługi testowej.",
+          ok: result.data.fixture === target,
+          summary:
+            "Odczytano faktyczny wynik połączenia z lokalną usługą testową.",
           evidence: [
             {
-              source: "jarvis-laboratory/http",
+              source: `jarvis-laboratory/${target === laboratoryTlsTarget ? "tls" : "http"}`,
               summary: `HTTP ${result.data.httpStatus}`,
               observedAt: String(result.data.observedAt),
               data: result.data,
@@ -467,20 +545,24 @@ export class LocalLaboratory {
           result,
           verification,
           result.data as Observation,
-          "lab.inspect",
+          laboratoryDefinition(target).inspectTool,
           "1",
         );
         return verification;
       },
-    };
-    const change = (healthy: boolean, forCase = false): ToolDefinition => ({
+    });
+    const change = (
+      healthy: boolean,
+      forCase = false,
+      target: LaboratoryTarget = laboratoryTarget,
+    ): ToolDefinition => ({
       id: forCase
-        ? "lab.repairCase"
+        ? laboratoryDefinition(target).procedureId
         : healthy
           ? "lab.repair"
-          : "lab.simulateFailure",
+          : laboratoryDefinition(target).failureTool,
       scope: "it",
-      version: forCase ? "1" : "2",
+      version: forCase || target === laboratoryTlsTarget ? "1" : "2",
       ...(forCase
         ? {
             requiredScopes: ["cases"],
@@ -488,19 +570,58 @@ export class LocalLaboratory {
               this.casePolicy?.canAccess(principal, input) ?? false,
           }
         : {}),
-      description: forCase
-        ? "Napraw własną usługę w zatwierdzonym zakresie sprawy IT"
-        : healthy
-          ? "Przywróć usługę w laboratorium JARVIS"
-          : "Wprowadź kontrolowaną awarię własnego laboratorium",
+      description:
+        target === laboratoryTlsTarget
+          ? forCase
+            ? "Odnów certyfikat w zatwierdzonym zakresie sprawy IT"
+            : "Wprowadź kontrolowany błąd certyfikatu własnego laboratorium"
+          : forCase
+            ? "Napraw własną usługę w zatwierdzonym zakresie sprawy IT"
+            : healthy
+              ? "Przywróć usługę w laboratorium JARVIS"
+              : "Wprowadź kontrolowaną awarię własnego laboratorium",
       effect: "write",
       recovery: "idempotent",
       inputSchema: forCase
-        ? laboratoryCaseInputSchema
-        : z
-            .object({ expectedVersion: z.number().int().nonnegative() })
-            .strict(),
+        ? laboratoryCaseInputSchema.refine(
+            (input) => input.targetId === target,
+            "Wrong laboratory target",
+          )
+        : target === laboratoryTlsTarget
+          ? z
+              .object({
+                expectedVersion: z.number().int().nonnegative(),
+                expectedFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+                failure: z.enum(["expired", "wrong_name", "untrusted"]),
+              })
+              .strict()
+          : z
+              .object({ expectedVersion: z.number().int().nonnegative() })
+              .strict(),
       execute: async (ctx, input) => {
+        ctx.signal.throwIfAborted();
+        if (forCase) this.authorizeCase(ctx, input);
+        const cached = this.effect(ctx, { healthy, input });
+        if (cached) return cached;
+        if (target === laboratoryTlsTarget) {
+          const state = this.state(ctx.tenantId, target);
+          if (
+            state.version !== input.expectedVersion ||
+            state.certificate?.fingerprint !== input.expectedFingerprint
+          )
+            throw new DomainError(
+              "LAB_CERTIFICATE_CHANGED",
+              "Certyfikat zmienił się. Odczytaj go i przygotuj nowy plan.",
+              409,
+            );
+        }
+        const material =
+          target === laboratoryTlsTarget
+            ? await this.tls.prepare(
+                ctx.tenantId,
+                healthy ? "valid" : (input.failure as CertificateFailure),
+              )
+            : undefined;
         ctx.signal.throwIfAborted();
         if (forCase) this.authorizeCase(ctx, input);
         this.db.exec("BEGIN IMMEDIATE");
@@ -511,7 +632,11 @@ export class LocalLaboratory {
             return existing;
           }
           if (forCase) {
-            const observed = this.view(ctx.tenantId).observed;
+            const observed = this.view(
+              ctx.tenantId,
+              this.now(),
+              target,
+            ).observed;
             if (
               !observed?.current ||
               !observed.verified ||
@@ -523,25 +648,39 @@ export class LocalLaboratory {
                 409,
               );
           }
-          const current = this.state(ctx.tenantId);
+          const current = this.state(ctx.tenantId, target);
           if (current.version !== input.expectedVersion)
             throw new DomainError(
               "VERSION_CONFLICT",
               "Stan laboratorium zmienił się. Sprawdź go ponownie.",
               409,
             );
+          if (
+            target === laboratoryTlsTarget &&
+            current.certificate?.fingerprint !== input.expectedFingerprint
+          )
+            throw new DomainError(
+              "LAB_CERTIFICATE_CHANGED",
+              "Certyfikat zmienił się. Przygotuj nowy plan z aktualnym odciskiem.",
+              409,
+            );
           const version = current.version + 1;
-          this.db
-            .prepare(
-              "INSERT INTO laboratory_state VALUES(?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET healthy=excluded.healthy,version=excluded.version",
-            )
-            .run(ctx.tenantId, healthy ? 1 : 0, version);
+          const certificate = material
+            ? this.tls.apply(ctx.tenantId, version, material)
+            : null;
+          if (!material)
+            this.db
+              .prepare(
+                "INSERT INTO laboratory_state VALUES(?,?,?) ON CONFLICT(tenant_id) DO UPDATE SET healthy=excluded.healthy,version=excluded.version",
+              )
+              .run(ctx.tenantId, healthy ? 1 : 0, version);
           const result = {
             data: {
-              fixture: "jarvis-local-service",
+              fixture: target,
               healthy,
               version,
               environment: "jarvis-laboratory",
+              ...(certificate ? { certificate } : {}),
               ...(forCase
                 ? {
                     caseId: input.caseId!,
@@ -575,16 +714,28 @@ export class LocalLaboratory {
       },
       verify: async (ctx, input, result) => {
         if (forCase) this.authorizeCase(ctx, input);
-        const observed = await this.inspect(ctx);
+        const observed = await this.inspect(ctx, target);
         const verification: Verification = {
           ok:
-            observed.check === "http" &&
+            (observed.check === "http" || observed.check === "tls") &&
             observed.healthy === healthy &&
-            observed.version === result.data.version,
+            observed.version === result.data.version &&
+            (target !== laboratoryTlsTarget ||
+              (observed.tls?.configuredCertificate.fingerprint ===
+                (result.data.certificate as JsonObject)?.fingerprint &&
+                (healthy
+                  ? observed.tls?.authorized === true
+                  : input.failure === "expired"
+                    ? observed.tls?.errorCode === "CERT_HAS_EXPIRED"
+                    : input.failure === "wrong_name"
+                      ? observed.tls?.errorCode ===
+                        "ERR_TLS_CERT_ALTNAME_INVALID"
+                      : observed.tls?.errorCode ===
+                        "UNABLE_TO_VERIFY_LEAF_SIGNATURE"))),
           summary: "Niezależny test HTTP lokalnej usługi po operacji.",
           evidence: [
             {
-              source: "jarvis-laboratory/http",
+              source: `jarvis-laboratory/${target === laboratoryTlsTarget ? "tls" : "http"}`,
               summary: `HTTP ${observed.httpStatus}`,
               observedAt: observed.observedAt,
               data: observed,
@@ -598,20 +749,24 @@ export class LocalLaboratory {
           verification,
           observed,
           forCase
-            ? "lab.repairCase"
+            ? laboratoryDefinition(target).procedureId
             : healthy
               ? "lab.repair"
-              : "lab.simulateFailure",
-          forCase ? "1" : "2",
+              : laboratoryDefinition(target).failureTool,
+          forCase || target === laboratoryTlsTarget ? "1" : "2",
         );
         return verification;
       },
     });
     return [
-      inspect,
+      inspect(laboratoryTarget),
+      inspect(laboratoryTlsTarget),
+      change(false, false, laboratoryTlsTarget),
       change(true),
       change(false),
-      ...(this.casePolicy ? [change(true, true)] : []),
+      ...(this.casePolicy
+        ? [change(true, true), change(true, true, laboratoryTlsTarget)]
+        : []),
     ];
   }
   private authorizeCase(
@@ -628,6 +783,7 @@ export class LocalLaboratory {
     this.casePolicy.authorize(ctx, input, purpose);
   }
   async close() {
+    await this.tls.close();
     await new Promise<void>((resolve, reject) =>
       this.server.close((e) => (e ? reject(e) : resolve())),
     );
