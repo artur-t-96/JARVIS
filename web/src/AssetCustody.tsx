@@ -37,6 +37,7 @@ export const allocationActions = [
   "return",
   "release",
   "expireReservation",
+  "replaceReservation",
 ];
 export function allocationExpired(
   allocation: CustodyAllocation,
@@ -59,6 +60,13 @@ export function allocationChoices(
     (allocation) =>
       Number.isInteger(allocation.version) &&
       allocation.version > 0 &&
+      (action !== "replaceReservation" ||
+        (allocation.provenance === "p05" &&
+          !!allocation.employmentEpisodeId &&
+          !!allocation.caseId &&
+          !!allocation.timezone &&
+          !!allocation.expiresAt &&
+          !allocationExpired(allocation, now))) &&
       (action === "return"
         ? allocation.status === "issued"
         : allocation.status === "reserved" &&
@@ -276,6 +284,7 @@ export function AssetCustody({
                               return: "Poświadcz zwrot",
                               release: "Zwolnij rezerwację",
                               expireReservation: "Zwolnij po terminie",
+                              replaceReservation: "Zamień urządzenie",
                             } as Record<string, string>
                           )[action]
                         }

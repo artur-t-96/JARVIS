@@ -8,6 +8,7 @@ import { migrateDatabase } from "./migrations.js";
 import {
   AssetCustody,
   migrateAssetCustody,
+  migrateCustodyMultipleAssets,
   companyDay,
   type CustodyEvent,
 } from "./asset-custody.js";
@@ -122,6 +123,7 @@ interface Command {
   toolId: string;
   changes: Entity[];
   custodyEvent?: CustodyEvent;
+  replacement?: JsonObject;
 }
 function fail(code: string, message: string, status = 409): never {
   throw new DomainError(code, message, status);
@@ -307,6 +309,11 @@ export class WorkspaceStore {
           version: 6,
           name: "Asset register history",
           up: migrateAssetRegister,
+        },
+        {
+          version: 7,
+          name: "Atomic reservation replacement across two assets",
+          up: migrateCustodyMultipleAssets,
         },
       ],
     });
@@ -1239,6 +1246,142 @@ export class WorkspaceStore {
         "Wskazany okres współpracy nie pozwala na to działanie.",
       );
     return episode;
+  }
+  private replacementPins(tenantId: string, input: CommandInput): JsonObject {
+    const allocation = this.custodyStore.get(
+      tenantId,
+      String(input.id),
+      String(input.allocationId),
+    );
+    this.custodyStore.assertConsistent(tenantId, allocation);
+    if (
+      allocation.provenance !== "p05" ||
+      !allocation.employmentEpisodeId ||
+      !allocation.caseId ||
+      !allocation.expiresAt ||
+      !allocation.timezone
+    )
+      fail(
+        "REPLACEMENT_UNRESOLVED",
+        "Zamiana wymaga rezerwacji ze znaną współpracą, sprawą i terminem UTC.",
+      );
+    const episode = this.db
+      .prepare(
+        "SELECT version FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=?",
+      )
+      .get(tenantId, allocation.employmentEpisodeId, allocation.personId);
+    if (!episode)
+      fail(
+        "EMPLOYMENT_REQUIRED",
+        "Nie znaleziono okresu współpracy tej rezerwacji.",
+      );
+    const linkedCase = this.read(tenantId, "cases", allocation.caseId);
+    return {
+      personId: allocation.personId,
+      employmentEpisodeId: allocation.employmentEpisodeId,
+      expectedEpisodeVersion: Number(episode.version),
+      caseId: allocation.caseId,
+      reservedUntil: allocation.reservedUntil,
+      expiresAt: allocation.expiresAt,
+      reservationTimezone: allocation.timezone,
+      reservationProfileVersion: allocation.profileVersion,
+      expectedCaseVersion: linkedCase.version,
+      expectedScopeRevision: Number(linkedCase.data.scopeRevision),
+    };
+  }
+  private replaceReservation(
+    cmd: Command,
+    source: Entity,
+    input: CommandInput,
+  ): Entity {
+    const tenant = cmd.ctx.tenantId;
+    this.state(source, "reserved");
+    const allocation = this.custodyStore.get(
+      tenant,
+      source.id,
+      String(input.allocationId),
+    );
+    const pins = this.replacementPins(tenant, input);
+    if (Object.entries(pins).some(([key, value]) => input[key] !== value))
+      fail(
+        "REPLACEMENT_BINDING_CHANGED",
+        "Osoba, współpraca lub termin nie odpowiadają zatwierdzonej rezerwacji. Przygotuj nowy plan.",
+      );
+    if (
+      allocation.status !== "reserved" ||
+      allocation.version !== input.expectedAllocationVersion
+    )
+      fail(
+        "ALLOCATION_VERSION_CONFLICT",
+        "Wskazana rezerwacja zmieniła się. Przygotuj nowy plan.",
+      );
+    if (Date.parse(cmd.now) >= Date.parse(allocation.expiresAt!))
+      fail("RESERVATION_EXPIRED", "Nie można zamienić wygasłej rezerwacji.");
+    this.resourceEpisode(cmd, input, ["onboarding", "active"]);
+    const target = this.read(
+      tenant,
+      "assets",
+      String(input.replacementAssetId),
+    );
+    if (target.id === source.id)
+      fail("REPLACEMENT_SAME_ASSET", "Wybierz inne urządzenie.");
+    if (target.version !== input.expectedReplacementVersion)
+      fail(
+        "VERSION_CONFLICT",
+        "Nowe urządzenie zmieniło wersję. Przygotuj nowy plan.",
+      );
+    if (target.data.assetType !== source.data.assetType)
+      fail(
+        "REPLACEMENT_TYPE_MISMATCH",
+        "Zamiana rezerwacji wymaga tego samego rodzaju sprzętu.",
+      );
+    if (
+      !this.registerStore.verify(tenant, target) ||
+      !this.custodyStore.verify(tenant, target.id) ||
+      !this.custodyStore.verify(tenant, source.id)
+    )
+      fail(
+        "ASSET_HISTORY_INCONSISTENT",
+        "Historia jednego z urządzeń jest niespójna.",
+      );
+    const released = this.custodyStore.transition(
+      cmd.ctx,
+      source,
+      "release",
+      input as JsonObject,
+      cmd.now,
+      allocation.timezone!,
+    );
+    source.data.allocations = this.allocations(tenant, source.id);
+    this.save(cmd, source);
+    const reserved = this.custodyStore.reserve(
+      cmd.ctx,
+      target,
+      {
+        personId: allocation.personId,
+        employmentEpisodeId: allocation.employmentEpisodeId!,
+        caseId: allocation.caseId!,
+        until: allocation.reservedUntil,
+        purpose: String(input.reason),
+      },
+      cmd.now,
+      allocation.timezone!,
+      allocation.profileVersion,
+      allocation.expiresAt!,
+    );
+    target.data.allocations = this.allocations(tenant, target.id);
+    cmd.custodyEvent = reserved;
+    cmd.replacement = {
+      sourceAssetId: source.id,
+      replacementAssetId: target.id,
+      releasedAllocationId: released.allocationId,
+      reservedAllocationId: reserved.allocationId,
+      releaseEventId: released.id,
+      reserveEventId: reserved.id,
+      reservedUntil: allocation.reservedUntil,
+      expiresAt: allocation.expiresAt!,
+    };
+    return this.save(cmd, target);
   }
   private resourceEpisode(
     cmd: Command,
@@ -2216,6 +2359,8 @@ export class WorkspaceStore {
           "Brak aktywnego konta operatora sprzętu.",
           403,
         );
+      if (action === "replaceReservation")
+        return this.replaceReservation(cmd, e, input);
       if (action === "assignCustodian") {
         this.human(cmd, input);
         const custodian = this.livePrincipal(
@@ -2833,6 +2978,7 @@ export class WorkspaceStore {
           module === "assets" &&
           [
             "reserve",
+            "replaceReservation",
             "issue",
             "return",
             "release",
@@ -2849,6 +2995,7 @@ export class WorkspaceStore {
           (module === "assets" &&
             [
               "reserve",
+              "replaceReservation",
               "issue",
               "move",
               "sendToService",
@@ -2917,14 +3064,19 @@ export class WorkspaceStore {
               403,
             );
         };
+        const custodyConsistent = (ctx: ToolContext, input: JsonObject) =>
+          action === "replaceReservation"
+            ? this.custodyStore.verifyReplacement(
+                ctx,
+                String(input.id),
+                String(input.replacementAssetId),
+              )
+            : this.custodyStore.verifyCommitted(ctx, String(input.id));
         const requireCommittedCustody = (
           ctx: ToolContext,
           input: JsonObject,
         ) => {
-          if (
-            custodyMutation &&
-            !this.custodyStore.verifyCommitted(ctx, String(input.id))
-          )
+          if (custodyMutation && !custodyConsistent(ctx, input))
             fail(
               "CUSTODY_STATE_INCONSISTENT",
               "Brak spójnego zdarzenia przekazania sprzętu.",
@@ -2939,7 +3091,9 @@ export class WorkspaceStore {
               : module === "sales" && action === "handoff"
                 ? ["cases"]
                 : (module === "assets" &&
-                      ["reserve", "issue"].includes(action)) ||
+                      ["reserve", "issue", "replaceReservation"].includes(
+                        action,
+                      )) ||
                     (module === "licenses" &&
                       ["assign", "revoke"].includes(action))
                   ? ["people"]
@@ -2956,7 +3110,9 @@ export class WorkspaceStore {
           id: toolId,
           version:
             module === "assets"
-              ? "6"
+              ? action === "replaceReservation"
+                ? "7"
+                : "6"
               : module === "cases" && action === "bindEvidence"
                 ? "5"
                 : "4",
@@ -3030,6 +3186,11 @@ export class WorkspaceStore {
                     profile && input.profileVersion === undefined
                       ? { ...input, profileVersion: profile.version }
                       : { ...input };
+                  if (module === "assets" && action === "replaceReservation") {
+                    const pins = this.replacementPins(tenantId, input);
+                    for (const [key, value] of Object.entries(pins))
+                      if (prepared[key] === undefined) prepared[key] = value;
+                  }
                   if (
                     module === "cases" &&
                     action === "addTask" &&
@@ -3232,6 +3393,9 @@ export class WorkspaceStore {
                       version: e.version,
                       status: e.status,
                       title: e.title,
+                      ...(cmd.replacement
+                        ? { replacement: cmd.replacement }
+                        : {}),
                       ...(cmd.custodyEvent
                         ? {
                             allocationId: cmd.custodyEvent.allocationId,
@@ -3320,10 +3484,7 @@ export class WorkspaceStore {
               row &&
               canonical(result) === row.receipt_json &&
               (!custodyMutation ||
-                this.custodyStore.verifyCommitted(
-                  ctx,
-                  String(asJson(parsed.data).id),
-                )) &&
+                custodyConsistent(ctx, asJson(parsed.data))) &&
               taskConsistent(ctx, asJson(parsed.data)),
             );
             const observed: JsonObject[] = [];

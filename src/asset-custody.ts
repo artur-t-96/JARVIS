@@ -98,6 +98,20 @@ export function companyDay(now: string | number, timezone: string): string {
     .map((kind) => parts.find((part) => part.type === kind)!.value)
     .join("-");
 }
+export function migrateCustodyMultipleAssets(db: DatabaseSync) {
+  db.exec(`CREATE TABLE ops_asset_events_v7(
+    tenant_id TEXT NOT NULL,id TEXT NOT NULL,asset_id TEXT NOT NULL,allocation_id TEXT NOT NULL,
+    allocation_version INTEGER NOT NULL,kind TEXT NOT NULL CHECK(kind IN('reserve','issue','return','release','expire')),
+    requested_by TEXT NOT NULL,approved_by TEXT,performed_by TEXT,occurred_on TEXT NOT NULL,recorded_at TEXT NOT NULL,
+    run_id TEXT NOT NULL,step_id TEXT NOT NULL,operation_key TEXT NOT NULL,snapshot_json TEXT NOT NULL,snapshot_hash TEXT NOT NULL,
+    PRIMARY KEY(tenant_id,id),UNIQUE(tenant_id,allocation_id,allocation_version),UNIQUE(tenant_id,operation_key,asset_id),
+    FOREIGN KEY(tenant_id,allocation_id) REFERENCES ops_allocations(tenant_id,id),
+    FOREIGN KEY(tenant_id,asset_id) REFERENCES ops_entities(tenant_id,id));
+    INSERT INTO ops_asset_events_v7 SELECT * FROM ops_asset_events ORDER BY rowid;
+    DROP TABLE ops_asset_events;
+    ALTER TABLE ops_asset_events_v7 RENAME TO ops_asset_events;
+    CREATE INDEX ops_asset_event_history ON ops_asset_events(tenant_id,asset_id,recorded_at,id);`);
+}
 /** The reservation remains valid through its whole local calendar day. Find the
  * first UTC millisecond after that day, including midnight timezone transitions. */
 export function reservationExpiresAt(until: string, timezone: string): string {
@@ -200,12 +214,12 @@ export class AssetCustody {
       .get(tenant, id);
     return row ? event(row) : undefined;
   }
-  byOperation(ctx: ToolContext): CustodyEvent | undefined {
+  byOperation(ctx: ToolContext, assetId: string): CustodyEvent | undefined {
     const row = this.db
       .prepare(
-        "SELECT * FROM ops_asset_events WHERE tenant_id=? AND operation_key=?",
+        "SELECT * FROM ops_asset_events WHERE tenant_id=? AND operation_key=? AND asset_id=?",
       )
-      .get(ctx.tenantId, ctx.operationKey);
+      .get(ctx.tenantId, ctx.operationKey, assetId);
     return row ? event(row) : undefined;
   }
   history(tenant: string, assetId: string, limit = 50, offset = 0) {
@@ -351,7 +365,7 @@ export class AssetCustody {
   }
   verifyCommitted(ctx: ToolContext, assetId: string): boolean {
     try {
-      const e = this.byOperation(ctx);
+      const e = this.byOperation(ctx, assetId);
       if (
         !e ||
         e.assetId !== assetId ||
@@ -369,6 +383,46 @@ export class AssetCustody {
     } catch {
       return false;
     }
+  }
+  verifyReplacement(
+    ctx: ToolContext,
+    sourceId: string,
+    targetId: string,
+  ): boolean {
+    if (
+      sourceId === targetId ||
+      !this.verifyCommitted(ctx, sourceId) ||
+      !this.verifyCommitted(ctx, targetId)
+    )
+      return false;
+    const source = this.byOperation(ctx, sourceId)!,
+      target = this.byOperation(ctx, targetId)!;
+    const a = source.snapshot.allocation,
+      b = target.snapshot.allocation;
+    const count = this.db
+      .prepare(
+        "SELECT count(*) n FROM ops_asset_events WHERE tenant_id=? AND operation_key=?",
+      )
+      .get(ctx.tenantId, ctx.operationKey)!.n;
+    return (
+      count === 2 &&
+      source.kind === "release" &&
+      target.kind === "reserve" &&
+      a.status === "released" &&
+      b.status === "reserved" &&
+      a.id !== b.id &&
+      [
+        "personId",
+        "employmentEpisodeId",
+        "caseId",
+        "reservedUntil",
+        "expiresAt",
+        "timezone",
+        "profileVersion",
+      ].every(
+        (key) => a[key as keyof Allocation] === b[key as keyof Allocation],
+      )
+    );
   }
   private append(
     ctx: ToolContext,
@@ -453,11 +507,12 @@ export class AssetCustody {
     now: string,
     timezone: string,
     profileVersion: number | null,
+    pinnedExpiry?: string,
   ): CustodyEvent {
     if (asset.status !== "available")
       fail("INVALID_TRANSITION", "Urządzenie nie jest dostępne do rezerwacji.");
     const until = String(input.until),
-      expiresAt = reservationExpiresAt(until, timezone);
+      expiresAt = pinnedExpiry ?? reservationExpiresAt(until, timezone);
     if (Date.parse(now) >= Date.parse(expiresAt))
       fail("RESERVATION_EXPIRED", "Data rezerwacji jest w przeszłości.");
     if (asset.data.condition !== "good")

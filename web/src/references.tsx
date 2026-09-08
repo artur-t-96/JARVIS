@@ -11,6 +11,7 @@ export const referenceModule: Record<string, string> = {
   vacancyId: "recruitment",
   linkedCaseId: "cases",
   relatedAssetId: "assets",
+  replacementAssetId: "assets",
   onboardingCaseId: "cases",
   offboardingCaseId: "cases",
   caseId: "cases",
@@ -152,6 +153,14 @@ export function referenceOptions(
   const module = referenceModule[key];
   if (!module) return null;
   let options = records[module] ?? [];
+  if (key === "replacementAssetId")
+    options = options.filter(
+      (item) =>
+        item.id !== entity?.id &&
+        item.status === "available" &&
+        item.data.condition === "good" &&
+        item.data.assetType === entity?.data.assetType,
+    );
   if (key === "supplierId")
     options = options.filter((item) => item.data.kind === "supplier");
   if (key === "vacancyId")

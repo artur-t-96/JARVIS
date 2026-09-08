@@ -119,6 +119,15 @@ test("v4 custody migration rolls back completely and preserves unresolved author
       scopes: ["*"],
     };
     store.setPrincipalProvider(() => [actor]);
+    assert.throws(
+      () =>
+        store!.tools().find((t) => t.id === "ops.assets.replaceReservation")!
+          .prepareInput!(
+          { id: reserved, allocationId: reservedAllocation },
+          "legacy",
+        ),
+      /znaną współpracą/,
+    );
     const a = store.assetCustody(actor, issued);
     assert.equal(a.totalEvents, 0);
     assert.equal(a.allocations[0]!.provenance, "legacy");

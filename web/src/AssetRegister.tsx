@@ -34,6 +34,7 @@ const labels: Record<string, string> = {
   assignCustodian: "Wyznaczenie opiekuna ewidencji",
   update: "Zmiana danych ewidencji",
   reserve: "Rezerwacja",
+  replaceReservation: "Zamiana zarezerwowanego urządzenia",
   issue: "Poświadczenie wydania",
   issueForTask: "Poświadczenie wydania przez zadanie IT",
   return: "Przyjęcie zwrotu",
