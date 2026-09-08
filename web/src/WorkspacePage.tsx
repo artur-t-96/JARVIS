@@ -25,6 +25,7 @@ import { DocumentTemplate } from "./DocumentTemplate";
 import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
 import { DocumentFiles } from "./DocumentFiles";
 import { CaseReadiness } from "./CaseReadiness";
+import { Onboarding, PersonOnboardings } from "./Onboarding";
 import { HumanTasks } from "./HumanTasks";
 import { CaseAccess } from "./CaseAccess";
 import { AccessDefinitions, isAccessDefinition } from "./AccessDefinitions";
@@ -791,6 +792,18 @@ export function WorkspacePage({
                     </button>
                   )}
               </div>
+              {item.module === "people" &&
+                context.principal.scopes?.some(
+                  (s) => s === "*" || s === "cases",
+                ) && <PersonOnboardings item={item} revision={revision} />}
+              {item.module === "cases" &&
+                item.data.caseType === "onboarding" && (
+                  <Onboarding
+                    item={item}
+                    context={context}
+                    revision={revision}
+                  />
+                )}
               {item.module === "cases" && (
                 <CaseReadiness
                   item={item}
@@ -898,6 +911,11 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            !(
+                              module.id === "cases" &&
+                              item.data.caseType === "onboarding" &&
+                              ["submit", "accept"].includes(action.id)
+                            ) &&
                             !(
                               module.id === "documents" &&
                               ["attachFile", "detachFile"].includes(action.id)

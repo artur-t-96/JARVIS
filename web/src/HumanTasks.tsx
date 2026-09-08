@@ -58,6 +58,8 @@ const taskStates: Record<string, string> = {
   cancelled: "Anulowane",
   open: "Wymaga przypisania",
 };
+export const humanTaskStateLabel = (status: string) =>
+  taskStates[status] ?? "Stan do sprawdzenia";
 const roleLabels = { hr: "HR", it: "IT", manager: "Przełożony" };
 const actionLabels: Record<TaskAction, string> = {
   acceptTask: "Przyjmij zadanie",
@@ -144,7 +146,7 @@ export function HumanTaskCard({
           <h3>{task.title}</h3>
         </div>
         <span className={`task-state ${task.status}`}>
-          {taskStates[task.status] ?? "Stan do sprawdzenia"}
+          {humanTaskStateLabel(task.status)}
         </span>
       </div>
       {task.operationalContext && (

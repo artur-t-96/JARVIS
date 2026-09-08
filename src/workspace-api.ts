@@ -181,6 +181,12 @@ export function registerWorkspaceApi(
       z.object({ id: z.string().uuid() }).parse(req.params).id,
     ),
   }));
+  app.get("/api/cases/:id/onboarding", async (req) => ({
+    onboarding: workspace.onboarding(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
   app.get("/api/cases/:id/access", async (req) => ({
     access: workspace.caseAccess(
       principal(req),

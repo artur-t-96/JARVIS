@@ -65,6 +65,7 @@ import {
   type TaskAction,
   type TaskTransition,
 } from "./workspace-tasks.js";
+import { onboardingStage, type OnboardingOverview } from "./onboarding.js";
 export type { ModuleDefinition } from "./workspace-models.js";
 
 export interface Entity {
@@ -528,6 +529,140 @@ export class WorkspaceStore {
         }
       }),
     };
+  }
+  onboarding(principal: Principal, caseId: string): OnboardingOverview {
+    const live = this.principalProvider
+      ? this.livePrincipal(principal.tenantId, principal.id)
+      : principal;
+    if (!live) fail("FORBIDDEN", "Konto nie ma aktualnego dostępu.", 403);
+    const c = this.get(live, "cases", caseId);
+    if (c.data.caseType !== "onboarding")
+      fail("ONBOARDING_REQUIRED", "Ten widok wymaga sprawy onboardingu.");
+    const person = this.get(live, "people", String(c.data.personId)),
+      episode = this.listEmploymentEpisodes(live, person.id).find(
+        (e) =>
+          e.id === c.data.employmentEpisodeId && e.onboardingCaseId === c.id,
+      );
+    if (!episode)
+      fail(
+        "EMPLOYMENT_REQUIRED",
+        "Nie można potwierdzić właściwego okresu współpracy.",
+      );
+    const now = new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      profile = this.currentProfile(live.tenantId),
+      today = this.companyDate({ now, profile }),
+      readiness = this.readiness(live, c.id),
+      tasks = this.taskStore.rows(
+        live.tenantId,
+        c.id,
+        Number(c.data.scopeRevision),
+      ),
+      stage = onboardingStage({
+        caseStatus: c.status,
+        episodeStatus: episode.status,
+        ready: readiness.ready,
+        acceptanceCurrent: readiness.acceptanceCurrent,
+        startDate: episode.startDate,
+        today,
+      });
+    let engagement: OnboardingOverview["engagement"] = null;
+    if (episode.engagementRef) {
+      try {
+        const project = this.get(
+          live,
+          episode.engagementRef.module,
+          episode.engagementRef.id,
+        );
+        engagement = {
+          module: project.module,
+          id: project.id,
+          title: project.title,
+        };
+      } catch (error) {
+        if (
+          !(error instanceof DomainError) ||
+          ![403, 404].includes(error.statusCode)
+        )
+          throw error;
+      }
+    }
+    const overview: OnboardingOverview = {
+      evaluatedAt: now,
+      today,
+      timezone: profile?.timezone ?? "UTC",
+      case: {
+        id: c.id,
+        version: c.version,
+        status: c.status,
+        scopeRevision: readiness.scopeRevision,
+        ownerPrincipalId:
+          typeof c.data.ownerPrincipalId === "string"
+            ? c.data.ownerPrincipalId
+            : null,
+        profileVersion:
+          typeof c.data.profileVersion === "number"
+            ? c.data.profileVersion
+            : null,
+      },
+      person: { id: person.id, title: person.title },
+      episode: {
+        id: episode.id,
+        version: episode.version,
+        kind: episode.kind,
+        status: episode.status,
+        startDate: episode.startDate,
+        role: episode.role,
+      },
+      engagement,
+      engagementUnavailable: !!episode.engagementRef && !engagement,
+      stage,
+      ready: readiness.ready,
+      acceptanceCurrent: readiness.acceptanceCurrent,
+      tasks: tasks.map((t) => ({
+        id: t.id,
+        title: t.title,
+        status: t.status,
+        required: t.required,
+        assigneePrincipalId: t.assigneePrincipalId,
+        assigneeRole: t.assigneeRole,
+        dueDate: t.dueDate,
+        overdue:
+          ["open", "needs_changes"].includes(c.status) &&
+          !!t.dueDate &&
+          t.dueDate < today &&
+          !["completed", "cancelled"].includes(t.status),
+        waitingFor: t.dependsOn.flatMap((id) => {
+          const dependency = tasks.find((d) => d.id === id);
+          return dependency?.status === "completed"
+            ? []
+            : [dependency?.title ?? "Niedostępne zadanie zależne"];
+        }),
+      })),
+    };
+    if (
+      live.roles.includes("operator") &&
+      stage.action &&
+      (stage.action !== "review" || overview.case.ownerPrincipalId === live.id)
+    ) {
+      const action = stage.action;
+      overview.command = {
+        action,
+        toolId:
+          action === "activate"
+            ? "ops.people.activate"
+            : `ops.cases.${action === "review" ? "accept" : "submit"}`,
+        input:
+          action === "activate"
+            ? {
+                id: person.id,
+                expectedVersion: person.version,
+                employmentEpisodeId: episode.id,
+                expectedEpisodeVersion: episode.version,
+              }
+            : { id: c.id, expectedVersion: c.version },
+      };
+    }
+    return overview;
   }
   setProfileProvider(provider: (tenantId: string) => LifecycleProfile) {
     this.profileProvider = provider;
