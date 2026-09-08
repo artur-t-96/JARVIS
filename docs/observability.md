@@ -129,3 +129,11 @@ Rzeczywisty stos został uruchomiony w lokalnym preview 2026-09-08: wszystkie pi
 Podczas odbioru Loki odpowiadało `/ready` HTTP 200, a jednocześnie odrzucało przyjmowanie logów HTTP 503. Przy około 39 GiB wolnego miejsca działał domyślny próg WAL wynoszący 90% zajętości woluminu. W konfiguracji JARVIS próg ustawiono jawnie na `disk_full_threshold: 0.95`, co na tym woluminie pozostawia około 23 GiB rezerwy; osobny próg nadzoru procesu wynosi 2 GiB. Procentowa rezerwa zależy od rozmiaru woluminu. Mechanizm domyślnego progu i ograniczania zapisów opisuje [kod Loki v3.7.7, wal.go](https://github.com/grafana/loki/blob/v3.7.7/pkg/ingester/wal.go). Zielony healthcheck nie potwierdza zapisu ani odczytu logów.
 
 **Pełny odbiór nadal oczekujący.** Pozostały: potwierdzenie przepływu i odczytu logów po restarcie z poprawionym progiem, link log → trace w Grafanie, zachowanie historii po restarcie, niedostępność Collectora, porównanie obu trybów oraz końcowe CI. Dotychczasowe testy i migawka gotowości nie zastępują tych dowodów.
+
+## Uzupełnienie odbioru preview
+
+8.09.2026 potwierdzono zapis logów po ustawieniu progu WAL 95%, zachowanie wcześniejszych metryk i śladu po restarcie oraz dwa działające jednocześnie stosy. Syntetyczny znacznik trybu operacyjnego dał jeden ślad i 20 logów wyłącznie w tym trybie; po restarcie liczby pozostały takie same. Zatwierdzony zapis sprzętu i niezależna weryfikacja przeszły przy wyłączonym Collectorze.
+
+Chrome: dashboard z rzeczywistymi metrykami i logami, pola modelu pokazujące brak danych oraz link z logu do właściwego śladu Jaeger. Wszystkie trzy źródła Grafany przeszły test połączenia. Hasła i nazwy cookies autoryzacji są odrębne dla obu trybów. Korelacja ślad → logi filtruje `trace_id` jako structured metadata, a nie tekst treści wpisu.
+
+Pierwsze hosted CI [PR #6](https://github.com/artur-t-96/JARVIS/pull/6) zielone; końcowa poprawka i aktualizacja głównej instalacji są odnotowywane w [dzienniku](delivery-state.md). Powyższe testy nie dowodzą pełnego odbioru wizji ani działania prawdziwego dostawcy modelu.

@@ -324,6 +324,13 @@ test("Grafana credentials remain private and stable without entering config, arg
       ini.includes(`admin_password = $__file{${second.grafanaCredentialPath}}`),
     );
     assert.ok(ini.includes("[auth.anonymous]\nenabled = false"));
+    assert.ok(ini.includes("login_cookie_name = jarvis_grafana_15400"));
+    const lab = prepareConfiguration({ projectDir: project, mode: "lab" });
+    assert.ok(
+      readFileSync(join(lab.root, "config", "grafana.ini"), "utf8").includes(
+        "login_cookie_name = jarvis_grafana_15300",
+      ),
+    );
     assert.ok(ini.includes("allow_sign_up = false"));
     for (const setting of [
       "reporting_enabled",

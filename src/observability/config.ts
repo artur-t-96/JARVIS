@@ -477,6 +477,7 @@ default_theme = light
 [auth.anonymous]
 enabled = false
 [auth]
+login_cookie_name = jarvis_grafana_${ports.grafana}
 disable_login_form = false
 login_maximum_inactive_lifetime_duration = 8h
 login_maximum_lifetime_duration = 1d
