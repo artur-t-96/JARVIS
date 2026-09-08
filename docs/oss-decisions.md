@@ -59,10 +59,16 @@ ID sprawy/wykonania/kroku/usage mogą być polami korelacji śladów i logów. N
 | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Głos                | Zachować rzeczywiście działający whisper.cpp; rozwinąć obsługę polskiej rozmowy i odczytu systemowego.                                                                                                          |
 | UI, walidacja, baza | Rozwijać istniejące React/Vite, Zod, Fastify i SQLite. Nie zastępować ich własnymi ogólnymi frameworkami.                                                                                                       |
-| Dokumenty           | W P09 wybrać utrzymywane biblioteki generowania DOCX/PDF po próbie rzeczywistego szablonu, czcionek PL, licencji i renderowania.                                                                                |
+| Dokumenty           | P09a2: PDFKit/docx z polskimi fontami i odbiorem renderowanych stron; kolejne szablony w P09.                                                                                                                   |
 | Ewaluacja i jakość  | Obecny Node test runner oraz testy procesowe; gotowe narzędzie do oceny odpowiedzi modelu tylko z jasnym zbiorem danych i bez wysyłania danych HR. Kod QUALRIX jest opcjonalnym źródłem adaptacji po odczycie.  |
 | Procesy trwałe      | Zachować zatwierdzony Core oraz jego test SIGKILL. Historyczna propozycja Temporal wymaga osobnego, ograniczonego porównania przy wykazanej luce; nie przepisujemy działającego mechanizmu bez dowodu potrzeby. |
 | ERP                 | Czytać i adaptować reguły/moduły z ATLAS, NEXUS, COMPASS i ELEVATE. Dla skopiowanego kodu zapisać repo, SHA, ścieżkę, zakres zmian i przeniesione testy. Inspiracja regułą nie jest przeniesieniem modułu.      |
+
+## Dokumenty — wybór potwierdzony w P09a2
+
+[PDFKit 0.20.2](https://github.com/foliojs/pdfkit/releases) i [docx 9.7.1](https://github.com/dolanmiu/docx/releases), oba MIT, generują dokumenty lokalnie z zaakceptowanej treści i rejestru źródeł. [JSZip 3.10.1](https://stuk.github.io/jszip/documentation/api_jszip/generate_async.html) normalizuje wyłącznie własny eksport DOCX, aby ten sam zapis miał ten sam odcisk. [yauzl 3.4.0](https://github.com/thejoshwolfe/yauzl), MIT, odczytuje ograniczoną listę wpisów przesłanego DOCX bez rozpakowywania na dysk. Zależności przypina `package-lock.json`.
+
+PDF osadza Noto Sans Regular/Bold na OFL-1.1. Źródłowy commit `ffebf8c1ee449e544955a7e813c54f9b73848eac`, URL i SHA każdego fontu oraz licencja są w `assets/fonts/`. DOCX używa zwykłego tekstu, bez makr, zewnętrznych obrazów i aktywnych relacji. Próbę obejmującą polskie znaki, osiem eksportów i dziewięć wyrenderowanych stron opisuje [odbiór P09a2](delivery-state.md#p09a2--odbiór-podglądu). Nie wymaga serwera biurowego ani wysyłania dokumentów do dostawcy modelu.
 
 ## Warunek uznania integracji za wykonaną
 

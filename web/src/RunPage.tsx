@@ -4,6 +4,57 @@ import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
 import { Badge, Icon, JsonView, Loading, Notice } from "./ui";
 
+const fileOperation = (toolId: string) =>
+  ["ops.documents.attachFile", "ops.documents.detachFile"].includes(toolId);
+
+function FileOperation({
+  input,
+  attach,
+}: {
+  input: Record<string, unknown>;
+  attach: boolean;
+}) {
+  const fields = attach
+    ? [
+        ["Plik", input.filename],
+        ["Rozmiar", `${Number(input.bytes).toLocaleString("pl-PL")} bajtów`],
+        ["Typ", input.mediaType],
+        ["Materiał ważny do", dateLabel(String(input.expiresAt), true)],
+        ["SHA-256 pliku", input.sha256],
+      ]
+    : [["Identyfikator pliku", input.fileId]];
+  return (
+    <div className="file-operation">
+      <dl>
+        {[
+          ...fields,
+          ["Wersja dokumentu", input.expectedVersion],
+          ["Powód zmiany", input.changeNote],
+        ].map(([label, value]) => (
+          <div key={String(label)}>
+            <dt>{String(label)}</dt>
+            <dd>{String(value ?? "—")}</dd>
+          </div>
+        ))}
+      </dl>
+      <button
+        className="text-button"
+        onClick={() => navigate(`module/documents/${String(input.id)}`)}
+      >
+        Otwórz dokument
+      </button>
+      <p className="small muted">
+        Zmiana utworzy nową rewizję do osobnego odbioru. Poprzednia treść, pliki
+        i decyzje pozostaną w historii.
+      </p>
+      <details className="technical-details">
+        <summary>Pełny zakres techniczny</summary>
+        <JsonView value={input} />
+      </details>
+    </div>
+  );
+}
+
 export const isHumanTaskOperation = (toolId: string) =>
   /^ops\.cases\.(acceptTask|declineTask|transferTask|completeTask|cancelTask)$/.test(
     toolId,
@@ -171,7 +222,11 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
         <div>
           <section className="card run-summary">
             <span className="eyebrow">CEL I PLAN</span>
-            <p className="request-text">{run.request}</p>
+            <p className="request-text">
+              {run.steps.length === 1 && fileOperation(run.steps[0]!.toolId)
+                ? run.title
+                : run.request}
+            </p>
             <p className="muted">{run.plan.summary}</p>
           </section>
           <div className="steps">
@@ -208,7 +263,14 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                       ? "Dokładny zakres operacji do zatwierdzenia"
                       : "Argumenty operacji"}
                   </div>
-                  <JsonView value={step.input} />
+                  {fileOperation(step.toolId) ? (
+                    <FileOperation
+                      input={step.input}
+                      attach={step.toolId === "ops.documents.attachFile"}
+                    />
+                  ) : (
+                    <JsonView value={step.input} />
+                  )}
                   {step.approval?.status === "pending" && (
                     <div className="approval-box">
                       <div>

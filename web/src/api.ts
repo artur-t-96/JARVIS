@@ -42,6 +42,38 @@ export async function api<T>(
 export const post = <T>(path: string, body: unknown = {}) =>
   api<T>(path, { method: "POST", body });
 export const requestKey = () => crypto.randomUUID();
+export async function uploadDocument<T>(
+  id: string,
+  version: number,
+  file: File,
+  mediaType: string,
+  changeNote: string,
+  uploadId: string,
+): Promise<T> {
+  const response = await fetch(`/api/documents/${id}/files/prepare`, {
+    method: "POST",
+    credentials: "same-origin",
+    cache: "no-store",
+    headers: {
+      ...(bearerToken ? { Authorization: `Bearer ${bearerToken}` } : {}),
+      "Content-Type": "application/octet-stream",
+      "X-Jarvis-Upload-Id": uploadId,
+      "X-Jarvis-Document-Version": String(version),
+      "X-Jarvis-File-Name": encodeURIComponent(file.name),
+      "X-Jarvis-File-Type": mediaType,
+      "X-Jarvis-Change-Note": encodeURIComponent(changeNote),
+    },
+    body: file,
+  });
+  const body = await response.json().catch(() => null);
+  if (!response.ok)
+    throw new ApiError(
+      body?.error?.message ?? "Nie udało się przygotować pliku.",
+      response.status,
+      body?.error?.code,
+    );
+  return body as T;
+}
 export async function download(path: string, filename: string) {
   const response = await fetch(path, {
     credentials: "same-origin",

@@ -44,7 +44,7 @@ test("v8 migrates the frozen delivered schema without fabricating access; DDL fa
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      9,
+      10,
     );
     for (const table of ["ops_access_grants", "ops_access_events"])
       assert.equal(db.prepare(`SELECT count(*) n FROM ${table}`).get()!.n, 0);

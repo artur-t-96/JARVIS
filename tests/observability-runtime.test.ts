@@ -45,6 +45,16 @@ import type {
 const supervisorPath = fileURLToPath(
   new URL("../src/observability/supervisor.ts", import.meta.url),
 );
+test("an inaccessible process is not reported stopped; only ESRCH proves absence", (t) => {
+  let code = "EPERM";
+  t.mock.method(process, "kill", () => {
+    throw Object.assign(new Error("Synthetic process probe failure"), { code });
+  });
+  assert.equal(processAlive(12345), true);
+  code = "ESRCH";
+  assert.equal(processAlive(12345), false);
+});
+
 function fixture(
   options: {
     failure?: ComponentId;

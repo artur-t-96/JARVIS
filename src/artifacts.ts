@@ -4,16 +4,16 @@ import { resolve, join } from "node:path";
 import { DomainError, type Principal, type JsonObject } from "./contracts.js";
 import { WorkspaceStore } from "./workspace.js";
 
-const digest = (value: string) =>
+const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
 const md = (value: unknown) =>
   String(value ?? "")
     .replace(/[\r\n]+/g, " ")
     .replace(/[<>]/g, "");
-export interface Artifact {
+export interface Artifact<Body extends string | Buffer = string> {
   filename: string;
   contentType: string;
-  body: string;
+  body: Body;
   sha256: string;
   manifest: {
     formatVersion: 1;
@@ -22,6 +22,10 @@ export interface Artifact {
     entityVersion: number;
     sha256: string;
     bytes: number;
+    renderer?: string;
+    documentRevision?: number;
+    contentHash?: string;
+    contextHash?: string;
   };
 }
 /** Exports are derived from an authorized immutable snapshot, with no external URLs fetched. */
@@ -39,6 +43,12 @@ export function exportArtifact(
       throw new DomainError(
         "DOCUMENT_INTEGRITY_FAILED",
         "Treść i kontekst dokumentu nie odpowiadają historii.",
+        409,
+      );
+    if (readiness.attachments.some((file) => !file.valid))
+      throw new DomainError(
+        "DOCUMENT_FILE_INTEGRITY_FAILED",
+        "Plik dokumentu jest niedostępny lub niezgodny z manifestem.",
         409,
       );
     if (entity.status === "approved" && !readiness.approvalCurrent)
@@ -97,7 +107,10 @@ export function exportArtifact(
     },
   };
 }
-export function materializeArtifact(dataDir: string, artifact: Artifact) {
+export function materializeArtifact(
+  dataDir: string,
+  artifact: Artifact<string | Buffer>,
+) {
   const root = lstatSync(dataDir);
   if (!root.isDirectory() || root.isSymbolicLink())
     throw new Error("Unsafe evidence root");
@@ -119,21 +132,24 @@ export function materializeArtifact(dataDir: string, artifact: Artifact) {
     if (lstatSync(current).isSymbolicLink())
       throw new Error("Unsafe evidence directory");
   }
-  for (const [name, content] of [
+  const files: [string, string | Buffer][] = [
     [artifact.filename, artifact.body],
     [
       `${artifact.filename}.manifest.json`,
       JSON.stringify(artifact.manifest, null, 2) + "\n",
     ],
-  ]) {
-    const path = join(directory, name!);
+  ];
+  for (const [name, content] of files) {
+    if (!/^[a-zA-Z0-9_.-]+$/.test(name))
+      throw new Error("Unsafe artifact filename");
+    const path = join(directory, name);
     try {
-      writeFileSync(path, content!, { flag: "wx", mode: 0o600 });
+      writeFileSync(path, content, { flag: "wx", mode: 0o600 });
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       if (
         lstatSync(path).isSymbolicLink() ||
-        readFileSync(path, "utf8") !== content
+        !readFileSync(path).equals(Buffer.from(content))
       )
         throw new DomainError(
           "ARTIFACT_CONFLICT",

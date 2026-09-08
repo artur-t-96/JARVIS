@@ -159,9 +159,15 @@ export function processAlive(pid: number): boolean {
   if (!Number.isSafeInteger(pid) || pid <= 1) return false;
   try {
     process.kill(pid, 0);
-    return ps(pid, "stat")?.startsWith("Z") !== true;
-  } catch {
-    return false;
+    const status = ps(pid, "stat");
+    if (status?.startsWith("Z")) return false;
+    // The process may be reaped between kill(0) and ps. A missing ps result
+    // alone is inconclusive; probe again so a completed exit is not reported
+    // alive. Permission errors remain conservative and never prove an exit.
+    if (status === null) process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
   }
 }
 export function captureIdentity(

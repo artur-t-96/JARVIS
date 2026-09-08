@@ -21,6 +21,7 @@ export type RequirementDefinition = RequirementBase &
           documentRevision?: number;
           contentHash?: string;
           currentVersionRequired: true;
+          fileRequired?: boolean;
         };
       }
     | {
@@ -250,6 +251,16 @@ export function RequirementEditor({
                   <p className="small muted wide">
                     Wymagana jest zatwierdzona i aktualna wersja dokumentu.
                   </p>
+                  <label className="field wide checkbox-field">
+                    <input
+                      type="checkbox"
+                      checked={item.expected.fileRequired === true}
+                      onChange={(event) =>
+                        setExpected("fileRequired", event.target.checked)
+                      }
+                    />
+                    <span>Wymagaj pliku zgodnego z manifestem</span>
+                  </label>
                 </>
               )}
               {item.kind === "access_attested" && (

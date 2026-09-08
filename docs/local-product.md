@@ -12,7 +12,7 @@ npm run local -- status lab
 npm run local -- stop lab
 ```
 
-Instalacja wykonuje natywne `npm ci` i `npm run build`. Manifest `.data/local-product/install.json` zawiera dokładny Git SHA, oznaczenie `-dirty`, jeśli źródła mają zmiany, wersję Node i SHA-256 wszystkich plików `dist/`, `package.json` i lockfile. Przed startem launcher ponownie sprawdza manifest i dodatkowe pliki. Sukces startu wymaga odpowiedzi `/api/ready` z tym samym SHA oraz potwierdzonego procesu korzystającego z właściwego katalogu danych.
+Instalacja wykonuje natywne `npm ci` i `npm run build`. Manifest `.data/local-product/install.json` zawiera dokładny Git SHA, oznaczenie `-dirty`, jeśli źródła mają zmiany, wersję Node i SHA-256 wszystkich plików `dist/`, `assets/` (w tym czcionek dokumentów), `package.json` i lockfile. Przed startem launcher ponownie sprawdza manifest i dodatkowe pliki. Sukces startu wymaga odpowiedzi `/api/ready` z tym samym SHA oraz potwierdzonego procesu korzystającego z właściwego katalogu danych.
 
 Zmiany robocze są dopuszczone wyłącznie w laboratorium. Tryb operacyjny wymaga buildu czystego commitu. Edycja plików skompilowanej aplikacji lub zależności projektu wymaga ponownego `update`; istniejący plik manifestu nie jest automatycznie traktowany jako dowód poprawności.
 

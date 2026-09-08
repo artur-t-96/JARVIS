@@ -109,6 +109,8 @@ function processParent(pid: number): number | null {
   }
 }
 function filesIn(root: string, path = ""): string[] {
+  if (lstatSync(root).isSymbolicLink())
+    throw new Error("Build artifacts cannot contain symlinks.");
   return readdirSync(join(root, path))
     .sort()
     .flatMap((name) => {
@@ -122,6 +124,15 @@ function filesIn(root: string, path = ""): string[] {
           ? [relative]
           : [];
     });
+}
+
+function buildFiles(root: string): string[] {
+  return [
+    "dist",
+    ...(existsSync(join(root, "assets")) ? ["assets"] : []),
+  ].flatMap((directory) =>
+    filesIn(join(root, directory)).map((path) => `${directory}/${path}`),
+  );
 }
 
 export function operationalAccountsReady(dataDir: string): boolean {
@@ -221,9 +232,9 @@ export class LocalRuntime {
         !existsSync(join(this.projectDir, "dist", "web", "index.html"))
       )
         throw new Error("Server or web build is missing.");
-      const files = filesIn(join(this.projectDir, "dist")).map((path) => ({
-        path: `dist/${path}`,
-        sha256: sha256(readFileSync(join(this.projectDir, "dist", path))),
+      const files = buildFiles(this.projectDir).map((path) => ({
+        path,
+        sha256: sha256(readFileSync(join(this.projectDir, path))),
       }));
       for (const path of ["package.json", "package-lock.json"])
         files.push({
@@ -266,7 +277,7 @@ export class LocalRuntime {
       throw new Error("Unsupported or invalid local install manifest.");
     for (const file of manifest.files) {
       if (
-        !/^(?:dist\/[a-zA-Z0-9_./-]+|package(?:-lock)?\.json)$/.test(
+        !/^(?:(?:dist|assets)\/[a-zA-Z0-9_./-]+|package(?:-lock)?\.json)$/.test(
           file.path,
         ) ||
         file.path.split("/").includes("..") ||
@@ -277,9 +288,7 @@ export class LocalRuntime {
           "Installed build changed. Run the local update command before starting it.",
         );
     }
-    const actual = filesIn(join(this.projectDir, "dist")).map(
-      (path) => `dist/${path}`,
-    );
+    const actual = buildFiles(this.projectDir);
     if (
       actual.length + 2 !== manifest.files.length ||
       actual.some(

@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P09a1: źródła i zaakceptowana rewizja dokumentu.** Baza: odebrany lokalnie PR #15, `389f6b30e98f3154c32fb46959228ceb625ed87e`. Worktree `/private/tmp/jarvis-onboarding-documents`, gałąź `codex/onboarding-documents`. Kontrakt `case_scope` oraz własne źródła każdej rewizji usuwają cykl odbioru. Projekt i granice: [P09a](p09a-design.md). Następnie P09a2 (pliki i praktyczny eksport) i pełny onboarding P06. Spis z natury oraz import P05b pozostają otwarte.
+**P09a2: pliki i praktyczny eksport dokumentu.** Baza: odebrany lokalnie PR #16, `91e737a06e11773858d732c326c58d1bca1d18b2`. Worktree `/private/tmp/jarvis-document-files`, gałąź `codex/document-files`. Własne pliki, manifesty i kontrola każdej rewizji oraz eksporty OSS rozwijają [P09a](p09a-design.md). Następnie pełny onboarding P06. Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -235,3 +235,35 @@ Dwóch autorów w dwóch firmach i trzy okresy współpracy (wewnętrzny oraz pr
 Podgląd zatrzymano przed kopią. Backup `/private/tmp/jarvis-p09a1-backup-20260908T1628`, odtworzenie `/private/tmp/jarvis-p09a1-restored-20260908T1628`, manifest `e360832c9ed9c36f57f17ea7db7b3a89910b6406b8325accb2b3701ca833bc6a`. Restore zachował cztery dokumenty i pięć rewizji. Ponowne wykonanie oraz weryfikacja piętnastu zapisanych poleceń dokumentów nie dodały efektu, wersji, audytu ani zdarzenia outbox. Konta nie należą do tego pakietu kopii.
 
 Po przeglądarce uproszczono nowy szablon raportu do czytelnych sekcji, spolszczono etykiety i doprecyzowano utratę aktualności dawnej akceptacji. Końcowe CI, scalenie oraz odbiór głównej instalacji pozostają ostatnim krokiem tej paczki. P09a2 i P06 są kolejnymi pracami; pełny K08 pozostaje otwarty.
+
+## P09a1 — dostarczone lokalnie
+
+[PR #16](https://github.com/artur-t-96/JARVIS/pull/16) scalono jako `91e737a06e11773858d732c326c58d1bca1d18b2`. Końcowe CI PR 34251303615 i main 34251544634 zaliczyły 322 testy i pełne bramki. Oba zarządzane tryby uruchomiono na tym SHA po aktualizacji z 8.09.2026 16:31:22 UTC. Provider pozostaje wyłączony.
+
+Chrome głównego laboratorium wykonał nowy szablon, start i zgodę na raport (`817f6e27-e835-4a3a-b6f6-708291d18a12`), jedna próba i niezależna weryfikacja. Dokument `4e92a670-d397-4af9-8059-64822b70a4f8` został osobno zatwierdzony, powiązany i odebrany wraz ze sprawą `7d310a63-59d6-4b81-a4ba-e76323d95bda`. Aktualność źródła pozostała prawidłowa. Zrzut Chrome potwierdził czytelny raport, aktualną akceptację i autora rewizji; eksport ma SHA-256 `ab7b65999d3b865c144949ac7ebe62b558c29662e70557cafa56c9dc04575ad8`. Poprzednia rezerwacja P05b2 i dowód dostępów P08a2 zachowały stan. Dowód: `.data/local-product/p09a1-verification.json`.
+
+OSS obu trybów: trzy źródła Grafany OK, 14 paneli, metryka workera i dopasowany log/trace właściwego SHA. Lab `f3954a32f8e306ad9e6d212a64584805`, operational `3f45c14f6d06e261c8ea6d35b5c14a20`; `.data/local-product/p09a1-oss-verification.json`.
+
+Kopie przed aktualizacją, po zatrzymaniu obu procesów: lab `/private/tmp/jarvis-before-p09a1-lab-20260908T1631`, manifest `097254b12d9e1cd5de9a2c519f3d389e1706570b52d65b26131407408bee7cbb`; operational `/private/tmp/jarvis-before-p09a1-operational-20260908T1631`, manifest `b6668e6977628312b0a90c0f04c7b473c6971cfcba0dee04f15cd09695e3ddf9`. P09a2/P06 oraz pełne K08 pozostają otwarte.
+
+## P09a2 — pliki i eksporty w odbiorze
+
+Implementacja obejmuje prywatny materiał wejściowy planu, dodanie/usunięcie pliku przez Core, niezmienne manifesty i kontrolę SHA-256 każdej pobieranej rewizji. Plik jest warunkiem odbioru tylko wtedy, gdy zakres jawnie go wymaga. Stare dane i zakresy nie otrzymują dopisanych wymagań. Operacje domenowe zachowują transakcyjne receipts; pliki są osobnym trwałym magazynem.
+
+Eksporty PDFKit/docx korzystają z przypiętej treści, źródeł i rejestru załączników. PDF osadza Noto Sans z zachowaną licencją i źródłowym SHA; DOCX ma neutralny tekst i układ. Normalizacja własnego archiwum DOCX usuwa zmienne daty techniczne. Po generowaniu kod ponownie uwierzytelnia pobierającego i sprawdza wersję. Równoległe renderowanie jest ograniczone do dwóch zadań, jednego na konto.
+
+Lokalne celowane testy plików, eksportów i HTTP przeszły. Pełne CI obejmie migrację v9→v10, kopię z oczekującym plikiem i sześć rzeczywistych SIGKILL dokumentów, w tym dodanie/usunięcie załącznika i odbiór z plikiem. Wizualne sprawdzenie DOCX/PDF, Chrome, restore i scalona instalacja pozostają krokami odbioru tej paczki.
+
+## P09a2 — odbiór podglądu
+
+[PR #17](https://github.com/artur-t-96/JARVIS/pull/17), kod `1f2bea67e1f39b030b6076a06013cb0b96d8532b`, [CI 34256115958](https://github.com/artur-t-96/JARVIS/actions/runs/34256115958): **336 testów, 336 pass, 0 fail**, pełne bramki. Obejmuje migrację v9→v10, backup z oczekującym plikiem i sześć rzeczywistych SIGKILL dokumentów. Niedostępny plik unieważnia też raport oparty na nim przez pośredni dokument. Wstępne CI wykryło dwa nieaktualne oczekiwania testów oraz niestabilną obserwację zakończenia supervisora OSS; po poprawieniu oczekiwań kolejne pełne przebiegi przeszły bez zmiany ani osłabienia testu supervisora.
+
+Chrome podglądu: rzeczywisty wybór pliku → plan → start (`e3697c97-931e-4cdf-a6ac-dd1d0fa6eeff`) oraz usunięcie z nowej rewizji (`b5fbb327-bef0-425c-ad85-c50e0f588bd0`). Oba plany zatwierdziło odrębne konto przez API; po jednej próbie i niezależnej weryfikacji. Dokument po osobnym odbiorze jest v10, rewizja4; zachował pobieralny historyczny oryginał z rewizji3. Stary plan przygotowany dla v1 został prawidłowo zatrzymany po zmianie dokumentu, bez zapisania pliku. Podczas odbioru poprawiono nawigację z formularza pliku oraz czytelność konkretnych argumentów zgody.
+
+Potwierdzono dwa profile firm i trzy okresy współpracy z osobnymi plikami. Chrome firmy B pokazał dokument projektu Beta; API zweryfikowało aktualność wszystkich czterech dokumentów oraz SHA pięciu bieżących/historycznych oryginałów. Sprawa `7a716f63-49f0-4789-8603-5b61907b2670` została odebrana z jawnym wymaganiem pliku; jej raport i pakiet pozostają aktualne. Nie jest to jeszcze pełny onboarding. Chrome pobrał PDF, DOCX i historyczny plik. Wszystkie osiem końcowych eksportów renderera `p09a2-2` (dziewięć stron) wyrenderowano i obejrzano: polskie znaki, źródła, odciski, marginesy oraz podział stron prawidłowe.
+
+Podgląd zatrzymano przed kopią: `/private/tmp/jarvis-p09a2-backup-20260908T1722`, 58 plików, manifest `aebc92696d35ecbbad67aaeab1b9cc471e9f848d7505c758b2bbbeff00547d34`. Odtworzenie do `/private/tmp/jarvis-p09a2-restored-final-20260908T1722` zachowało pięć oryginałów i osiem identycznych eksportów. Replay 22 poleceń nie dodał wersji, audytu ani outbox. Po zgodzie oczekujący plan `e1ee0ed7-c47e-4e97-9b65-a6ff6064f4e3` dodał dokładnie jedną rewizję i receipt, z jedną próbą i pozytywną weryfikacją. Ponowne uzgodnienie wszystkich 23 poleceń nie zmieniło liczników. Konta pozostają poza tym pakietem kopii; serwera odtworzonych danych nie uruchamiano.
+
+Dowody i skrypty: `/private/tmp/jarvis-document-files/.data/p09a2-preview/ui-proof.json`, `render-final/`, `restore-proof.ts`. Końcowe scalenie i odbiór głównej instalacji są kolejnym krokiem. Automatyczne sprzątanie niewykorzystanych wygasłych materiałów wejściowych pozostaje w utrzymaniu P14; obowiązują limity liczby/rozmiaru i 7-dniowa ważność do wykonania. P06 jest następną paczką produktową; K08 nadal wymaga pozostałych szablonów i raportów z P09.
+
+Przegląd instalacji dodał `assets/` (czcionki i licencje) do manifestu lokalnego buildu. Celowany test potwierdził odmowę po zmianie, usunięciu albo dodaniu nieznanego fontu. CI `34257047516` ponownie ujawniło wyścig obserwacji końca supervisora; poprawiono rzeczywisty `processAlive`: po zniknięciu wyniku `ps` ponownie sprawdza PID, a brak uprawnienia nie oznacza zakończenia. Test SIGKILL pozostaje niezmieniony; osobny test potwierdza rozróżnienie EPERM/ESRCH. Końcowe CI tych poprawek i odbiór lokalny pozostają wymagane przed dostarczeniem.

@@ -141,7 +141,14 @@ export function createApp({
         );
     }
     if (["POST", "PUT", "PATCH", "DELETE"].includes(req.method)) {
-      if (!req.headers["content-type"]?.startsWith("application/json"))
+      const binaryDocument =
+        req.method === "POST" &&
+        req.routeOptions.url === "/api/documents/:id/files/prepare" &&
+        req.headers["content-type"] === "application/octet-stream";
+      if (
+        !binaryDocument &&
+        !req.headers["content-type"]?.startsWith("application/json")
+      )
         throw new DomainError(
           "CONTENT_TYPE",
           "Wymagany Content-Type application/json.",

@@ -65,7 +65,7 @@ test("v7 migration preserves all existing custody rows and rolls back failed DDL
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      9,
+      10,
     );
     assert.deepEqual(
       db.prepare("SELECT * FROM ops_asset_events ORDER BY rowid").all(),

@@ -3369,3 +3369,39 @@ tbody tr:hover {
   margin: 0;
   min-width: 0;
 }
+
+.document-files > .card-heading {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.document-files > article {
+  margin-top: 16px;
+  padding: 16px;
+}
+.document-files .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+.document-files code {
+  overflow-wrap: anywhere;
+}
+.export-card > .field {
+  margin-bottom: 12px;
+}
+.file-operation dl {
+  display: grid;
+  gap: 14px;
+}
+.file-operation dt {
+  font-size: 12px;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+.file-operation dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
