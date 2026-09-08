@@ -147,6 +147,7 @@ export const statusLabels: Record<string, string> = {
   ready: "Gotowe",
   accepted: "Odebrane",
   draft: "Szkic",
+  review: "Do odbioru",
   active: "Aktywne",
   inactive: "Nieaktywne",
   available: "Dostępny",

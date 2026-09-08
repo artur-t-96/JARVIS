@@ -42,9 +42,11 @@ export function DocumentReadiness({ item }: { item: Entity }) {
           >
             {r.approvalCurrent
               ? "Zaakceptowana rewizja ma aktualne źródła i zgodną treść."
-              : r.readyForReview
-                ? "Źródła i treść są zgodne. Akceptacja tej rewizji wymaga osobnej decyzji."
-                : "Dokument wymaga uzupełnienia przed przekazaniem lub akceptacją."}
+              : item.status === "approved"
+                ? "Poprzednia akceptacja utraciła aktualność. Przygotuj nową rewizję i przekaż ją do ponownego odbioru."
+                : r.readyForReview
+                  ? "Źródła i treść są zgodne. Akceptacja tej rewizji wymaga osobnej decyzji."
+                  : "Dokument wymaga uzupełnienia przed przekazaniem lub akceptacją."}
           </Notice>
           {r.blockers.length > 0 && (
             <ul>

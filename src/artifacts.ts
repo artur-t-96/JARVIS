@@ -166,7 +166,16 @@ export function prepareDocument(
   if (template.id === "case_scope") {
     const scope = workspace.documentScope(p, sourceId);
     const s = scope.snapshot;
-    const content = `# Uzgodniony zakres sprawy\n\n${md(source.title)}\n\nRewizja zakresu: ${scope.version}.\n\n## Zakres\n\n${String(s.brief)}\n\n## Kryteria odbioru\n\n${String(s.acceptanceCriteria)}\n\n## Termin\n\n${s.dueDate ?? "Brak terminu — wymaga ustalenia."}\n\n## Powiązania i wymagania\n\n${JSON.stringify({ personId: s.personId, employmentEpisodeId: s.employmentEpisodeId, employmentStartDate: s.employmentStartDate, employmentKind: s.employmentKind, requirements: s.requirements }, null, 2)}\n\nRaport opisuje uzgodniony zakres. Wykonanie, dowody i odbiór są sprawdzane osobno. Ten raport nie stanowi umowy.`;
+    const requirements =
+      (s.requirements as JsonObject[])
+        .map(
+          (r) => `- ${r.required ? "Wymagane" : "Opcjonalne"}: ${md(r.title)}`,
+        )
+        .join("\n") || "Nie określono dodatkowych warunków.";
+    const period = s.employmentEpisodeId
+      ? `\n\n## Współpraca\n\n${s.employmentKind === "contractor" ? "Współpraca projektowa" : "Współpraca wewnętrzna"}. Data rozpoczęcia: ${md(s.employmentStartDate)}.\n\nIdentyfikator okresu: ${md(s.employmentEpisodeId)}.`
+      : "";
+    const content = `# Uzgodniony zakres sprawy\n\n${md(source.title)}\n\nRewizja zakresu: ${scope.version}.\n\n## Zakres\n\n${String(s.brief)}\n\n## Kryteria odbioru\n\n${String(s.acceptanceCriteria)}\n\n## Termin\n\n${s.dueDate ?? "Brak terminu — wymaga ustalenia."}${period}\n\n## Wymagane rezultaty\n\n${requirements}\n\nRaport opisuje uzgodniony zakres. Wykonanie, dowody i odbiór są sprawdzane osobno. Ten raport nie stanowi umowy.`;
     return {
       title: `${template.label}: ${source.title}`.slice(0, 160),
       data: {
