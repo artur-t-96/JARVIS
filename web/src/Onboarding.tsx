@@ -2,14 +2,9 @@ import { useState, type FormEvent } from "react";
 import type { OnboardingOverview } from "../../src/onboarding";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
-import {
-  dateLabel,
-  statusLabel,
-  type Context,
-  type Entity,
-  type Run,
-} from "./types";
+import { dateLabel, type Context, type Entity, type Run } from "./types";
 import { Badge, Icon, Loading, Notice, Sheet } from "./ui";
+import { humanTaskStateLabel } from "./HumanTasks";
 
 const actionLabels = {
   submit: "Przekaż do odbioru",
@@ -132,7 +127,7 @@ export function OnboardingCard({
               <span
                 className={`onboarding-task-state ${t.overdue ? "overdue" : ""}`}
               >
-                {statusLabel(t.status)}
+                {humanTaskStateLabel(t.status)}
               </span>
             </li>
           ))}

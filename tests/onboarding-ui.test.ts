@@ -75,6 +75,7 @@ test("onboarding summary exposes readable project, deadlines and dependencies wi
     "po terminie",
     "Najpierw:",
     "Potwierdź dokumenty",
+    "Do przyjęcia",
   ])
     assert.ok(html.includes(label), label);
   assert.ok(!html.includes("Potwierdź rozpoczęcie"));
