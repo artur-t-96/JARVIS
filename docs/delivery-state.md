@@ -161,3 +161,15 @@ Weryfikacja lokalna: 18 ukierunkowanych testów (w tym dwie rzeczywiste próby S
 PR [#13](https://github.com/artur-t-96/JARVIS/pull/13), kod `c52df06436f0d6a13a9bb23aaf93b6ce8e200740`, [CI 34238905035](https://github.com/artur-t-96/JARVIS/actions/runs/34238905035) zielone. W Chrome wykonano formularz → plan → uruchomienie → zgoda innego konta → zweryfikowany wynik → otwarcie nowej sztuki. Wykonanie firmy A `592e10ef-e9a4-41ed-a416-ccf195caa39b`, API firmy B `a2b06aa4-6010-4aed-91aa-d288c7a6c280`: po jednej próbie, zgodny operator i zatwierdzający, stare sztuki dostępne v3, nowe zarezerwowane v2, historie 3/2 spójne. Zachowane terminy UTC: A `2026-09-12T22:00:00.000Z`, B `2026-09-13T04:00:00.000Z`. Rezerwacja projektu Beta w firmie B nie zmieniła się. Odczyt wąskiego IT 403, odczyt innej firmy 404.
 
 Dowód prywatny: `/private/tmp/jarvis-reservation-replacement/.data/p05b2-preview/ui-proof.json`, 8.09.2026 14:34:22 UTC. Zrzuty rzeczywistego Chrome obejmują formularz, nowy rekord, termin i autorów w historii przekazań. To odbiór gałęzi; aktualizacja głównej instalacji pozostaje kolejnym krokiem.
+
+### P05b2 — dostarczone lokalnie
+
+PR #13 scalony jako `d05d65aeeacd4989ecf1234a0b404453836c8702`; końcowe CI PR 34239244077 oraz main 34239470496 zielone (286 testów i pełne bramki). Instalacja zarządzana z 8.09.2026 14:37:57 UTC, Node 22.23.0. Laboratorium 4310 oraz tryb operacyjny 4320 serwują dokładnie ten SHA, provider pozostaje wyłączony.
+
+Rzeczywisty Chrome na scalonej wersji: run `25546051-6105-4eb0-9f59-b0d17e8694d0`, jedna próba, niezależna weryfikacja. Stary laptop `a4d6382e-9f60-4279-9a2a-47d4e2525b18` dostępny v3, nowy `a3915838-c448-4087-ba52-10869156dfcc` zarezerwowany v2; historie 3/2 spójne, termin `2026-09-12T22:00:00.000Z`, brak poświadczenia fizycznego wydania. Dawny dowód sprzętowy P05a nadal spełnia swój warunek. Dowód: `.data/local-product/p05b2-verification.json`.
+
+OSS obu środowisk: 14 paneli, Prometheus/Loki/Jaeger OK, metryka workera i skorelowany log/trace z SHA `d05d65a`. Ślady: lab `1b92351e3ba4d65af6c1efad8e142286`, operational `c066f7735c29706901fbaf3bbf5c03c5`; `.data/local-product/p05b2-oss-verification.json`.
+
+Backup przed aktualizacją (6 plików, konta osobno): `/private/tmp/jarvis-before-p05b2-lab-20260908T1438`, manifest `e87e17fc8398d1a12b67781695d6ba4c89d9eb148db3f18070b2726bfb94bead`; operational analogicznie `/private/tmp/jarvis-before-p05b2-operational-20260908T1438`, manifest `fdf36094a3c4928dcba01517aecd5235bb7612d5e263e3249ba2eb343ddcc506`. Podgląd dodatkowo odtworzono do pustego `/private/tmp/jarvis-p05b2-restored-20260908T1436`, manifest `4b0a5734d997fc5316cd5210a4387fb228a6df4ac54674c8f49d91fe3c4795fe`: dwie pary historii i replay bez kolejnego skutku.
+
+Następna aktywna paczka: P08a — wymagane dostępy i poświadczenia dla współpracy, następnie P09a i pełny onboarding P06. Spis i import P05b pozostają w końcowym zakresie K05, z powrotem po domknięciu demonstratora onboardingu.

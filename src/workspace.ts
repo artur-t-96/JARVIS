@@ -1,4 +1,10 @@
 import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
+import { AccessRegister, migrateAccessRegister } from "./access-register.js";
+import {
+  applicationDataSchema,
+  accessBundleDataSchema,
+  type AccessEvent,
+} from "./access-models.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -124,6 +130,7 @@ interface Command {
   changes: Entity[];
   custodyEvent?: CustodyEvent;
   replacement?: JsonObject;
+  accessEvent?: AccessEvent;
 }
 function fail(code: string, message: string, status = 409): never {
   throw new DomainError(code, message, status);
@@ -172,6 +179,7 @@ export class WorkspaceStore {
   private readonly readinessStore: CaseReadinessStore;
   private readonly registerStore: AssetRegister;
   private readonly custodyStore: AssetCustody;
+  private readonly accessStore: AccessRegister;
   constructor(
     dbPath: string,
     private readonly options: { clock?: () => number } = {},
@@ -315,10 +323,16 @@ export class WorkspaceStore {
           name: "Atomic reservation replacement across two assets",
           up: migrateCustodyMultipleAssets,
         },
+        {
+          version: 8,
+          name: "Versioned access catalog and human attestations",
+          up: migrateAccessRegister,
+        },
       ],
     });
     this.registerStore = new AssetRegister(this.db);
     this.custodyStore = new AssetCustody(this.db);
+    this.accessStore = new AccessRegister(this.db);
     this.readinessStore = new CaseReadinessStore(this.db, (tenant, e) => {
       const owner = this.livePrincipal(
         tenant,
@@ -366,6 +380,57 @@ export class WorkspaceStore {
       taskId,
       new Date(this.options.clock?.() ?? Date.now()).toISOString(),
     );
+  }
+  caseAccess(principal: Principal, caseId: string) {
+    const e = this.get(principal, "cases", caseId);
+    this.scope(principal, "it");
+    const grants = this.accessStore.list(principal.tenantId, e.id);
+    const now = new Date(this.options.clock?.() ?? Date.now()).toISOString();
+    const bound = this.readinessStore.bindings(
+      principal.tenantId,
+      e.id,
+      Number(e.data.scopeRevision),
+    );
+    const requirements = this.readinessStore
+      .requirements(principal.tenantId, e.id, Number(e.data.scopeRevision))
+      .filter((r) => r.kind === "access_attested")
+      .map((r) => {
+        try {
+          return {
+            id: r.id,
+            title: r.title,
+            expected: r.expected,
+            bound: bound.some((b) => b.requirementId === r.id),
+            assessment: this.accessStore.assessment(
+              principal.tenantId,
+              e.id,
+              r.id,
+              now,
+            ),
+            problem: null,
+          };
+        } catch (error) {
+          return {
+            id: r.id,
+            title: r.title,
+            expected: r.expected,
+            bound: bound.some((b) => b.requirementId === r.id),
+            assessment: null,
+            problem:
+              error instanceof DomainError
+                ? error.message
+                : "Nie można potwierdzić źródła dostępu.",
+          };
+        }
+      });
+    return {
+      caseId,
+      requirements,
+      grants: grants.map((grant) => ({
+        ...grant,
+        events: this.accessStore.history(principal.tenantId, grant.id),
+      })),
+    };
   }
   listTasks(principal: Principal) {
     const today = this.companyDate({
@@ -647,6 +712,11 @@ export class WorkspaceStore {
     ).map(asJson);
   }
   private relationalStateMatches(tenant: string, entity: Entity): boolean {
+    if (entity.module === "cases")
+      return (
+        canonical(entity.data.accessGrantRefs ?? []) ===
+        canonical(this.accessRefs(tenant, entity.id))
+      );
     if (entity.module === "people")
       return (
         canonical(entity.data.employmentEpisodes) ===
@@ -773,6 +843,46 @@ export class WorkspaceStore {
         : this.read(tenant, module, String(input.id)).data;
     scopes.push(...this.entityScopes(module, data, tenant));
     if (
+      module === "it" &&
+      ["application", "access_bundle"].includes(String(data.kind))
+    ) {
+      scopes.push("company");
+      for (const member of arr(
+        action === "reviseAccessBundle" ? input.members : data.members,
+      )) {
+        this.read(tenant, "it", String(member.applicationId));
+        if (member.licenseId) {
+          this.read(tenant, "licenses", String(member.licenseId));
+          scopes.push("licenses");
+        }
+      }
+    }
+    if (
+      module === "cases" &&
+      ["attestAccess", "renewAccess", "revokeAccess"].includes(action)
+    ) {
+      scopes.push("it");
+      if (input.licenseSeatId || input.licenseVersion !== undefined)
+        scopes.push("licenses");
+      if (action === "revokeAccess") {
+        const grant = this.accessStore.get(tenant, String(input.grantId));
+        const origin = this.read(tenant, "cases", grant.caseId);
+        scopes.push(...this.entityScopes("cases", origin.data, tenant));
+      } else {
+        const requirement = this.readinessStore
+          .requirements(tenant, String(input.id), Number(data.scopeRevision))
+          .find((r) => r.id === input.requirementId);
+        if (typeof requirement?.expected.bundleId === "string") {
+          const bundle = this.read(tenant, "it", requirement.expected.bundleId);
+          if (
+            arr(bundle.data.members).find((m) => m.key === input.memberKey)
+              ?.licenseId
+          )
+            scopes.push("licenses");
+        }
+      }
+    }
+    if (
       input.engagementRef &&
       typeof input.engagementRef === "object" &&
       !Array.isArray(input.engagementRef)
@@ -810,6 +920,7 @@ export class WorkspaceStore {
           ["assetId", "assets"],
           ["documentId", "documents"],
           ["purchaseId", "purchases"],
+          ["bundleId", "it"],
         ] as const) {
           if (typeof expected[field] === "string") {
             const source = this.read(tenant, target, String(expected[field]));
@@ -1151,10 +1262,43 @@ export class WorkspaceStore {
       data.versions = [];
     }
     if (module === "it") {
-      this.optionalRef(cmd, "assets", data.relatedAssetId);
-      status = data.kind === "observation" ? "observed" : "open";
-      data.actions = [];
-      data.externalActionsPerformed = false;
+      if (data.kind === "application") {
+        const parsed = applicationDataSchema.safeParse(data);
+        if (!parsed.success)
+          fail(
+            "INVALID_APPLICATION",
+            "Podaj klucz aplikacji i niepowtarzającą się listę ról.",
+            400,
+          );
+        status = "active";
+      } else if (data.kind === "access_bundle") {
+        const parsed = accessBundleDataSchema.safeParse(data);
+        if (!parsed.success)
+          fail(
+            "INVALID_ACCESS_BUNDLE",
+            "Zestaw wymaga klucza i pełnej, niepowtarzającej się listy aplikacji i ról.",
+            400,
+          );
+        this.accessStore.validateMembers(cmd.ctx.tenantId, parsed.data.members);
+        status = "active";
+      } else {
+        if (
+          !data.severity ||
+          !data.environment ||
+          ["applicationKey", "supportedRoles", "accessKey", "members"].some(
+            (key) => data[key] !== undefined,
+          )
+        )
+          fail(
+            "INVALID_IT_RECORD",
+            "Obserwacja lub incydent wymagają środowiska i ważności oraz własnego zakresu pól.",
+            400,
+          );
+        this.optionalRef(cmd, "assets", data.relatedAssetId);
+        status = data.kind === "observation" ? "observed" : "open";
+        data.actions = [];
+        data.externalActionsPerformed = false;
+      }
     }
     const definitions = module === "cases" ? data.requirements : undefined;
     if (module === "cases") delete data.requirements;
@@ -1705,6 +1849,7 @@ export class WorkspaceStore {
   }
   private caseState(cmd: { ctx: { tenantId: string } }, e: Entity) {
     const params = [cmd.ctx.tenantId, e.id, Number(e.data.scopeRevision)];
+    e.data.accessGrantRefs = this.accessRefs(cmd.ctx.tenantId, e.id);
     e.data.tasks = this.taskStore
       .rows(cmd.ctx.tenantId, e.id, Number(e.data.scopeRevision))
       .map((row) => asJson(row));
@@ -1744,6 +1889,25 @@ export class WorkspaceStore {
         )
         .all(cmd.ctx.tenantId, e.id) as Row[]
     ).map(asJson);
+  }
+  private accessRefs(tenant: string, caseId: string): JsonObject[] {
+    return this.accessStore
+      .list(tenant, caseId)
+      .map((g) => ({ id: g.id, version: g.version, eventId: g.lastEventId }));
+  }
+  private accessAuthority(ctx: ToolContext, action: string, input: JsonObject) {
+    const actor = this.livePrincipal(ctx.tenantId, ctx.actorId);
+    if (!actor || !this.canManageCase(actor, String(input.id)))
+      fail(
+        "ACCESS_ACTOR_FORBIDDEN",
+        "Poświadczenie wymaga aktywnego operatora z dostępem do tej sprawy.",
+        403,
+      );
+    for (const area of [
+      "it",
+      ...this.inputScopes("cases", action, input, ctx.tenantId),
+    ])
+      this.scope(actor, area);
   }
   private readyForAcceptance(cmd: Command, e: Entity): AcceptanceReadiness {
     this.caseState(cmd, e);
@@ -1974,7 +2138,27 @@ export class WorkspaceStore {
       }
     }
     if (e.module === "cases") {
-      if (action === "revise") {
+      if (["attestAccess", "renewAccess", "revokeAccess"].includes(action)) {
+        this.accessAuthority(cmd.ctx, action, input as unknown as JsonObject);
+        this.human(cmd, input);
+        cmd.accessEvent =
+          action === "revokeAccess"
+            ? this.accessStore.revoke(
+                cmd.ctx,
+                input as unknown as JsonObject,
+                cmd.now,
+                cmd.profile?.timezone ?? "UTC",
+              )
+            : this.accessStore.attest(
+                cmd.ctx,
+                input as unknown as JsonObject,
+                cmd.now,
+                cmd.profile?.timezone ?? "UTC",
+                cmd.profile?.version ?? 0,
+                action === "renewAccess",
+              );
+        this.caseState(cmd, e);
+      } else if (action === "revise") {
         this.state(
           e,
           "open",
@@ -2837,6 +3021,47 @@ export class WorkspaceStore {
       d.versions = this.docVersions(cmd, e.id);
     }
     if (e.module === "it") {
+      if (["application", "access_bundle"].includes(String(d.kind))) {
+        this.state(e, "active");
+        if (action === "reviseAccessBundle") {
+          this.kind(e, "access_bundle");
+          const next = accessBundleDataSchema.parse({
+            ...d,
+            members: input.members,
+            description: input.description,
+          });
+          this.accessStore.validateMembers(cmd.ctx.tenantId, next.members);
+          e.data = asJson(next);
+        } else if (action === "reviseApplication") {
+          this.kind(e, "application");
+          e.data = asJson(
+            applicationDataSchema.parse({
+              ...d,
+              supportedRoles: input.supportedRoles,
+              description: input.description,
+            }),
+          );
+        } else if (action === "retireAccessDefinition") {
+          e.status = "retired";
+          d.retirementReason = String(input.reason);
+        } else
+          fail(
+            "WRONG_RECORD_KIND",
+            "Wybierz operację katalogu aplikacji lub zestawu dostępów.",
+          );
+        return this.save(cmd, e);
+      }
+      if (
+        [
+          "reviseAccessBundle",
+          "reviseApplication",
+          "retireAccessDefinition",
+        ].includes(action)
+      )
+        fail(
+          "WRONG_RECORD_KIND",
+          "Operacja wymaga aplikacji lub zestawu dostępów.",
+        );
       if (action === "triage") {
         this.state(e, "observed", "open");
         this.optionalRef(cmd, "people", input.ownerId);
@@ -2989,8 +3214,13 @@ export class WorkspaceStore {
         const registerMutation =
           module === "assets" &&
           ["move", "sendToService", "markRepaired", "retire"].includes(action);
+        const accessMutation =
+          module === "cases" &&
+          ["attestAccess", "renewAccess", "revokeAccess"].includes(action);
+        const accessBinding = module === "cases" && action === "bindEvidence";
         const usesProfile =
           lifecycle ||
+          accessMutation ||
           (module === "cases" && ["addTask", "revise"].includes(action)) ||
           (module === "assets" &&
             [
@@ -3082,6 +3312,20 @@ export class WorkspaceStore {
               "Brak spójnego zdarzenia przekazania sprzętu.",
             );
         };
+        const accessConsistent = (ctx: ToolContext) =>
+          !accessMutation || this.accessStore.verifyCommitted(ctx);
+        const requireCommittedAccess = (
+          ctx: ToolContext,
+          input: JsonObject,
+        ) => {
+          if (!accessMutation) return;
+          this.accessAuthority(ctx, action, input);
+          if (!accessConsistent(ctx))
+            fail(
+              "ACCESS_HISTORY_INCONSISTENT",
+              "Brak spójnego zdarzenia poświadczenia dostępu.",
+            );
+        };
         const requiredScopes = taskCustody
           ? ["it"]
           : module === "people" && action !== "create" && action !== "update"
@@ -3109,13 +3353,21 @@ export class WorkspaceStore {
         return {
           id: toolId,
           version:
-            module === "assets"
-              ? action === "replaceReservation"
-                ? "7"
-                : "6"
-              : module === "cases" && action === "bindEvidence"
-                ? "5"
-                : "4",
+            accessMutation ||
+            (module === "it" &&
+              [
+                "reviseAccessBundle",
+                "reviseApplication",
+                "retireAccessDefinition",
+              ].includes(action))
+              ? "8"
+              : module === "assets"
+                ? action === "replaceReservation"
+                  ? "7"
+                  : "6"
+                : module === "cases" && action === "bindEvidence"
+                  ? "6"
+                  : "4",
           ...(taskCustody
             ? {
                 canAccess: (
@@ -3172,7 +3424,7 @@ export class WorkspaceStore {
           recovery: "reconcile",
           description: `${definition.label}: ${actionLabel}.${["people.startEmployment", "people.beginOffboarding", "recruitment.hire"].includes(`${module}.${action}`) ? " Tworzy powiązaną sprawę i obowiązkowe zadania człowieka." : module === "sales" && action === "handoff" ? " Tworzy sprawę realizacji oraz zamyka powiązaną szansę jako wygraną." : ""} Zmienia wyłącznie lokalne dane JARVIS.`,
           inputSchema,
-          ...(usesProfile || taskCustody
+          ...(usesProfile || taskCustody || accessBinding
             ? {
                 prepareInput: (input: JsonObject, tenantId: string) => {
                   if (taskCustody)
@@ -3183,9 +3435,30 @@ export class WorkspaceStore {
                     );
                   const profile = this.currentProfile(tenantId);
                   const prepared: JsonObject =
-                    profile && input.profileVersion === undefined
+                    usesProfile && profile && input.profileVersion === undefined
                       ? { ...input, profileVersion: profile.version }
                       : { ...input };
+                  if (accessMutation) {
+                    const pins =
+                      action === "revokeAccess"
+                        ? this.accessStore.revokePins(tenantId, input)
+                        : this.accessStore.pins(tenantId, input);
+                    for (const [key, value] of Object.entries(pins))
+                      if (prepared[key] === undefined) prepared[key] = value;
+                  }
+                  if (
+                    accessBinding &&
+                    input.sourceModule === "it" &&
+                    input.accessProofHash === undefined
+                  )
+                    prepared.accessProofHash = this.accessStore.assessment(
+                      tenantId,
+                      String(input.id),
+                      String(input.requirementId),
+                      new Date(
+                        this.options.clock?.() ?? Date.now(),
+                      ).toISOString(),
+                    ).hash;
                   if (module === "assets" && action === "replaceReservation") {
                     const pins = this.replacementPins(tenantId, input);
                     for (const [key, value] of Object.entries(pins))
@@ -3225,12 +3498,16 @@ export class WorkspaceStore {
               // elapsed expiry or a later profile cannot turn it into another effect.
               const profile =
                 usesProfile &&
-                !(existing && (custodyMutation || registerMutation))
+                !(
+                  existing &&
+                  (custodyMutation || registerMutation || accessMutation)
+                )
                   ? this.pinnedProfile(ctx.tenantId, input)
                   : this.currentProfile(ctx.tenantId);
               if (existing) {
                 requireCommittedTask(ctx, input);
                 requireCommittedCustody(ctx, input);
+                requireCommittedAccess(ctx, input);
                 if (!taskConsistent(ctx, input))
                   fail(
                     "TASK_STATE_INCONSISTENT",
@@ -3268,6 +3545,18 @@ export class WorkspaceStore {
                     "Historia ewidencji urządzenia jest niespójna.",
                   );
                 if (action === "update") {
+                  if (
+                    module === "it" &&
+                    ["application", "access_bundle"].includes(
+                      String(e.data.kind),
+                    ) &&
+                    p.data &&
+                    Object.keys(p.data).length
+                  )
+                    fail(
+                      "REVISION_REQUIRED",
+                      "Zmień definicję aplikacji lub zestawu przez właściwą rewizję.",
+                    );
                   if (
                     [
                       "accepted",
@@ -3404,6 +3693,13 @@ export class WorkspaceStore {
                             eventId: cmd.custodyEvent.id,
                           }
                         : {}),
+                      ...(cmd.accessEvent
+                        ? {
+                            grantId: cmd.accessEvent.grantId,
+                            grantVersion: cmd.accessEvent.grantVersion,
+                            eventId: cmd.accessEvent.id,
+                          }
+                        : {}),
                     },
               };
               const changes = cmd.changes.map((v) => ({
@@ -3458,6 +3754,7 @@ export class WorkspaceStore {
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
               requireCommittedCustody(ctx, asJson(parsed.data));
+              requireCommittedAccess(ctx, asJson(parsed.data));
               if (!taskConsistent(ctx, asJson(parsed.data)))
                 fail(
                   "TASK_STATE_INCONSISTENT",
@@ -3479,10 +3776,13 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
+              if (accessMutation)
+                this.accessAuthority(ctx, action, asJson(parsed.data));
             }
             let ok = Boolean(
               row &&
               canonical(result) === row.receipt_json &&
+              accessConsistent(ctx) &&
               (!custodyMutation ||
                 custodyConsistent(ctx, asJson(parsed.data))) &&
               taskConsistent(ctx, asJson(parsed.data)),

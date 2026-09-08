@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  accessKeySchema,
+  accessMembersSchema,
+  accessRoleSchema,
+  accessBindingFields,
+  accessAttestationFields,
+} from "./access-models.js";
 import { caseRequirementDefinitionsSchema } from "./case-readiness.js";
 
 export interface WorkspaceField {
@@ -341,11 +348,21 @@ export const createDataSchemas = {
     .strict(),
   it: z
     .object({
-      kind: z.enum(["observation", "incident", "lab_case"]),
+      kind: z.enum([
+        "observation",
+        "incident",
+        "lab_case",
+        "application",
+        "access_bundle",
+      ]),
       description: text,
-      severity: z.enum(["low", "medium", "high", "critical"]),
-      environment: z.enum(["local", "lab"]),
+      severity: z.enum(["low", "medium", "high", "critical"]).optional(),
+      environment: z.enum(["local", "lab"]).optional(),
       relatedAssetId: id.optional(),
+      applicationKey: accessKeySchema.optional(),
+      supportedRoles: z.array(accessRoleSchema).min(1).max(50).optional(),
+      accessKey: accessKeySchema.optional(),
+      members: accessMembersSchema.optional(),
     })
     .strict(),
 };
@@ -528,6 +545,38 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
         sourceVersion: z.number().int().min(1),
         allocationId: id.optional(),
         issueEventId: id.optional(),
+        accessProofHash: z
+          .string()
+          .regex(/^[a-f0-9]{64}$/)
+          .optional(),
+      })
+      .strict(),
+    attestAccess: z
+      .object({ ...base, ...accessBindingFields, ...accessAttestationFields })
+      .strict(),
+    renewAccess: z
+      .object({
+        ...base,
+        ...accessBindingFields,
+        ...accessAttestationFields,
+        grantId: id,
+        expectedGrantVersion: z.number().int().positive(),
+      })
+      .strict(),
+    revokeAccess: z
+      .object({
+        ...base,
+        personId: id.optional(),
+        employmentEpisodeId: id.optional(),
+        expectedEpisodeVersion: z.number().int().positive().optional(),
+        scopeRevision: z.number().int().positive().optional(),
+        profileVersion: z.number().int().min(0).optional(),
+        grantId: id,
+        expectedGrantVersion: z.number().int().positive(),
+        revokedOn: date,
+        note: text,
+        verificationMethod: text,
+        humanConfirmed: yes,
       })
       .strict(),
     addEvidence: z
@@ -759,6 +808,17 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     archive: z.object({ ...base, reason: text }).strict(),
   },
   it: {
+    reviseAccessBundle: z
+      .object({ ...base, members: accessMembersSchema, description: text })
+      .strict(),
+    reviseApplication: z
+      .object({
+        ...base,
+        supportedRoles: z.array(accessRoleSchema).min(1).max(50),
+        description: text,
+      })
+      .strict(),
+    retireAccessDefinition: z.object({ ...base, reason: text }).strict(),
     triage: z
       .object({ ...base, assessment: text, ownerId: id.optional() })
       .strict(),
@@ -917,6 +977,12 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
   ],
 };
 const actionLabels: Record<string, string> = {
+  attestAccess: "Poświadcz dostęp",
+  renewAccess: "Odnów poświadczenie dostępu",
+  revokeAccess: "Poświadcz cofnięcie dostępu",
+  reviseApplication: "Zmień definicję aplikacji",
+  reviseAccessBundle: "Zmień zestaw dostępów",
+  retireAccessDefinition: "Wycofaj definicję dostępu",
   startEmployment: "Rozpocznij okres współpracy",
   activate: "Potwierdź rozpoczęcie pracy",
   beginOffboarding: "Rozpocznij offboarding",

@@ -170,6 +170,12 @@ export function registerWorkspaceApi(
       z.object({ id: z.string().uuid() }).parse(req.params).id,
     ),
   }));
+  app.get("/api/cases/:id/access", async (req) => ({
+    access: workspace.caseAccess(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
   app.get("/api/cases/:id/owners", async (req) => {
     const actor = principal(req);
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);

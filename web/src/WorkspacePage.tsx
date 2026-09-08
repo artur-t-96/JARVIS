@@ -24,6 +24,8 @@ import { LaboratoryPanel } from "./LaboratoryPanel";
 import { DocumentTemplate } from "./DocumentTemplate";
 import { CaseReadiness } from "./CaseReadiness";
 import { HumanTasks } from "./HumanTasks";
+import { CaseAccess } from "./CaseAccess";
+import { AccessDefinitions, isAccessDefinition } from "./AccessDefinitions";
 import {
   AllocationSelect,
   allocationActions,
@@ -787,6 +789,19 @@ export function WorkspacePage({
                   revision={revision}
                 />
               )}
+              {item.module === "cases" &&
+                context.principal.scopes?.some(
+                  (s) => s === "*" || s === "it",
+                ) && (
+                  <CaseAccess
+                    item={item}
+                    context={context}
+                    revision={revision}
+                  />
+                )}
+              {isAccessDefinition(item) && (
+                <AccessDefinitions context={context} item={item} />
+              )}
               <div className="detail-grid">
                 <section className="card">
                   <div className="card-heading">
@@ -794,25 +809,31 @@ export function WorkspacePage({
                     <Icon name={module.id} />
                   </div>
                   <dl className="data-grid">
-                    {module.fields.map((field) => (
-                      <div
-                        key={field.key}
-                        className={field.type === "textarea" ? "wide" : ""}
-                      >
-                        <dt>{referenceLabel(field.key, field.label)}</dt>
-                        <dd>
-                          {referenceModule[field.key]
-                            ? refs.label(field.key, item.data[field.key])
-                            : field.type === "date"
-                              ? dateLabel(String(item.data[field.key] ?? ""))
-                              : field.type === "select"
-                                ? optionLabel(
-                                    String(item.data[field.key] ?? "—"),
-                                  )
-                                : displayValue(item.data[field.key])}
-                        </dd>
-                      </div>
-                    ))}
+                    {module.fields
+                      .filter(
+                        (field) =>
+                          !isAccessDefinition(item) ||
+                          ["kind", "description"].includes(field.key),
+                      )
+                      .map((field) => (
+                        <div
+                          key={field.key}
+                          className={field.type === "textarea" ? "wide" : ""}
+                        >
+                          <dt>{referenceLabel(field.key, field.label)}</dt>
+                          <dd>
+                            {referenceModule[field.key]
+                              ? refs.label(field.key, item.data[field.key])
+                              : field.type === "date"
+                                ? dateLabel(String(item.data[field.key] ?? ""))
+                                : field.type === "select"
+                                  ? optionLabel(
+                                      String(item.data[field.key] ?? "—"),
+                                    )
+                                  : displayValue(item.data[field.key])}
+                          </dd>
+                        </div>
+                      ))}
                   </dl>
                   <div className="record-id">
                     <span>ID rekordu</span>
@@ -857,6 +878,15 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            (module.id !== "it" ||
+                              (isAccessDefinition(item)
+                                ? action.id === "retireAccessDefinition" &&
+                                  item.status === "active"
+                                : ![
+                                    "reviseApplication",
+                                    "reviseAccessBundle",
+                                    "retireAccessDefinition",
+                                  ].includes(action.id))) &&
                             (module.id !== "assets" ||
                               action.id === "assignCustodian" ||
                               (action.id === "reserve" &&
@@ -892,6 +922,9 @@ export function WorkspacePage({
                                 "completeTask",
                                 "cancelTask",
                                 "bindEvidence",
+                                "attestAccess",
+                                "renewAccess",
+                                "revokeAccess",
                               ].includes(action.id)
                             ),
                         )
@@ -989,6 +1022,7 @@ export function WorkspacePage({
         </section>
       )}
       {module.id === "it" && <LaboratoryPanel context={context} />}
+      {module.id === "it" && <AccessDefinitions context={context} />}
       <section className="card table-card">
         <div className="table-toolbar">
           <label className="search-field">
