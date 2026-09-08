@@ -10,6 +10,7 @@ import {
 } from "./references";
 import { Badge, Empty, Icon, Notice } from "./ui";
 import { AssetCustody } from "./AssetCustody";
+import { AssetRegister } from "./AssetRegister";
 
 const sectionLabels: Record<string, string> = {
   worklogs: "Zgłoszona praca i koszty",
@@ -156,6 +157,9 @@ export function EntityContent({
   ].filter((key) => typeof item.data[key] === "string");
   return (
     <div className="record-content">
+      {item.module === "assets" && (
+        <AssetRegister key={`register-${item.id}`} item={item} />
+      )}
       {item.module === "assets" && (
         <AssetCustody
           key={item.id}

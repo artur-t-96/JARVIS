@@ -113,6 +113,38 @@ export function registerWorkspaceApi(
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { equipment: workspace.taskEquipment(principal(req), id) };
   });
+  app.get("/api/assets/:id/custodians", async (req) => {
+    const actor = principal(req),
+      { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    workspace.get(actor, "assets", id);
+    if (!actor.roles.includes("operator"))
+      throw new DomainError(
+        "FORBIDDEN",
+        "Wybór opiekuna wymaga roli operatora.",
+        403,
+      );
+    return {
+      assignees: (principals?.(actor.tenantId) ?? [])
+        .filter(
+          (p) =>
+            p.tenantId === actor.tenantId &&
+            p.roles.includes("operator") &&
+            (p.scopes?.includes("*") || p.scopes?.includes("assets")),
+        )
+        .map((p) => ({ id: p.id, label: p.id })),
+    };
+  });
+  app.get("/api/assets/:id/register", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(50),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+      })
+      .strict()
+      .parse(req.query);
+    return { register: workspace.assetRegister(principal(req), id, page) };
+  });
   app.get("/api/assets/:id/custody", async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     const page = z

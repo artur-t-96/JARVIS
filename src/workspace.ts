@@ -1,3 +1,4 @@
+import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
 import { DatabaseSync } from "node:sqlite";
 import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -7,6 +8,7 @@ import { migrateDatabase } from "./migrations.js";
 import {
   AssetCustody,
   migrateAssetCustody,
+  companyDay,
   type CustodyEvent,
 } from "./asset-custody.js";
 import {
@@ -143,9 +145,8 @@ const editableSchemas: Record<ModuleId, z.ZodType> = {
     .pick({ email: true, department: true, jobTitle: true })
     .partial(),
   cases: z.object({}).strict(),
-  assets: z
-    .object({ location: z.string().trim().min(1).max(200) })
-    .strict()
+  assets: createDataSchemas.assets
+    .pick({ manufacturer: true, model: true })
     .partial(),
   purchases: createDataSchemas.purchases
     .pick({ description: true, expectedDelivery: true, supplierEmail: true })
@@ -167,6 +168,7 @@ export class WorkspaceStore {
   private principalProvider?: (tenantId: string) => Principal[];
   private readonly taskStore: WorkspaceTasks;
   private readonly readinessStore: CaseReadinessStore;
+  private readonly registerStore: AssetRegister;
   private readonly custodyStore: AssetCustody;
   constructor(
     dbPath: string,
@@ -301,8 +303,14 @@ export class WorkspaceStore {
             migrateTaskCustody(db);
           },
         },
+        {
+          version: 6,
+          name: "Asset register history",
+          up: migrateAssetRegister,
+        },
       ],
     });
+    this.registerStore = new AssetRegister(this.db);
     this.custodyStore = new AssetCustody(this.db);
     this.readinessStore = new CaseReadinessStore(this.db, (tenant, e) => {
       const owner = this.livePrincipal(
@@ -543,6 +551,23 @@ export class WorkspaceStore {
       entity.data.assignments = this.licenseAssignments(tenant, entity.id);
     return entity;
   }
+  assetRegister(
+    principal: Principal,
+    assetId: string,
+    page: { limit?: number; offset?: number } = {},
+  ) {
+    const asset = this.get(principal, "assets", assetId);
+    return {
+      ...this.registerStore.history(
+        principal.tenantId,
+        assetId,
+        page.limit,
+        page.offset,
+      ),
+      historyFromVersion: asset.data.registerHistoryFromVersion ?? null,
+      consistent: this.registerStore.verify(principal.tenantId, asset),
+    };
+  }
   private allocations(tenant: string, assetId: string): JsonObject[] {
     return this.custodyStore.rows(tenant, assetId).map(asJson);
   }
@@ -628,7 +653,8 @@ export class WorkspaceStore {
       return (
         canonical(entity.data.allocations) ===
           canonical(this.allocations(tenant, entity.id)) &&
-        this.custodyStore.verify(tenant, entity.id)
+        this.custodyStore.verify(tenant, entity.id) &&
+        this.registerStore.verify(tenant, entity)
       );
     if (entity.module === "licenses")
       return (
@@ -866,6 +892,7 @@ export class WorkspaceStore {
         entity.version,
         cmd.now,
       );
+    this.registerStore.record(cmd.ctx, cmd.toolId, entity);
     cmd.changes.push(JSON.parse(canonical(entity)) as Entity);
   }
   private insert(
@@ -901,6 +928,7 @@ export class WorkspaceStore {
     return entity;
   }
   private saveNew(cmd: Command, entity: Entity) {
+    this.registerStore.prepare(entity);
     this.db
       .prepare(
         "UPDATE ops_entities SET data_json=?,status=? WHERE tenant_id=? AND id=?",
@@ -913,6 +941,7 @@ export class WorkspaceStore {
     const previous = entity.version;
     entity.version++;
     entity.updatedAt = cmd.now;
+    this.registerStore.prepare(entity);
     const changed = this.db
       .prepare(
         "UPDATE ops_entities SET title=?,status=?,version=?,data_json=?,updated_at=? WHERE tenant_id=? AND id=? AND version=?",
@@ -2187,7 +2216,32 @@ export class WorkspaceStore {
           "Brak aktywnego konta operatora sprzętu.",
           403,
         );
-      if (action === "reserve") {
+      if (action === "assignCustodian") {
+        this.human(cmd, input);
+        const custodian = this.livePrincipal(
+          cmd.ctx.tenantId,
+          String(input.custodianPrincipalId),
+        );
+        if (
+          !custodian?.roles.includes("operator") ||
+          !(
+            custodian.scopes?.includes("*") ||
+            custodian.scopes?.includes("assets")
+          )
+        )
+          fail(
+            "CUSTODIAN_FORBIDDEN",
+            "Opiekun musi być aktywnym operatorem ewidencji sprzętu.",
+            403,
+          );
+        d.custodianPrincipalId = custodian.id;
+        d.custodianAssignment = {
+          assignedBy: cmd.ctx.actorId!,
+          approvedBy: cmd.ctx.approvedBy ?? null,
+          note: String(input.note),
+          recordedAt: cmd.now,
+        };
+      } else if (action === "reserve") {
         this.resourceEpisode(cmd, input, ["onboarding", "active"]);
         cmd.custodyEvent = this.custodyStore.reserve(
           cmd.ctx,
@@ -2197,12 +2251,68 @@ export class WorkspaceStore {
           cmd.profile?.timezone ?? "UTC",
           cmd.profile?.version ?? null,
         );
-      } else if (action === "markRepaired") {
-        this.state(e, "maintenance");
+      } else if (
+        ["move", "sendToService", "markRepaired", "retire"].includes(action)
+      ) {
+        this.state(
+          e,
+          ...(action === "markRepaired"
+            ? ["maintenance"]
+            : ["available", "maintenance"]),
+        );
         this.human(cmd, input);
-        e.status = "available";
-        d.condition = "good";
-        d.repairNote = String(input.note);
+        if (
+          this.custodyStore
+            .rows(cmd.ctx.tenantId, e.id)
+            .some((a) => ["reserved", "issued"].includes(a.status))
+        )
+          fail(
+            "ACTIVE_ALLOCATION",
+            "Najpierw poświadcz zwrot albo jawnie zwolnij rezerwację.",
+          );
+        const occurredOn = input.occurredOn;
+        const priorPhysicalDays = [
+          companyDay(e.createdAt, cmd.profile?.timezone ?? "UTC"),
+          d.lastRegisterAction &&
+          typeof d.lastRegisterAction === "object" &&
+          !Array.isArray(d.lastRegisterAction)
+            ? d.lastRegisterAction.occurredOn
+            : null,
+          ...this.custodyStore
+            .rows(cmd.ctx.tenantId, e.id)
+            .flatMap((a) => [a.issuedOn, a.returnedOn]),
+        ].filter((day): day is string => typeof day === "string");
+        if (
+          occurredOn !== undefined &&
+          (String(occurredOn) > this.companyDate(cmd) ||
+            priorPhysicalDays.some((day) => String(occurredOn) < day))
+        )
+          fail(
+            "INVALID_ASSET_ACTION_DATE",
+            "Data czynności nie może poprzedzać rejestracji ani ostatniej czynności fizycznej lub wykraczać poza bieżący dzień firmy.",
+          );
+        if (action === "move" && input.location === d.location)
+          fail("LOCATION_UNCHANGED", "Wskaż inne miejsce docelowe.");
+        if (action === "move" || action === "sendToService")
+          d.location = String(input.location);
+        if (action === "sendToService") {
+          e.status = "maintenance";
+          d.condition = "repair";
+        }
+        if (action === "markRepaired") {
+          e.status = "available";
+          d.condition = "good";
+          d.repairNote = String(input.note);
+        }
+        if (action === "retire") e.status = "retired";
+        d.lastRegisterAction = {
+          action,
+          occurredOn: occurredOn === undefined ? null : String(occurredOn),
+          note: String(input.note),
+          performedBy: cmd.ctx.actorId!,
+          approvedBy: cmd.ctx.approvedBy ?? null,
+          recordedAt: cmd.now,
+        };
       } else {
         if (action === "issue")
           this.resourceEpisode(cmd, input, ["onboarding", "active"]);
@@ -2730,10 +2840,21 @@ export class WorkspaceStore {
             "issueForTask",
             "returnForTask",
           ].includes(action);
+        const registerMutation =
+          module === "assets" &&
+          ["move", "sendToService", "markRepaired", "retire"].includes(action);
         const usesProfile =
           lifecycle ||
           (module === "cases" && ["addTask", "revise"].includes(action)) ||
-          (module === "assets" && ["reserve", "issue"].includes(action)) ||
+          (module === "assets" &&
+            [
+              "reserve",
+              "issue",
+              "move",
+              "sendToService",
+              "markRepaired",
+              "retire",
+            ].includes(action)) ||
           (module === "licenses" && ["assign", "revoke"].includes(action));
         const taskConsistent = (
           ctx: ToolContext,
@@ -2834,10 +2955,11 @@ export class WorkspaceStore {
         return {
           id: toolId,
           version:
-            module === "assets" ||
-            (module === "cases" && action === "bindEvidence")
-              ? "5"
-              : "4",
+            module === "assets"
+              ? "6"
+              : module === "cases" && action === "bindEvidence"
+                ? "5"
+                : "4",
           ...(taskCustody
             ? {
                 canAccess: (
@@ -2938,10 +3060,11 @@ export class WorkspaceStore {
             this.db.exec("BEGIN IMMEDIATE");
             try {
               const existing = this.ledger(ctx, toolId, input);
-              // A committed custody receipt is reconciled from its pinned event;
+              // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
               const profile =
-                usesProfile && !(existing && custodyMutation)
+                usesProfile &&
+                !(existing && (custodyMutation || registerMutation))
                   ? this.pinnedProfile(ctx.tenantId, input)
                   : this.currentProfile(ctx.tenantId);
               if (existing) {
@@ -2975,6 +3098,14 @@ export class WorkspaceStore {
                     "VERSION_CONFLICT",
                     "Rekord zmienił się. Odczytaj aktualną wersję.",
                   );
+                if (
+                  module === "assets" &&
+                  !this.registerStore.verify(ctx.tenantId, e)
+                )
+                  fail(
+                    "ASSET_HISTORY_INCONSISTENT",
+                    "Historia ewidencji urządzenia jest niespójna.",
+                  );
                 if (action === "update") {
                   if (
                     [
@@ -2985,6 +3116,7 @@ export class WorkspaceStore {
                       "cancelled",
                       "received",
                       "exited",
+                      "retired",
                     ].includes(e.status)
                   )
                     fail(
@@ -2995,14 +3127,15 @@ export class WorkspaceStore {
                     p.data &&
                     Object.keys(p.data).length &&
                     (["documents", "cases", "licenses"].includes(module) ||
-                      ![
-                        "draft",
-                        "registered",
-                        "available",
-                        "open",
-                        "new",
-                        "active",
-                      ].includes(e.status))
+                      (module !== "assets" &&
+                        ![
+                          "draft",
+                          "registered",
+                          "available",
+                          "open",
+                          "new",
+                          "active",
+                        ].includes(e.status)))
                   )
                     fail(
                       "REVISION_REQUIRED",
@@ -3235,7 +3368,11 @@ export class WorkspaceStore {
                   this.relationalStateMatches(
                     ctx.tenantId,
                     this.fromRow(entity),
-                  ),
+                  ) &&
+                  (change.module !== "assets" ||
+                    !JSON.parse(String(version.snapshot_json)).data
+                      .registerHistoryFromVersion ||
+                    this.registerStore.verifyCommitted(ctx, change.id)),
                 );
                 ok = ok && valid;
                 if (!taskCustody || change.module === "assets")

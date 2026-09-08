@@ -151,8 +151,13 @@ function CommandForm({
   const assignees = useResource<{
     assignees: { id: string; label: string }[];
   }>(
-    spec.entity && spec.fields.some((field) => field.key === "ownerPrincipalId")
-      ? `/api/cases/${encodeURIComponent(spec.entity.id)}/owners`
+    spec.entity &&
+      spec.fields.some((field) =>
+        ["ownerPrincipalId", "custodianPrincipalId"].includes(field.key),
+      )
+      ? module.id === "assets"
+        ? `/api/assets/${encodeURIComponent(spec.entity.id)}/custodians`
+        : `/api/cases/${encodeURIComponent(spec.entity.id)}/owners`
       : null,
   );
   const [busy, setBusy] = useState(false);
@@ -342,16 +347,17 @@ function CommandForm({
       required: field.required,
       disabled: busy,
     };
-    const options =
-      field.key === "ownerPrincipalId"
-        ? (assignees.data?.assignees ?? [])
-        : needsPeriod && field.key === "caseId"
-          ? employmentCaseOptions(
-              refs.records.cases ?? [],
-              personId,
-              values.employmentEpisodeId,
-            )
-          : referenceOptions(field.key, refs.records, values, spec.entity);
+    const options = ["ownerPrincipalId", "custodianPrincipalId"].includes(
+      field.key,
+    )
+      ? (assignees.data?.assignees ?? [])
+      : needsPeriod && field.key === "caseId"
+        ? employmentCaseOptions(
+            refs.records.cases ?? [],
+            personId,
+            values.employmentEpisodeId,
+          )
+        : referenceOptions(field.key, refs.records, values, spec.entity);
     const set = (value: unknown) =>
       setValues((current) => changeCommandField(current, field.key, value));
     if (field.key === "dependsOn")
@@ -427,10 +433,14 @@ function CommandForm({
               onChange={(event) => set(event.target.value)}
             >
               <option value="">
-                {field.key === "ownerPrincipalId"
+                {["ownerPrincipalId", "custodianPrincipalId"].includes(
+                  field.key,
+                )
                   ? assignees.loading
                     ? "Pobieranie kont…"
-                    : "Wybierz konto właściciela…"
+                    : module.id === "assets"
+                      ? "Wybierz opiekuna ewidencji…"
+                      : "Wybierz konto właściciela…"
                   : options.length
                     ? "Wybierz rekord…"
                     : field.key === "employmentEpisodeId"
@@ -445,8 +455,12 @@ function CommandForm({
             </select>
             {!options.length && (
               <small>
-                {field.key === "ownerPrincipalId"
-                  ? "Właściciel musi mieć dostęp do całej sprawy. JARVIS sprawdzi uprawnienia konta przed zapisem."
+                {["ownerPrincipalId", "custodianPrincipalId"].includes(
+                  field.key,
+                )
+                  ? module.id === "assets"
+                    ? "Opiekun musi mieć dostęp do ewidencji sprzętu. JARVIS sprawdzi aktywne konto przed zapisem."
+                    : "Właściciel musi mieć dostęp do całej sprawy. JARVIS sprawdzi uprawnienia konta przed zapisem."
                   : "Dodaj potrzebny rekord w odpowiednim obszarze, a następnie wróć do tej operacji."}
               </small>
             )}
@@ -711,23 +725,32 @@ export function WorkspacePage({
                     </span>
                   </div>
                 </div>
-                {allowedTool("update") && (
-                  <button
-                    className="button secondary"
-                    onClick={() =>
-                      setForm({
-                        title: "Zmień nazwę",
-                        action: "update",
-                        fields: [],
-                        entity: item,
-                        dataForm: true,
-                      })
-                    }
-                  >
-                    <Icon name="edit" size={17} />
-                    Edytuj
-                  </button>
-                )}
+                {allowedTool("update") &&
+                  !(module.id === "assets" && item.status === "retired") && (
+                    <button
+                      className="button secondary"
+                      onClick={() =>
+                        setForm({
+                          title:
+                            module.id === "assets"
+                              ? "Zmień dane ewidencji"
+                              : "Zmień nazwę",
+                          action: "update",
+                          fields:
+                            module.id === "assets"
+                              ? module.fields.filter((f) =>
+                                  ["manufacturer", "model"].includes(f.key),
+                                )
+                              : [],
+                          entity: item,
+                          dataForm: true,
+                        })
+                      }
+                    >
+                      <Icon name="edit" size={17} />
+                      Edytuj
+                    </button>
+                  )}
               </div>
               {item.module === "cases" && (
                 <CaseReadiness
@@ -806,6 +829,27 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            (module.id !== "assets" ||
+                              action.id === "assignCustodian" ||
+                              (action.id === "reserve" &&
+                                item.status === "available" &&
+                                item.data.condition === "good") ||
+                              ([
+                                "issue",
+                                "release",
+                                "expireReservation",
+                              ].includes(action.id) &&
+                                item.status === "reserved") ||
+                              (action.id === "return" &&
+                                item.status === "issued") ||
+                              (["move", "sendToService", "retire"].includes(
+                                action.id,
+                              ) &&
+                                ["available", "maintenance"].includes(
+                                  item.status,
+                                )) ||
+                              (action.id === "markRepaired" &&
+                                item.status === "maintenance")) &&
                             !(
                               module.id === "assets" &&
                               action.id.endsWith("ForTask")

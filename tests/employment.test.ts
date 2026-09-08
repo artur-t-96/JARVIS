@@ -560,7 +560,7 @@ test("v3 migration pins only unambiguous lifecycle cases and preserves unresolve
   new WorkspaceStore(path).close();
   let db = new DatabaseSync(path);
   db.exec(
-    "DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version=5",
+    "DROP TABLE ops_asset_register_events; DROP TABLE ops_asset_events; ALTER TABLE ops_tasks DROP COLUMN template_key; DELETE FROM schema_versions_operations WHERE version>=5",
   );
   for (const column of [
     "version",
@@ -734,7 +734,7 @@ test("v3 migration pins only unambiguous lifecycle cases and preserves unresolve
       db
         .prepare("SELECT max(version) AS n FROM schema_versions_operations")
         .get()!.n,
-      5,
+      6,
     );
   } finally {
     db.close();
