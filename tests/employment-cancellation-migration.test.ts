@@ -34,7 +34,10 @@ test("v11 preserves historical employment and access foreign keys and permits a 
       VALUES('synthetic','episode','person','internal','2026-09-10','onboarding','Historical role',3,'case','2026-09-02');
       INSERT INTO ops_access_grants VALUES('synthetic','grant','app','person','episode','case','member','synthetic-account','active',1,'{}','historical-hash','event');
       INSERT INTO ops_access_events VALUES('synthetic','event','grant',1,'{}','historical-event-hash','historical-operation');`);
-    const employment = db.prepare("SELECT * FROM ops_employment").all(),
+    const employment = db
+        .prepare("SELECT * FROM ops_employment")
+        .all()
+        .map((row) => ({ ...row })),
       entities = db.prepare("SELECT * FROM ops_entities ORDER BY id").all(),
       grants = db.prepare("SELECT * FROM ops_access_grants").all(),
       events = db.prepare("SELECT * FROM ops_access_events").all();
