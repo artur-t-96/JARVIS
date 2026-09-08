@@ -5,7 +5,7 @@ export interface EmploymentPeriod {
   personId: string;
   version: number;
   kind: "internal" | "contractor";
-  status: "onboarding" | "active" | "offboarding" | "ended";
+  status: "onboarding" | "active" | "offboarding" | "ended" | "cancelled";
   startDate: string;
   endDate: string | null;
   role: string;

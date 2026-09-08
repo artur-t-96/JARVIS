@@ -54,7 +54,7 @@ test("v9 preserves frozen v8 document content and unknown authors; a DDL conflic
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      10,
+      11,
     );
     const doc = db.prepare("SELECT * FROM ops_document_versions").get()!;
     assert.equal(doc.content, "Historical approved content");

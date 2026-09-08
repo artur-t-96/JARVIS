@@ -1,5 +1,6 @@
 import type { JsonObject } from "./contracts.js";
 import type { EmploymentEpisode } from "./workspace.js";
+import type { StartCancellation } from "./employment-cancellation.js";
 
 export interface OnboardingStage {
   id:
@@ -24,6 +25,12 @@ export function onboardingStage(input: {
   startDate: string;
   today: string;
 }): OnboardingStage {
+  if (input.episodeStatus === "cancelled")
+    return {
+      id: "cancelled",
+      title: "Rozpoczęcie współpracy anulowane",
+      next: "Decyzja o niezrealizowanym starcie została zapisana po rozliczeniu zasobów. Historia pozostaje dostępna. Nowy start wymaga osobnego okresu, zakresu i dowodów.",
+    };
   if (input.episodeStatus === "active")
     return {
       id: "active",
@@ -120,6 +127,8 @@ export interface OnboardingOverview {
     overdue: boolean;
     waitingFor: string[];
   }[];
+  cancellation?: StartCancellation;
+  cancellationDecision?: EmploymentEpisode["cancellation"];
   /** Suggestion only: Core binds and rechecks actual authority and versions. */
   command?: {
     action: "submit" | "review" | "activate";

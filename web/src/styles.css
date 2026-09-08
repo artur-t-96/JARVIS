@@ -3148,6 +3148,22 @@ tbody tr:hover {
   font-size: 14px;
   font-weight: 600;
 }
+.onboarding-cancellation {
+  border-top: 1px solid var(--line);
+  padding-top: 18px;
+  margin-top: 22px;
+  font-size: 14px;
+}
+.onboarding-cancellation > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.onboarding-cancellation li {
+  margin: 16px 0;
+}
+.onboarding-cancellation p {
+  line-height: 1.6;
+}
 .onboarding-variant h4 {
   margin: 16px 0 8px;
 }

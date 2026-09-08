@@ -67,6 +67,11 @@ import {
 } from "./workspace-tasks.js";
 import { onboardingStage, type OnboardingOverview } from "./onboarding.js";
 import {
+  cancellationScopes,
+  migrateEmploymentCancellation,
+  type StartCancellation,
+} from "./employment-cancellation.js";
+import {
   onboardingVariantsSchema,
   type OnboardingVariants,
 } from "./onboarding-profile.js";
@@ -87,7 +92,7 @@ export interface EmploymentEpisode {
   personId: string;
   version: number;
   kind: "internal" | "contractor";
-  status: "onboarding" | "active" | "offboarding" | "ended";
+  status: "onboarding" | "active" | "offboarding" | "ended" | "cancelled";
   startDate: string;
   endDate: string | null;
   endReason: string | null;
@@ -95,6 +100,12 @@ export interface EmploymentEpisode {
   onboardingCaseId: string | null;
   offboardingCaseId: string | null;
   engagementRef: EngagementRef | null;
+  cancellation?: {
+    at: string;
+    reason: string;
+    requestedBy: string;
+    approvedBy: string;
+  };
 }
 type Row = Record<string, unknown>;
 type CommandInput = {
@@ -359,6 +370,12 @@ export class WorkspaceStore {
           name: "File-backed document revision contract",
           // Prevent older runtimes from approving revisions without verifying files.
           up: () => {},
+        },
+        {
+          version: 11,
+          name: "Explicit cancellation of an unstarted employment episode",
+          rebuildTables: true,
+          up: migrateEmploymentCancellation,
         },
       ],
     });
@@ -648,7 +665,41 @@ export class WorkspaceStore {
             : [dependency?.title ?? "Niedostępne zadanie zależne"];
         }),
       })),
+      ...(episode.cancellation
+        ? { cancellationDecision: episode.cancellation }
+        : {}),
     };
+    if (
+      episode.status === "onboarding" &&
+      cancellationScopes.every(
+        (s) => live.scopes?.includes("*") || live.scopes?.includes(s),
+      )
+    ) {
+      overview.cancellation = this.cancellationResources(
+        live.tenantId,
+        person.id,
+        episode.id,
+      );
+      if (
+        overview.cancellation.ready &&
+        live.roles.includes("operator") &&
+        c.data.ownerPrincipalId === live.id
+      )
+        overview.cancellation.command = {
+          toolId: "ops.people.cancelStart",
+          input: {
+            id: person.id,
+            expectedVersion: person.version,
+            employmentEpisodeId: episode.id,
+            expectedEpisodeVersion: episode.version,
+            onboardingCaseId: c.id,
+            expectedCaseVersion: c.version,
+            scopeRevision: readiness.scopeRevision,
+            scopeHash: readiness.scopeHash,
+            resourceHash: overview.cancellation.resourceHash,
+          },
+        };
+    }
     if (
       live.roles.includes("operator") &&
       stage.action &&
@@ -1191,6 +1242,10 @@ export class WorkspaceStore {
         ? ((input.data ?? {}) as JsonObject)
         : this.read(tenant, module, String(input.id)).data;
     scopes.push(...this.entityScopes(module, data, tenant));
+    if (module === "people" && action === "cancelStart") {
+      const c = this.read(tenant, "cases", String(input.onboardingCaseId));
+      scopes.push(...this.entityScopes("cases", c.data, tenant));
+    }
     if (
       module === "it" &&
       ["application", "access_bundle"].includes(String(data.kind))
@@ -1668,6 +1723,13 @@ export class WorkspaceStore {
       version: Number(row.version),
       kind: row.kind as EmploymentEpisode["kind"],
       status: row.status as EmploymentEpisode["status"],
+      ...(row.cancellation_json
+        ? {
+            cancellation: JSON.parse(
+              String(row.cancellation_json),
+            ) as NonNullable<EmploymentEpisode["cancellation"]>,
+          }
+        : {}),
       startDate: String(row.start_date),
       endDate: row.end_date ? String(row.end_date) : null,
       endReason: row.end_reason ? String(row.end_reason) : null,
@@ -1901,14 +1963,16 @@ export class WorkspaceStore {
   }
   private syncPerson(cmd: { ctx: { tenantId: string } }, person: Entity) {
     const episodes = this.employmentRows(cmd.ctx.tenantId, person.id);
-    const open = episodes.filter((row) => row.status !== "ended");
+    const open = episodes.filter(
+      (row) => !["ended", "cancelled"].includes(String(row.status)),
+    );
     person.status = open.some((row) => row.status === "active")
       ? "active"
       : open.some((row) => row.status === "onboarding")
         ? "onboarding"
         : open.length
           ? "offboarding"
-          : episodes.length
+          : episodes.some((row) => row.status === "ended")
             ? "exited"
             : "registered";
     person.data.employmentEpisodes = episodes.map((row) =>
@@ -1976,7 +2040,7 @@ export class WorkspaceStore {
   ) {
     const policy = cmd.profile?.employmentPolicy ?? defaultEmploymentPolicy;
     const existing = this.employmentRows(cmd.ctx.tenantId, personId).filter(
-      (row) => row.id !== excludeId,
+      (row) => row.id !== excludeId && row.status !== "cancelled",
     );
     const open = existing.filter((row) => row.status !== "ended");
     const overlap = existing.filter(
@@ -2322,6 +2386,286 @@ export class WorkspaceStore {
     e.status = "cancelled";
     e.data.cancellationReason = reason;
   }
+  private entityConsistent(tenant: string, e: Entity): boolean {
+    const version = this.db
+      .prepare(
+        "SELECT snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+      )
+      .get(tenant, e.id, e.version);
+    return (
+      version?.snapshot_hash === digest(e) &&
+      this.relationalStateMatches(tenant, e)
+    );
+  }
+  private cancellationTasksConsistent(tenant: string, c: Entity): boolean {
+    const tasks = this.taskStore.rows(
+      tenant,
+      c.id,
+      Number(c.data.scopeRevision),
+    );
+    if (canonical(c.data.tasks ?? []) !== canonical(tasks)) return false;
+    return tasks.every((task) => {
+      const event = this.taskStore.history(tenant, task.id).at(-1);
+      if (!event) return task.provenance === "legacy";
+      return (
+        event.taskVersion === task.version &&
+        event.toStatus === task.status &&
+        event.assigneePrincipalId === task.assigneePrincipalId &&
+        event.requestedBy === task.requestedBy &&
+        event.approvedBy === task.approvedBy
+      );
+    });
+  }
+  private cancellationResources(
+    tenant: string,
+    personId: string,
+    episodeId: string,
+  ): StartCancellation {
+    const blockers: StartCancellation["blockers"] = [],
+      fingerprints: JsonObject[] = [];
+    const integrity = (module: "assets" | "licenses" | "cases", id: string) => {
+      try {
+        const e = this.read(tenant, module, id);
+        if (!this.entityConsistent(tenant, e))
+          throw new Error("Inconsistent resource");
+        fingerprints.push({ module, id, version: e.version, hash: digest(e) });
+        return e.title;
+      } catch {
+        blockers.push({
+          kind: "integrity",
+          module,
+          id,
+          title: "Niespójna historia zasobu",
+          next: "Wyjaśnij rozbieżność ewidencji przed anulowaniem startu.",
+        });
+        fingerprints.push({ module, id, inconsistent: true });
+        return "Zasób wymagający wyjaśnienia";
+      }
+    };
+    for (const [module, table, resourceColumn, snapshotField] of [
+      ["assets", "ops_allocations", "asset_id", "allocations"],
+      ["licenses", "ops_license_seats", "license_id", "assignments"],
+    ] as const) {
+      const rows = this.db
+        .prepare(
+          `SELECT * FROM ${table} WHERE tenant_id=? AND person_id=? AND (employment_episode_id=? OR employment_episode_id IS NULL) ORDER BY id`,
+        )
+        .all(tenant, personId, episodeId) as Row[];
+      // Include immutable entity projections as well as relational rows. A
+      // missing allocation must be a discrepancy, not proof of its return.
+      const snapshots = this.db
+        .prepare(
+          `SELECT e.id FROM ops_entities e WHERE e.tenant_id=? AND e.module=? AND EXISTS (SELECT 1 FROM json_each(e.data_json,'$.${snapshotField}') a WHERE json_extract(a.value,'$.personId')=? AND (json_extract(a.value,'$.employmentEpisodeId')=? OR json_extract(a.value,'$.employmentEpisodeId') IS NULL)) ORDER BY e.id`,
+        )
+        .all(tenant, module, personId, episodeId);
+      const ids = [
+        ...new Set([
+          ...rows.map((r) => String(r[resourceColumn])),
+          ...snapshots.map((r) => String(r.id)),
+        ]),
+      ].sort();
+      const names = new Map(ids.map((id) => [id, integrity(module, id)]));
+      fingerprints.push({ module, rowsHash: digest(rows) });
+      for (const row of rows) {
+        if (!["reserved", "issued", "assigned"].includes(String(row.status)))
+          continue;
+        const id = String(row[resourceColumn]);
+        const unresolved = !row.employment_episode_id;
+        blockers.push({
+          kind: unresolved
+            ? "unresolved"
+            : module === "licenses"
+              ? "license"
+              : row.status === "reserved"
+                ? "reservation"
+                : "equipment",
+          module,
+          id,
+          title: names.get(id)!,
+          next: unresolved
+            ? "Rozstrzygnij historyczne powiązanie zasobu z okresem współpracy albo potwierdź jego zwrot."
+            : module === "licenses"
+              ? "Zamknij przydział miejsca licencyjnego tego okresu."
+              : row.status === "reserved"
+                ? "Zwolnij rezerwację tego okresu."
+                : "Potwierdź rzeczywisty zwrot wydanego sprzętu.",
+        });
+      }
+    }
+    const grants = this.db
+      .prepare(
+        "SELECT * FROM ops_access_grants WHERE tenant_id=? AND person_id=? AND employment_episode_id=? ORDER BY id",
+      )
+      .all(tenant, personId, episodeId) as Row[];
+    const cases = this.db
+      .prepare(
+        "SELECT id FROM ops_entities WHERE tenant_id=? AND module='cases' AND json_extract(data_json,'$.personId')=? AND json_extract(data_json,'$.employmentEpisodeId')=? ORDER BY id",
+      )
+      .all(tenant, personId, episodeId);
+    for (const id of [
+      ...new Set([
+        ...grants.map((g) => String(g.case_id)),
+        ...cases.map((c) => String(c.id)),
+      ]),
+    ].sort())
+      integrity("cases", id);
+    fingerprints.push({ module: "it", rowsHash: digest(grants) });
+    for (const g of grants.filter((g) => g.status === "active"))
+      blockers.push({
+        kind: "access",
+        module: "cases",
+        id: String(g.case_id),
+        title: "Dostęp wymagający cofnięcia",
+        next: "Poświadcz cofnięcie dostępu w aplikacji. Upływ ważności obserwacji nie dowodzi odebrania uprawnień.",
+      });
+    return {
+      ready: blockers.length === 0,
+      blockers,
+      resourceHash: digest(fingerprints),
+    };
+  }
+  private cancelStartAuthority(ctx: ToolContext, input: JsonObject) {
+    const actor = this.livePrincipal(ctx.tenantId, ctx.actorId),
+      approver = this.livePrincipal(ctx.tenantId, ctx.approvedBy);
+    if (
+      !actor?.roles.includes("operator") ||
+      !approver?.roles.includes("approver")
+    )
+      fail(
+        "CANCELLATION_AUTHORITY",
+        "Anulowanie wymaga aktywnego operatora i osoby zatwierdzającej.",
+        403,
+      );
+    for (const p of [actor, approver])
+      for (const scope of cancellationScopes) this.scope(p, scope);
+    const c = this.get(actor, "cases", String(input.onboardingCaseId));
+    if (c.data.ownerPrincipalId !== actor.id)
+      fail(
+        "CANCELLATION_OWNER",
+        "Decyzję o anulowaniu rozpoczęcia podejmuje właściciel sprawy onboardingu.",
+        403,
+      );
+  }
+  private cancelStart(cmd: Command, person: Entity, input: CommandInput) {
+    const episode = this.employmentEpisode(cmd, person.id, input, [
+        "onboarding",
+      ]),
+      c = this.ref(cmd, "cases", input.onboardingCaseId);
+    if (
+      episode.onboarding_case_id !== c.id ||
+      c.data.caseType !== "onboarding" ||
+      c.data.personId !== person.id ||
+      c.data.employmentEpisodeId !== episode.id
+    )
+      fail(
+        "CANCELLATION_BINDING",
+        "Wybierz sprawę onboardingu właściwej osoby i okresu współpracy.",
+      );
+    const readiness = this.readinessStore.evaluate(
+      cmd.ctx.tenantId,
+      c,
+      cmd.now,
+    );
+    if (
+      c.version !== input.expectedCaseVersion ||
+      c.data.scopeRevision !== input.scopeRevision ||
+      readiness.scopeHash !== input.scopeHash
+    )
+      fail(
+        "CANCELLATION_SCOPE_CHANGED",
+        "Zakres onboardingu zmienił się. Odczytaj go i przygotuj nową decyzję.",
+      );
+    if (
+      !this.entityConsistent(cmd.ctx.tenantId, person) ||
+      !this.entityConsistent(cmd.ctx.tenantId, c) ||
+      !this.cancellationTasksConsistent(cmd.ctx.tenantId, c)
+    )
+      fail(
+        "CANCELLATION_STATE_INCONSISTENT",
+        "Historia osoby lub sprawy jest niespójna. Anulowanie wymaga wyjaśnienia.",
+      );
+    const resources = this.cancellationResources(
+      cmd.ctx.tenantId,
+      person.id,
+      String(episode.id),
+    );
+    if (resources.resourceHash !== input.resourceHash)
+      fail(
+        "CANCELLATION_RESOURCES_CHANGED",
+        "Stan rozliczenia zasobów zmienił się. Przygotuj aktualny plan anulowania.",
+      );
+    if (!resources.ready)
+      fail(
+        "CANCELLATION_RESOURCES_OPEN",
+        "Najpierw rozlicz rezerwacje, wydania, licencje i dostępy tego okresu oraz historyczne niejasności.",
+      );
+    const decision = {
+      at: cmd.now,
+      reason: String(input.reason),
+      requestedBy: cmd.ctx.actorId!,
+      approvedBy: cmd.ctx.approvedBy!,
+    };
+    this.cancelCase(cmd, c, decision.reason);
+    c.data.startCancellation = asJson({
+      ...decision,
+      resourceHash: resources.resourceHash,
+      employmentEpisodeId: episode.id,
+      workNeverStarted: true,
+    });
+    this.save(cmd, c);
+    this.db
+      .prepare(
+        "UPDATE ops_employment SET status='cancelled',cancellation_json=?,version=version+1,updated_at=? WHERE tenant_id=? AND id=? AND version=?",
+      )
+      .run(
+        canonical(decision),
+        cmd.now,
+        cmd.ctx.tenantId,
+        String(episode.id),
+        Number(episode.version),
+      );
+    this.syncPerson(cmd, person);
+  }
+  private cancellationCommitted(ctx: ToolContext, input: JsonObject): boolean {
+    try {
+      const row = this.db
+        .prepare(
+          "SELECT * FROM ops_employment WHERE tenant_id=? AND id=? AND person_id=?",
+        )
+        .get(ctx.tenantId, String(input.employmentEpisodeId), String(input.id));
+      if (
+        !row ||
+        row.status !== "cancelled" ||
+        row.end_date !== null ||
+        row.version !== Number(input.expectedEpisodeVersion) + 1
+      )
+        return false;
+      const decision = JSON.parse(String(row.cancellation_json));
+      const c = this.read(
+        ctx.tenantId,
+        "cases",
+        String(input.onboardingCaseId),
+      );
+      return (
+        decision.requestedBy === ctx.actorId &&
+        decision.approvedBy === ctx.approvedBy &&
+        decision.reason === input.reason &&
+        c.status === "cancelled" &&
+        c.data.employmentEpisodeId === row.id &&
+        this.cancellationTasksConsistent(ctx.tenantId, c) &&
+        this.cancellationResources(
+          ctx.tenantId,
+          String(input.id),
+          String(row.id),
+        ).ready &&
+        this.taskStore
+          .rows(ctx.tenantId, c.id, Number(c.data.scopeRevision))
+          .every((t) => ["completed", "cancelled"].includes(t.status))
+      );
+    } catch {
+      return false;
+    }
+  }
   private change(
     cmd: Command,
     e: Entity,
@@ -2332,6 +2676,7 @@ export class WorkspaceStore {
     if (e.module === "people") {
       this.human(cmd, input);
       if (action === "startEmployment") this.startEmployment(cmd, e, input);
+      else if (action === "cancelStart") this.cancelStart(cmd, e, input);
       else {
         const episode = this.employmentEpisode(
           cmd,
@@ -3620,6 +3965,7 @@ export class WorkspaceStore {
         ...actionSchemas[module],
       }).map(([action, inputSchema]): ToolDefinition => {
         const toolId = `ops.${module}.${action}`;
+        const cancelStart = module === "people" && action === "cancelStart";
         const lifecycle = [
           "people.startEmployment",
           "people.beginOffboarding",
@@ -3850,8 +4196,9 @@ export class WorkspaceStore {
               "Brak zapisanego wyniku dokumentu.",
             );
         };
-        const requiredScopes =
-          taskCustody || taskAccess
+        const requiredScopes = cancelStart
+          ? cancellationScopes
+          : taskCustody || taskAccess
             ? ["it"]
             : module === "people" && action !== "create" && action !== "update"
               ? ["cases"]
@@ -3877,27 +4224,29 @@ export class WorkspaceStore {
                 action);
         return {
           id: toolId,
-          version: lifecycle
-            ? "5"
-            : module === "documents"
-              ? "10"
-              : taskAccess
-                ? "1"
-                : accessMutation ||
-                    (module === "it" &&
-                      [
-                        "reviseAccessBundle",
-                        "reviseApplication",
-                        "retireAccessDefinition",
-                      ].includes(action))
-                  ? "8"
-                  : module === "assets"
-                    ? action === "replaceReservation"
-                      ? "7"
-                      : "6"
-                    : module === "cases" && action === "bindEvidence"
-                      ? "6"
-                      : "4",
+          version: cancelStart
+            ? "1"
+            : lifecycle
+              ? "5"
+              : module === "documents"
+                ? "10"
+                : taskAccess
+                  ? "1"
+                  : accessMutation ||
+                      (module === "it" &&
+                        [
+                          "reviseAccessBundle",
+                          "reviseApplication",
+                          "retireAccessDefinition",
+                        ].includes(action))
+                    ? "8"
+                    : module === "assets"
+                      ? action === "replaceReservation"
+                        ? "7"
+                        : "6"
+                      : module === "cases" && action === "bindEvidence"
+                        ? "6"
+                        : "4",
           ...(taskAccess
             ? {
                 canAccess: (
@@ -4043,6 +4392,7 @@ export class WorkspaceStore {
                 400,
               );
             const input = asJson(parsed.data);
+            if (cancelStart) this.cancelStartAuthority(ctx, input);
             requireDocumentAuthority(ctx, input);
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
@@ -4063,6 +4413,11 @@ export class WorkspaceStore {
                   ? this.pinnedProfile(ctx.tenantId, input)
                   : this.currentProfile(ctx.tenantId);
               if (existing) {
+                if (cancelStart && !this.cancellationCommitted(ctx, input))
+                  fail(
+                    "CANCELLATION_RECEIPT_INCONSISTENT",
+                    "Zapisane anulowanie wymaga uzgodnienia historii i zasobów.",
+                  );
                 requireCommittedTask(ctx, input);
                 requireCommittedCustody(ctx, input);
                 requireCommittedAccess(ctx, input);
@@ -4386,6 +4741,14 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            if (cancelStart) {
+              this.cancelStartAuthority(ctx, asJson(parsed.data));
+              if (row && !this.cancellationCommitted(ctx, asJson(parsed.data)))
+                fail(
+                  "CANCELLATION_RECEIPT_INCONSISTENT",
+                  "Zapisane anulowanie wymaga uzgodnienia historii i zasobów.",
+                );
+            }
             if (lifecycle && !row)
               this.pinnedProfile(ctx.tenantId, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));
@@ -4413,6 +4776,8 @@ export class WorkspaceStore {
             if (!parsed.success)
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
+            if (cancelStart)
+              this.cancelStartAuthority(ctx, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));
             requireCommittedDocument(ctx, row);
             if (row) {
@@ -4422,6 +4787,8 @@ export class WorkspaceStore {
             }
             let ok = Boolean(
               row &&
+              (!cancelStart ||
+                this.cancellationCommitted(ctx, asJson(parsed.data))) &&
               canonical(result) === row.receipt_json &&
               accessConsistent(ctx) &&
               (!custodyMutation ||

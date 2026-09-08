@@ -912,6 +912,10 @@ export function WorkspacePage({
                           (action) =>
                             allowedTool(action.id) &&
                             !(
+                              module.id === "people" &&
+                              action.id === "cancelStart"
+                            ) &&
+                            !(
                               module.id === "cases" &&
                               item.data.caseType === "onboarding" &&
                               ["submit", "accept"].includes(action.id)

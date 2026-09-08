@@ -402,6 +402,20 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     activate: z
       .object({ ...base, ...episodeInput, humanDecision: yes })
       .strict(),
+    cancelStart: z
+      .object({
+        ...base,
+        ...episodeInput,
+        onboardingCaseId: id,
+        expectedCaseVersion: z.number().int().positive(),
+        scopeRevision: z.number().int().positive(),
+        scopeHash: z.string().regex(/^[a-f0-9]{64}$/),
+        resourceHash: z.string().regex(/^[a-f0-9]{64}$/),
+        reason: text,
+        workNeverStarted: yes,
+        humanDecision: yes,
+      })
+      .strict(),
     beginOffboarding: z
       .object({
         ...base,
@@ -1066,6 +1080,7 @@ const actionLabels: Record<string, string> = {
   activate: "Potwierdź rozpoczęcie pracy",
   beginOffboarding: "Rozpocznij offboarding",
   endEmployment: "Potwierdź zakończenie współpracy",
+  cancelStart: "Anuluj rozpoczęcie współpracy",
   revise: "Utwórz nową rewizję",
   attachFile: "Dodaj plik do nowej rewizji",
   detachFile: "Usuń plik z nowej rewizji",

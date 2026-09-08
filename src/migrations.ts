@@ -3,6 +3,8 @@ import type { DatabaseSync } from "node:sqlite";
 export interface Migration {
   version: number;
   name: string;
+  /** Rebuild a referenced table using SQLite's copy/drop/rename procedure. */
+  rebuildTables?: boolean;
   up(database: DatabaseSync): void;
 }
 
@@ -32,8 +34,29 @@ export function migrateDatabase(
   const table =
     namespace === "core" ? "schema_versions" : `schema_versions_${namespace}`;
   const applied: number[] = [];
-  database.exec("BEGIN IMMEDIATE");
+  const hasLedger = database
+    .prepare("SELECT 1 FROM sqlite_schema WHERE type='table' AND name=?")
+    .get(table);
+  const previous = hasLedger
+    ? Number(
+        database
+          .prepare(`SELECT coalesce(max(version),0) AS v FROM ${table}`)
+          .get()!.v,
+      )
+    : 0;
+  const rebuild = migrations.some(
+    (m) => m.version > previous && m.rebuildTables,
+  );
+  const foreignKeys = Number(
+    database.prepare("PRAGMA foreign_keys").get()!.foreign_keys,
+  );
+  // PRAGMA foreign_keys must be changed before BEGIN. The final integrity check
+  // and migration ledger are committed together, and enforcement is restored.
+  if (rebuild && foreignKeys) database.exec("PRAGMA foreign_keys=OFF");
+  let transaction = false;
   try {
+    database.exec("BEGIN IMMEDIATE");
+    transaction = true;
     database.exec(`CREATE TABLE IF NOT EXISTS ${table} (
       version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL
     )`);
@@ -57,10 +80,17 @@ export function migrateDatabase(
       record.run(migration.version, new Date().toISOString());
       applied.push(migration.version);
     }
+    if (rebuild && database.prepare("PRAGMA foreign_key_check").all().length)
+      throw new Error(
+        `Migration ${namespace} would break foreign key references.`,
+      );
     database.exec("COMMIT");
+    transaction = false;
     return { version: migrations.length, applied };
   } catch (error) {
-    database.exec("ROLLBACK");
+    if (transaction) database.exec("ROLLBACK");
     throw error;
+  } finally {
+    if (rebuild && foreignKeys) database.exec("PRAGMA foreign_keys=ON");
   }
 }

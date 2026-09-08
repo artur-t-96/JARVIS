@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P06b1: końcowy odbiór dostawy PR #19.** Warianty obu rodzajów współpracy, Chrome dwóch firm i odtworzenie kopii przeszły opisane niżej próby. Pozostają końcowe CI, scalenie i odbiór właściwej głównej instalacji. Następnie P06b2: jawne anulowanie przed startem i rozliczenie zasobów. [Projekt i macierz P06](p06-design.md). Spis z natury oraz import P05b pozostają otwarte.
+**P06b2: anulowanie rozpoczęcia współpracy.** Baza: odebrany lokalnie PR #19, `907edea9455e186b2ede6c866aa89d8f3ad7f609`. Worktree `/private/tmp/jarvis-cancel-onboarding`, gałąź `codex/cancel-onboarding`. Jawna decyzja o niezrealizowanym starcie, rozliczenie zasobów właściwego okresu, zachowanie historii i możliwość nowego startu. [Projekt i macierz P06](p06-design.md). Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -321,3 +321,19 @@ Rzeczywisty Chrome: konfiguracja Alfy `30fd0dad-93cd-40bc-ba89-6136eeb882d0`, st
 Po zatrzymaniu podglądu wykonano i odtworzono sześcioplikową kopię: `/private/tmp/jarvis-p06b1-backup-20260908T1841` → `/private/tmp/jarvis-p06b1-restored-20260908T1841`, manifest `d09eabb731b76ff54c3dcebf5c8698d56bafe4920cef85a11d2354d33299b933`. Dwa profile, sześć okresów współpracy i wszystkie sprawy zachowały stan. Replay sześciu zapisanych komend nie zmienił liczników. Po zgodzie odtworzone oczekiwanie utworzyło tylko jedną wersję profilu (v3) i jeden receipt; nie zmieniło żadnej sprawy ani zadania. Replay siedmiu komend ponownie nie miał skutków. Konta i sesje nie należą do odtwarzanej kopii; próba wykorzystała jawnie podane syntetyczne tożsamości.
 
 Prywatne dowody: `/private/tmp/jarvis-onboarding-variants/.data/p06b1-preview/ui-proof.json`, `verify-cases.mjs`, `restore-proof.ts`. Końcowa bramka dokumentacji, scalenie i odbiór głównego lab/operational oraz OSS pozostają wymagane. P06b2 jest kolejną dostawą; cały K03 nadal pozostaje otwarty.
+
+## P06b1 — dostarczone lokalnie
+
+[PR #19](https://github.com/artur-t-96/JARVIS/pull/19) scalono jako `907edea9455e186b2ede6c866aa89d8f3ad7f609`. Końcowe [CI PR 34264734499](https://github.com/artur-t-96/JARVIS/actions/runs/34264734499), źródło `c42cc94dc1a197b54dec0f5dc8ce27198cb35017`, i [CI main 34265196745](https://github.com/artur-t-96/JARVIS/actions/runs/34265196745) zielone: 356 testów i pełne bramki. Zarządzana aktualizacja 8.09.2026 18:48:23 UTC, Node22.23.0; oba tryby gotowe na scalonym SHA, provider wyłączony.
+
+Główne lab4310: Chrome przygotował i zatwierdził profil `c3e718f1-2e89-49c9-9d17-f282b8986c7b` oraz start pracownika `815a5f64-b691-43b6-acfb-b276eb44b63a`. Każda operacja miała jedną próbę i pozytywną weryfikację. Profil „Dynaminds — laboratorium JARVIS” v1/definition4 ma laptop dla pracownika, telefon dla konsultanta, wymagane oryginały i role obsadzone kontem laboratorium. Dwie nowe syntetyczne sprawy (`c08bbd94-0647-4dad-bf29-5d04120d5ad7`, `afd52e18-068a-4849-a0c1-a97235093090`) zachowują właściwe wymagania; brak dowodów blokuje odbiór. Wcześniejsza odebrana sprawa P06a `eb8de6cd-2935-4406-956e-5a57f946151a` pozostała identyczna i nadal ma aktualny odbiór. Widok obejrzano, konsola Chrome bez błędów i ostrzeżeń. Dowód `.data/local-product/p06b1-verification.json`: sześć komend, w tym dwie rzeczywiście przez Chrome. To konfiguracja i dane syntetycznego laboratorium; oddzielne konta i dwie firmy odebrano w podglądzie.
+
+OSS obu trybów 18:51 UTC: Grafana13.2.1, 14 paneli, trzy źródła OK, metryki workera oraz powiązany log/trace nowego SHA. Lab `feb1801222431f28ab0a4eefacdd4c4b`, operational `7a10c88d8a429252a122daa2deea33eb`; `.data/local-product/p06b1-oss-verification.json`.
+
+Kopie po zatrzymaniu obu aplikacji: lab `/private/tmp/jarvis-before-p06b1-lab-20260908T1848`, 20 plików, manifest `a660e30982729f31c65b4862ea6c77a26a9d8e081a982959ebf441353a1b7658`; operational `/private/tmp/jarvis-before-p06b1-operational-20260908T1848`, sześć plików, manifest `a6635545ddb2782f39b04ff2b971f4dfc8d4eaceee488365a42a68353a2cce08`. Rzeczywiste odtworzenie podglądu opisano wyżej. Hosting produkcyjny nie jest skonfigurowany. P06b2 i końcowy odbiór K03 pozostają otwarte.
+
+## P06b2 — anulowanie rozpoczęcia, implementacja
+
+Dodano `ops.people.cancelStart` v1 oraz operations v11. Decyzja właściciela i zgoda Core wiążą konkretny okres, zakres oraz rozliczenie zasobów. Anulowanie zamyka otwartą pracę, zachowuje datę planowaną i historię, nie zapisuje przepracowanego okresu. Osobna współpraca konsultanta zachowuje zasoby. Panel prowadzi do brakujących zwrotów, cofnięć i wyjaśnień; po rozliczeniu pozwala przygotować decyzję z uzasadnieniem i potwierdzeniem, że praca nie została rozpoczęta.
+
+Lokalnie przeszło siedem nowych testów domeny/API/UI, typecheck i build. Sprawdzono odmowę, brak uprawnień, odebranie dostępu podczas oczekiwania, zmianę zakresu i zasobów, wygaśniętą obserwację, niespójne przydziały/zadania, dwa tenanty oraz ponowny start bez dziedziczenia dowodów. Migracja historycznej bazy, rollback FK i rzeczywisty SIGKILL oczekują hosted CI. Chrome, odtworzenie kopii, końcowe CI, scalenie i aktualizacja głównego produktu pozostają do wykonania.
