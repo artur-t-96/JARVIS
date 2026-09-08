@@ -80,6 +80,7 @@ const labels: Record<string, string> = {
 export function RecordDownload({ item }: { item: Entity }) {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [format, setFormat] = useState("pdf");
   if (!["cases", "documents"].includes(item.module)) return null;
   async function save() {
     setBusy(true);
@@ -88,8 +89,8 @@ export function RecordDownload({ item }: { item: Entity }) {
       await download(
         item.module === "cases"
           ? `/api/cases/${item.id}/package`
-          : `/api/documents/${item.id}/export`,
-        `${item.module === "cases" ? "sprawa" : "dokument"}-${item.id}.${item.module === "cases" ? "json" : "md"}`,
+          : `/api/documents/${item.id}/export?format=${format}`,
+        `${item.module === "cases" ? "sprawa" : "dokument"}-${item.id}.${item.module === "cases" ? "json" : format}`,
       );
     } catch (cause) {
       setError(errorMessage(cause));
@@ -99,6 +100,20 @@ export function RecordDownload({ item }: { item: Entity }) {
   }
   return (
     <section className="card export-card">
+      {item.module === "documents" && (
+        <label className="field">
+          <span>Format dokumentu</span>
+          <select
+            value={format}
+            disabled={busy}
+            onChange={(event) => setFormat(event.target.value)}
+          >
+            <option value="pdf">PDF — do przekazania</option>
+            <option value="docx">DOCX — do pracy z treścią</option>
+            <option value="md">Markdown — zapis tekstowy</option>
+          </select>
+        </label>
+      )}
       <button
         className="button secondary full-width"
         disabled={
@@ -117,7 +132,7 @@ export function RecordDownload({ item }: { item: Entity }) {
       <p className="small muted">
         {item.module === "cases"
           ? "Pakiet jest dostępny po biznesowym odbiorze sprawy. Obejmuje zakres, zadania, dowody i decyzje."
-          : "Bieżąca treść w formacie Markdown."}
+          : "Eksport bieżącej rewizji zachowuje treść, status odbioru i rejestr źródeł. Oryginalne załączniki pobierzesz z sekcji plików."}
       </p>
     </section>
   );

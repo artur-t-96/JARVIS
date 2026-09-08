@@ -6,6 +6,7 @@ import type { Entity } from "./workspace.js";
 import { readIssuedAllocationProof } from "./asset-custody.js";
 import { AccessRegister } from "./access-register.js";
 import { DocumentSources } from "./document-sources.js";
+import type { DocumentFiles } from "./document-files.js";
 
 const uuid = z.string().uuid();
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
@@ -44,6 +45,7 @@ export const caseRequirementDefinitionSchema = z.discriminatedUnion("kind", [
           documentRevision: z.number().int().positive().optional(),
           contentHash: hash.optional(),
           currentVersionRequired: z.literal(true),
+          fileRequired: z.boolean().optional(),
         })
         .strict(),
     })
@@ -240,6 +242,7 @@ export class CaseReadinessStore {
       tenant: string,
       entity: Entity,
     ) => boolean,
+    private readonly documentFiles?: DocumentFiles,
   ) {}
   requirements(
     tenant: string,
@@ -442,21 +445,20 @@ export class CaseReadinessStore {
         : [];
       if (references.length > 20)
         error("DOCUMENT_SOURCES_INVALID", "Zbyt wiele źródeł dokumentu.");
-      const sources = new DocumentSources(this.db);
+      const sources = new DocumentSources(this.db, this.documentFiles);
       const sourceReferences = sources.references(tenant, references);
-      const state =
-        data.sourceContract === "p09a1"
-          ? sources.assessment(tenant, {
-              id,
-              module: "documents",
-              title: String(r.title),
-              status: String(r.status),
-              version: Number(r.version),
-              data,
-              createdAt: String(r.created_at),
-              updatedAt: String(r.updated_at),
-            })
-          : null;
+      const state = ["p09a1", "p09a2"].includes(String(data.sourceContract))
+        ? sources.assessment(tenant, {
+            id,
+            module: "documents",
+            title: String(r.title),
+            status: String(r.status),
+            version: Number(r.version),
+            data,
+            createdAt: String(r.created_at),
+            updatedAt: String(r.updated_at),
+          })
+        : null;
       identity = {
         documentId: id,
         documentType: data.documentType ?? null,
@@ -468,6 +470,9 @@ export class CaseReadinessStore {
           ? {
               contextHash: state.contextHash,
               contextValid: state.integrity && state.readyForReview,
+              ...(data.sourceContract === "p09a2"
+                ? { files: state.attachments }
+                : {}),
             }
           : {}),
         revision,
@@ -794,6 +799,25 @@ export class CaseReadinessStore {
             };
         }
         if (requirement.kind === "document_approved") {
+          if (
+            expected.fileRequired &&
+            (!Array.isArray(value.files) ||
+              !value.files.length ||
+              value.files.some(
+                (f) =>
+                  !f ||
+                  typeof f !== "object" ||
+                  Array.isArray(f) ||
+                  f.valid !== true,
+              ))
+          )
+            return {
+              ...result,
+              status: "failed",
+              reason: "Wymagany jest aktualny plik zaakceptowanej rewizji.",
+              nextAction:
+                "Dodaj właściwy plik, zatwierdź nową rewizję i powiąż dowód.",
+            };
           if (
             Array.isArray(value.sourceReferences) &&
             value.sourceReferences.some(

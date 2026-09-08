@@ -11,7 +11,14 @@ import { WorkspaceStore } from "./workspace.js";
 import { Conversations } from "./assistant.js";
 import { InitiativeStore } from "./initiative.js";
 import { Diagnostics } from "./diagnostics.js";
+import { exportDocument } from "./document-export.js";
 import { baselineProcessTemplates } from "./workspace-models.js";
+import {
+  fileHash,
+  fileNameSchema,
+  fileMediaSchema,
+  MAX_DOCUMENT_FILE_BYTES,
+} from "./document-files.js";
 import {
   exportArtifact,
   materializeArtifact,
@@ -230,6 +237,7 @@ export function registerWorkspaceApi(
       .parse(req.params);
     return { item: workspace.get(principal(req), module, id) };
   });
+  const documentRenders = new Set<string>();
   for (const module of ["documents", "cases"] as const)
     app.get(
       module === "documents"
@@ -237,12 +245,36 @@ export function registerWorkspaceApi(
         : "/api/cases/:id/package",
       async (req, reply) => {
         const actor = principal(req);
-        const artifact = exportArtifact(
-          workspace,
-          actor,
-          module,
-          z.object({ id: z.string().uuid() }).parse(req.params).id,
-        );
+        const id = z.object({ id: z.string().uuid() }).parse(req.params).id;
+        const format =
+          module === "documents"
+            ? z
+                .object({ format: z.enum(["md", "pdf", "docx"]).default("md") })
+                .strict()
+                .parse(req.query).format
+            : "json";
+        const renderKey = JSON.stringify([actor.tenantId, actor.id]);
+        if (format === "pdf" || format === "docx") {
+          if (documentRenders.has(renderKey) || documentRenders.size >= 2)
+            throw new DomainError(
+              "EXPORT_BUSY",
+              "Trwa przygotowanie dokumentu. Spróbuj ponownie po jego pobraniu.",
+              429,
+            );
+          documentRenders.add(renderKey);
+        }
+        let artifact;
+        try {
+          artifact =
+            format === "pdf" || format === "docx"
+              ? await exportDocument(workspace, actor, id, format, () =>
+                  principal(req),
+                )
+              : exportArtifact(workspace, actor, module, id);
+        } finally {
+          if (format === "pdf" || format === "docx")
+            documentRenders.delete(renderKey);
+        }
         if (dataDir) materializeArtifact(dataDir, artifact);
         return reply
           .header(
@@ -283,6 +315,116 @@ export function registerWorkspaceApi(
       z.object({ id: z.string().uuid() }).parse(req.params).id,
     ),
   }));
+  app.addContentTypeParser(
+    "application/octet-stream",
+    { parseAs: "buffer" },
+    (_req, body, done) => done(null, body),
+  );
+  app.get("/api/documents/:id/files", async (req) => ({
+    files: workspace.documentFiles(
+      principal(req),
+      z.object({ id: z.string().uuid() }).parse(req.params).id,
+    ),
+  }));
+  app.get("/api/documents/:id/files/:fileId", async (req, reply) => {
+    const { id, fileId } = z
+      .object({ id: z.string().uuid(), fileId: z.string().uuid() })
+      .parse(req.params);
+    const file = workspace.readDocumentFile(principal(req), id, fileId);
+    return reply
+      .type(file.manifest.mediaType)
+      .header(
+        "Content-Disposition",
+        `attachment; filename="document-file-${fileId}"; filename*=UTF-8''${encodeURIComponent(file.manifest.filename).replace(/'/g, "%27")}`,
+      )
+      .header("X-Artifact-SHA256", file.manifest.sha256)
+      .send(file.body);
+  });
+  app.post(
+    "/api/documents/:id/files/prepare",
+    { bodyLimit: MAX_DOCUMENT_FILE_BYTES },
+    async (req, reply) => {
+      const actor = principal(req),
+        id = z.object({ id: z.string().uuid() }).parse(req.params).id;
+      workspace.get(actor, "documents", id);
+      const decode = (header: string) => {
+        try {
+          return decodeURIComponent(String(req.headers[header] ?? ""));
+        } catch {
+          throw new DomainError(
+            "FILE_HEADER_INVALID",
+            "Niepoprawne metadane pliku.",
+            400,
+          );
+        }
+      };
+      const metadata = z
+        .object({
+          uploadId: z.string().uuid(),
+          expectedVersion: z.coerce.number().int().positive(),
+          filename: fileNameSchema,
+          mediaType: fileMediaSchema,
+          changeNote: z.string().trim().min(1).max(500),
+        })
+        .parse({
+          uploadId: req.headers["x-jarvis-upload-id"],
+          expectedVersion: req.headers["x-jarvis-document-version"],
+          filename: decode("x-jarvis-file-name"),
+          mediaType: req.headers["x-jarvis-file-type"],
+          changeNote: decode("x-jarvis-change-note"),
+        });
+      if (!Buffer.isBuffer(req.body))
+        throw new DomainError(
+          "FILE_BODY_INVALID",
+          "Wymagany binarny plik.",
+          400,
+        );
+      const request = `Plik dokumentu ${id}: ${JSON.stringify({ ...metadata, sha256: fileHash(req.body) })}`;
+      const previous = engine.replayRun(actor, request, metadata.uploadId);
+      if (previous) return reply.code(201).send({ run: previous });
+      const f = await workspace.prepareDocumentFile(
+        actor,
+        id,
+        metadata.expectedVersion,
+        metadata.uploadId,
+        metadata.filename,
+        metadata.mediaType,
+        req.body,
+      );
+      const input = {
+        id,
+        expectedVersion: metadata.expectedVersion,
+        uploadId: f.id,
+        filename: f.filename,
+        mediaType: f.mediaType,
+        bytes: f.bytes,
+        sha256: f.sha256,
+        manifestHash: f.manifestHash,
+        expiresAt: f.expiresAt,
+        changeNote: metadata.changeNote,
+      };
+      return reply.code(201).send({
+        run: engine.createRun(
+          actor,
+          request,
+          {
+            title: `Dodaj plik: ${f.filename}`.slice(0, 160),
+            summary:
+              "Sprawdź nazwę, rozmiar i odcisk. Zgoda doda plik do nowej rewizji dokumentu. Odbiór tej rewizji wymaga osobnej decyzji.",
+            steps: [
+              {
+                id: "attachment",
+                title: "Dodaj wskazany plik do nowej rewizji",
+                toolId: "ops.documents.attachFile",
+                input,
+              },
+            ],
+          },
+          metadata.uploadId,
+        ),
+      });
+    },
+  );
   app.post("/api/document-templates/prepare", async (req, reply) => {
     const actor = principal(req);
     const { templateId, sourceId, idempotencyKey } = z

@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
 import { DomainError, type JsonObject } from "./contracts.js";
 import type { Entity } from "./workspace.js";
+import type { DocumentFiles } from "./document-files.js";
 
 const modules = [
   "people",
@@ -61,7 +62,10 @@ export function migrateDocumentContext(db: DatabaseSync) {
 
 /** Scope sources intentionally exclude changing tasks, bindings and acceptance. */
 export class DocumentSources {
-  constructor(private readonly db: DatabaseSync) {}
+  constructor(
+    private readonly db: DatabaseSync,
+    private readonly files?: DocumentFiles,
+  ) {}
   private entity(tenant: string, module: string, id: string): Entity {
     const row = this.db
       .prepare(
@@ -256,13 +260,16 @@ export class DocumentSources {
   }
   context(e: Entity): JsonObject {
     return {
-      contract: "p09a1",
+      contract: e.data.sourceContract === "p09a2" ? "p09a2" : "p09a1",
       title: e.title,
       accessScope: e.data.accessScope ?? null,
       documentType: e.data.documentType ?? null,
       ownerId: e.data.ownerId ?? null,
       linkedCaseId: e.data.linkedCaseId ?? null,
       sources: e.data.sources ?? [],
+      ...(e.data.sourceContract === "p09a2"
+        ? { files: e.data.files ?? [] }
+        : {}),
     };
   }
   assertAcyclic(tenant: string, documentId: string, sources: JsonObject[]) {
@@ -301,7 +308,8 @@ export class DocumentSources {
       .get(tenant, id, revision) as Row | undefined;
   }
   integrity(tenant: string, e: Entity): boolean {
-    if (e.data.sourceContract !== "p09a1") return true;
+    if (!["p09a1", "p09a2"].includes(String(e.data.sourceContract)))
+      return true;
     const versions = this.db
       .prepare(
         "SELECT * FROM ops_document_versions WHERE tenant_id=? AND document_id=? ORDER BY revision",
@@ -362,6 +370,19 @@ export class DocumentSources {
     const row = this.version(tenant, e.id, Number(e.data.revision));
     const integrity = this.integrity(tenant, e),
       blockers: string[] = [];
+    const attachments =
+      this.files?.assessment(tenant, e.id, e.data.files ?? []) ??
+      objects(e.data.files).map((f) => ({
+        id: String(f.id),
+        filename: String(f.filename),
+        bytes: Number(f.bytes),
+        sha256: String(f.sha256),
+        valid: false,
+      }));
+    if (attachments.some((file) => !file.valid))
+      blockers.push(
+        "Co najmniej jeden załącznik jest niedostępny lub niezgodny z manifestem.",
+      );
     if (
       !integrity ||
       !row ||
@@ -412,9 +433,10 @@ export class DocumentSources {
       documentId: e.id,
       entityVersion: e.version,
       revision: Number(e.data.revision),
-      contract: row?.context_hash ? "p09a1" : "legacy",
+      contract: row?.context_hash ? String(e.data.sourceContract) : "legacy",
       integrity,
       references,
+      attachments,
       blockers,
       readyForReview: ready,
       approvalCurrent:

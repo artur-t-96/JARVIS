@@ -5,6 +5,7 @@ import { prepareDocument } from "../../src/artifacts.js";
 export async function seedDocumentCase(
   f: CustodyFixture,
   tenant = "synthetic-a",
+  fileRequired = false,
 ) {
   const run = await f.complete(
     "ops.cases.create",
@@ -21,7 +22,11 @@ export async function seedDocumentCase(
             title: "Current scope report",
             kind: "document_approved",
             required: true,
-            expected: { documentType: "report", currentVersionRequired: true },
+            expected: {
+              documentType: "report",
+              currentVersionRequired: true,
+              ...(fileRequired ? { fileRequired: true } : {}),
+            },
           },
         ],
       },

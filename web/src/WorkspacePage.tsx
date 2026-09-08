@@ -23,6 +23,7 @@ import { EntityContent, RecordDownload } from "./EntityContent";
 import { LaboratoryPanel } from "./LaboratoryPanel";
 import { DocumentTemplate } from "./DocumentTemplate";
 import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
+import { DocumentFiles } from "./DocumentFiles";
 import { CaseReadiness } from "./CaseReadiness";
 import { HumanTasks } from "./HumanTasks";
 import { CaseAccess } from "./CaseAccess";
@@ -798,7 +799,15 @@ export function WorkspacePage({
                 />
               )}
               {item.module === "documents" && (
-                <DocumentReadiness key={item.id} item={item} />
+                <>
+                  <DocumentReadiness key={item.id} item={item} />
+                  <DocumentFiles
+                    item={item}
+                    canWrite={
+                      allowedTool("attachFile") && allowedTool("detachFile")
+                    }
+                  />
+                </>
               )}
               {item.module === "cases" &&
                 context.principal.scopes?.some(
@@ -889,6 +898,10 @@ export function WorkspacePage({
                         .filter(
                           (action) =>
                             allowedTool(action.id) &&
+                            !(
+                              module.id === "documents" &&
+                              ["attachFile", "detachFile"].includes(action.id)
+                            ) &&
                             (module.id !== "it" ||
                               (isAccessDefinition(item)
                                 ? action.id === "retireAccessDefinition" &&

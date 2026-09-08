@@ -848,6 +848,24 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     close: z.object({ ...base, reason: text }).strict(),
   },
   documents: {
+    attachFile: z
+      .object({
+        ...base,
+        uploadId: id,
+        manifestHash: z.string().regex(/^[a-f0-9]{64}$/),
+        filename: z.string().min(1).max(180),
+        mediaType: z.string().max(100),
+        bytes: z
+          .number()
+          .int()
+          .positive()
+          .max(10 * 1024 * 1024),
+        sha256: z.string().regex(/^[a-f0-9]{64}$/),
+        expiresAt: z.string().datetime(),
+        changeNote: text,
+      })
+      .strict(),
+    detachFile: z.object({ ...base, fileId: id, changeNote: text }).strict(),
     revise: z
       .object({
         ...base,
@@ -1049,6 +1067,8 @@ const actionLabels: Record<string, string> = {
   beginOffboarding: "Rozpocznij offboarding",
   endEmployment: "Potwierdź zakończenie współpracy",
   revise: "Utwórz nową rewizję",
+  attachFile: "Dodaj plik do nowej rewizji",
+  detachFile: "Usuń plik z nowej rewizji",
   addTask: "Dodaj zadanie człowieka",
   completeTask: "Potwierdź wykonanie zadania",
   acceptTask: "Przyjmij zadanie",

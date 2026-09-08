@@ -8,7 +8,14 @@ import { jsonChild } from "./helpers/json-child.js";
 const script = fileURLToPath(
   new URL("../scripts/document-recovery-child.ts", import.meta.url),
 );
-for (const phase of ["create", "revise", "approve"])
+for (const phase of [
+  "create",
+  "revise",
+  "approve",
+  "attachFile",
+  "detachFile",
+  "approveFile",
+])
   test(
     `real SIGKILL after document ${phase} preserves one effect after the source scope changes`,
     { timeout: 50000 },
@@ -39,7 +46,14 @@ for (const phase of ["create", "revise", "approve"])
             status: "completed",
             verified: true,
             documentChanges: 1,
-            revisions: phase === "revise" ? 2 : 1,
+            revisions:
+              phase === "detachFile"
+                ? 3
+                : ["revise", "attachFile", "approveFile"].includes(phase)
+                  ? 2
+                  : 1,
+            currentFiles: ["attachFile", "approveFile"].includes(phase) ? 1 : 0,
+            validFiles: true,
             sourceCurrent: false,
             executeCalls: 1,
             receipts: 1,

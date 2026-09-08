@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { stageFile } from "../tests/helpers/document-file-fixture.js";
 import { randomUUID } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import type { JsonObject } from "../src/contracts.js";
@@ -15,10 +16,17 @@ const [mode, directory, phase, runId] = process.argv.slice(2);
 if (
   !directory ||
   !["seed", "apply", "resume"].includes(mode ?? "") ||
-  !["create", "revise", "approve"].includes(phase ?? "")
+  ![
+    "create",
+    "revise",
+    "approve",
+    "attachFile",
+    "detachFile",
+    "approveFile",
+  ].includes(phase ?? "")
 )
   throw Error("Synthetic document recovery arguments required");
-const target = "ops.documents." + phase,
+const target = "ops.documents." + (phase === "approveFile" ? "approve" : phase),
   calls = new DatabaseSync(join(directory, "calls.sqlite"));
 calls.exec(
   "PRAGMA synchronous=FULL; CREATE TABLE IF NOT EXISTS calls(id INTEGER PRIMARY KEY)",
@@ -55,7 +63,22 @@ try {
     if (phase !== "create") {
       const result = await f.complete("ops.documents.create", prepared);
       documentId = String(result.steps[0]!.output!.data.entityId);
-      if (phase === "revise") {
+      if (["detachFile", "approveFile"].includes(phase!)) {
+        await f.complete(
+          "ops.documents.attachFile",
+          await stageFile(f, documentId),
+        );
+      }
+      if (phase === "attachFile") {
+        input = await stageFile(f, documentId);
+      } else if (phase === "detachFile") {
+        input = {
+          id: documentId,
+          expectedVersion: f.get("documents", documentId).version,
+          fileId: f.workspace.documentFiles(f.actor(), documentId)[0]!.id,
+          changeNote: "Synthetic detach recovery",
+        };
+      } else if (phase === "revise") {
         await approveDocument(f, documentId);
         input = {
           ...JSON.parse(
@@ -67,7 +90,7 @@ try {
       } else {
         await f.complete("ops.documents.submit", {
           id: documentId,
-          expectedVersion: 1,
+          expectedVersion: f.get("documents", documentId).version,
         });
         input = {
           id: documentId,
@@ -136,6 +159,12 @@ try {
       verified: run.steps.every((s) => s.verification?.ok),
       documentChanges: doc.version - seed.beforeVersion,
       revisions: doc.data.revision,
+      currentFiles: f.workspace
+        .documentFiles(f.actor(), id)
+        .filter((v) => v.current).length,
+      validFiles: f.workspace
+        .documentFiles(f.actor(), id)
+        .every((v) => v.valid),
       sourceCurrent: f.workspace.documentReadiness(f.actor(), id)
         .readyForReview,
       executeCalls: calls.prepare("SELECT count(*) n FROM calls").get()!.n,

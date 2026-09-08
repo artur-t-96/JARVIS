@@ -4,6 +4,7 @@ import {
   type AccessTaskAction,
 } from "./task-access.js";
 import { DocumentSources, migrateDocumentContext } from "./document-sources.js";
+import { DocumentFiles, MAX_DOCUMENT_FILES } from "./document-files.js";
 import { AssetRegister, migrateAssetRegister } from "./asset-register.js";
 import { AccessRegister, migrateAccessRegister } from "./access-register.js";
 import {
@@ -187,6 +188,8 @@ export class WorkspaceStore {
   private readonly custodyStore: AssetCustody;
   private readonly accessStore: AccessRegister;
   private readonly taskAccessStore: TaskAccess;
+  private readonly fileStore: DocumentFiles;
+  private readonly documentSources: DocumentSources;
   constructor(
     dbPath: string,
     private readonly options: { clock?: () => number } = {},
@@ -340,20 +343,35 @@ export class WorkspaceStore {
           name: "Immutable document revision context and case scope sources",
           up: migrateDocumentContext,
         },
+        {
+          version: 10,
+          name: "File-backed document revision contract",
+          // Prevent older runtimes from approving revisions without verifying files.
+          up: () => {},
+        },
       ],
     });
+    this.fileStore = new DocumentFiles(
+      dbPath === ":memory:" ? undefined : dirname(dbPath),
+      options.clock,
+    );
+    this.documentSources = new DocumentSources(this.db, this.fileStore);
     this.registerStore = new AssetRegister(this.db);
     this.custodyStore = new AssetCustody(this.db);
     this.accessStore = new AccessRegister(this.db);
-    this.readinessStore = new CaseReadinessStore(this.db, (tenant, e) => {
-      const owner = this.livePrincipal(
-        tenant,
-        typeof e.data.ownerPrincipalId === "string"
-          ? e.data.ownerPrincipalId
-          : undefined,
-      );
-      return !!owner && this.canManageCase(owner, e.id);
-    });
+    this.readinessStore = new CaseReadinessStore(
+      this.db,
+      (tenant, e) => {
+        const owner = this.livePrincipal(
+          tenant,
+          typeof e.data.ownerPrincipalId === "string"
+            ? e.data.ownerPrincipalId
+            : undefined,
+        );
+        return !!owner && this.canManageCase(owner, e.id);
+      },
+      this.fileStore,
+    );
     this.taskStore = new WorkspaceTasks(
       this.db,
       undefined,
@@ -589,7 +607,7 @@ export class WorkspaceStore {
   documentScope(principal: Principal, caseId: string) {
     this.get(principal, "cases", caseId);
     this.scope(principal, "documents");
-    const sources = new DocumentSources(this.db);
+    const sources = this.documentSources;
     return {
       ...sources.scope(principal.tenantId, caseId),
       source: sources.request(
@@ -600,14 +618,90 @@ export class WorkspaceStore {
     };
   }
   documentReadiness(principal: Principal, documentId: string) {
-    return new DocumentSources(this.db).assessment(
+    return this.documentSources.assessment(
       principal.tenantId,
       this.get(principal, "documents", documentId),
     );
   }
+  async prepareDocumentFile(
+    principal: Principal,
+    documentId: string,
+    expectedVersion: number,
+    uploadId: string,
+    filename: string,
+    mediaType: string,
+    body: Buffer,
+  ) {
+    if (!principal.roles.includes("operator"))
+      fail(
+        "DOCUMENT_ACTOR_FORBIDDEN",
+        "Wymagane konto operatora dokumentu.",
+        403,
+      );
+    const e = this.get(principal, "documents", documentId);
+    if (e.version !== expectedVersion)
+      fail(
+        "VERSION_CONFLICT",
+        "Dokument zmienił wersję. Odczytaj go ponownie.",
+      );
+    this.state(e, "draft", "review", "approved", "rejected");
+    if (!this.documentSources.integrity(principal.tenantId, e))
+      fail("DOCUMENT_STATE_INCONSISTENT", "Historia dokumentu jest niespójna.");
+    if (arr(e.data.files).length >= MAX_DOCUMENT_FILES)
+      fail(
+        "DOCUMENT_FILE_LIMIT",
+        "Dokument może wskazywać najwyżej 20 plików.",
+      );
+    return this.fileStore.stage(
+      principal,
+      documentId,
+      expectedVersion,
+      uploadId,
+      filename,
+      mediaType,
+      body,
+    );
+  }
+  documentFiles(principal: Principal, documentId: string) {
+    const e = this.get(principal, "documents", documentId);
+    if (!this.documentSources.integrity(principal.tenantId, e))
+      fail("DOCUMENT_STATE_INCONSISTENT", "Historia dokumentu jest niespójna.");
+    const all = new Map<string, { file: JsonObject; revisions: number[] }>();
+    for (const version of arr(e.data.versions))
+      for (const file of arr((version.context as JsonObject | null)?.files)) {
+        const saved = all.get(String(file.id)) ?? { file, revisions: [] };
+        saved.revisions.push(Number(version.revision));
+        all.set(String(file.id), saved);
+      }
+    return [...all.values()].map(({ file, revisions }) => ({
+      ...file,
+      revisions,
+      current: arr(e.data.files).some((f) => f.id === file.id),
+      ...this.fileStore.assessment(principal.tenantId, e.id, [file])[0],
+    }));
+  }
+  readDocumentFile(principal: Principal, documentId: string, fileId: string) {
+    const e = this.get(principal, "documents", documentId);
+    const authorized = this.documentFiles(principal, documentId).find(
+      (f) => f.id === fileId,
+    );
+    if (!authorized)
+      fail("FILE_NOT_FOUND", "Nie znaleziono pliku tego dokumentu.", 404);
+    const reference = arr(e.data.versions)
+      .flatMap((v) => arr((v.context as JsonObject | null)?.files))
+      .find((f) => f.id === fileId)!;
+    try {
+      return this.fileStore.read(principal.tenantId, documentId, reference);
+    } catch {
+      return fail(
+        "FILE_INTEGRITY_FAILED",
+        "Plik jest niedostępny lub niezgodny z manifestem.",
+      );
+    }
+  }
   documentRefresh(principal: Principal, documentId: string) {
     const e = this.get(principal, "documents", documentId),
-      sources = new DocumentSources(this.db);
+      sources = this.documentSources;
     const now = new Date(this.options.clock?.() ?? Date.now()).toISOString();
     return {
       id: e.id,
@@ -791,7 +885,7 @@ export class WorkspaceStore {
   }
   private relationalStateMatches(tenant: string, entity: Entity): boolean {
     if (entity.module === "documents")
-      return new DocumentSources(this.db).integrity(tenant, entity);
+      return this.documentSources.integrity(tenant, entity);
     if (entity.module === "cases")
       return (
         canonical(entity.data.accessGrantRefs ?? []) ===
@@ -1323,7 +1417,7 @@ export class WorkspaceStore {
       data.decisions = [];
     }
     if (module === "documents") {
-      data.sources = new DocumentSources(this.db).capture(
+      data.sources = this.documentSources.capture(
         cmd.ctx.tenantId,
         data.sources,
         cmd.now,
@@ -1897,7 +1991,7 @@ export class WorkspaceStore {
     content: string,
     revision: number,
   ) {
-    const context = new DocumentSources(this.db).context(e);
+    const context = this.documentSources.context(e);
     if (Buffer.byteLength(canonical(context)) > 2_000_000)
       fail(
         "DOCUMENT_CONTEXT_TOO_LARGE",
@@ -3068,22 +3162,73 @@ export class WorkspaceStore {
       }
     }
     if (e.module === "documents") {
+      if (action === "attachFile" || action === "detachFile") {
+        this.state(e, "draft", "review", "approved", "rejected");
+        const files = arr(d.files),
+          revision = Number(d.revision) + 1;
+        if (action === "attachFile") {
+          if (files.length >= MAX_DOCUMENT_FILES)
+            fail(
+              "DOCUMENT_FILE_LIMIT",
+              "Dokument może wskazywać najwyżej 20 plików.",
+            );
+          if (
+            files.some(
+              (f) => f.id === input.uploadId || f.sha256 === input.sha256,
+            )
+          )
+            fail(
+              "DOCUMENT_FILE_DUPLICATE",
+              "Ten plik jest już w bieżącej rewizji.",
+            );
+          const file = this.fileStore.publish(
+            cmd.ctx,
+            e.id,
+            e.version,
+            String(input.uploadId),
+            String(input.manifestHash),
+          );
+          if (
+            file.filename !== input.filename ||
+            file.mediaType !== input.mediaType ||
+            file.bytes !== input.bytes ||
+            file.sha256 !== input.sha256 ||
+            new Date(
+              Date.parse(file.uploadedAt) + 7 * 86400_000,
+            ).toISOString() !== input.expiresAt
+          )
+            fail(
+              "FILE_APPROVAL_MISMATCH",
+              "Metadane pliku nie odpowiadają zatwierdzonej operacji.",
+            );
+          d.files = [...files, asJson(file)];
+        } else {
+          if (!files.some((f) => f.id === input.fileId))
+            fail("FILE_NOT_FOUND", "Brak tego pliku w bieżącej rewizji.", 404);
+          d.files = files.filter((f) => f.id !== input.fileId);
+        }
+        d.sourceContract = "p09a2";
+        this.documentVersion(cmd, e, String(d.content), revision);
+        d.revision = revision;
+        d.changeNote = String(input.changeNote);
+        e.status = "draft";
+      }
       if (action === "revise") {
         this.state(e, "draft", "review", "approved", "rejected");
         const revision = Number(d.revision) + 1;
         if (input.title !== undefined) e.title = String(input.title);
         if (input.sources !== undefined)
-          d.sources = new DocumentSources(this.db).capture(
+          d.sources = this.documentSources.capture(
             cmd.ctx.tenantId,
             input.sources,
             cmd.now,
           );
-        new DocumentSources(this.db).assertAcyclic(
+        this.documentSources.assertAcyclic(
           cmd.ctx.tenantId,
           e.id,
           arr(d.sources),
         );
-        d.sourceContract = "p09a1";
+        if (d.sourceContract !== "p09a2") d.sourceContract = "p09a1";
         this.documentVersion(cmd, e, String(input.content), revision);
         d.revision = revision;
         d.content = String(input.content);
@@ -3092,7 +3237,7 @@ export class WorkspaceStore {
       }
       if (action === "submit") {
         this.state(e, "draft");
-        new DocumentSources(this.db).assertReady(cmd.ctx.tenantId, e);
+        this.documentSources.assertReady(cmd.ctx.tenantId, e);
         e.status = "review";
         this.db
           .prepare(
@@ -3104,7 +3249,7 @@ export class WorkspaceStore {
         this.state(e, "review");
         this.human(cmd, input);
         if (input.decision === "approved")
-          new DocumentSources(this.db).assertReady(cmd.ctx.tenantId, e);
+          this.documentSources.assertReady(cmd.ctx.tenantId, e);
         e.status = String(input.decision);
         this.db
           .prepare(
@@ -3495,11 +3640,21 @@ export class WorkspaceStore {
               saved.snapshot_hash !== change.hash ||
               digest(JSON.parse(String(saved.snapshot_json))) !== change.hash ||
               latest?.snapshot_hash !== digest(current) ||
-              !new DocumentSources(this.db).integrity(ctx.tenantId, current)
+              !this.documentSources.integrity(ctx.tenantId, current)
             )
               fail(
                 "DOCUMENT_STATE_INCONSISTENT",
                 "Nie można potwierdzić zapisanej rewizji i pochodzenia dokumentu.",
+              );
+            const snapshot = JSON.parse(String(saved.snapshot_json)) as Entity;
+            if (
+              this.fileStore
+                .assessment(ctx.tenantId, snapshot.id, snapshot.data.files)
+                .some((f) => !f.valid)
+            )
+              fail(
+                "DOCUMENT_FILE_INCONSISTENT",
+                "Nie można potwierdzić pliku zapisanego w tej operacji.",
               );
           }
           if (!changes.length)
@@ -3537,7 +3692,7 @@ export class WorkspaceStore {
           id: toolId,
           version:
             module === "documents"
-              ? "9"
+              ? "10"
               : taskAccess
                 ? "1"
                 : accessMutation ||
@@ -3726,6 +3881,8 @@ export class WorkspaceStore {
                     "Bieżący stan zadania nie odpowiada zapisanej historii.",
                   );
                 this.db.exec("COMMIT");
+                if (module === "documents" && action === "attachFile")
+                  this.fileStore.releaseStage(ctx, String(input.uploadId));
                 return JSON.parse(String(existing.receipt_json)) as ToolResult;
               }
               const cmd: Command = {
@@ -3750,7 +3907,7 @@ export class WorkspaceStore {
                   );
                 if (
                   module === "documents" &&
-                  !new DocumentSources(this.db).integrity(ctx.tenantId, e)
+                  !this.documentSources.integrity(ctx.tenantId, e)
                 )
                   fail(
                     "DOCUMENT_STATE_INCONSISTENT",
@@ -4024,6 +4181,8 @@ export class WorkspaceStore {
                   cmd.now,
                 );
               this.db.exec("COMMIT");
+              if (module === "documents" && action === "attachFile")
+                this.fileStore.releaseStage(ctx, String(input.uploadId));
               return receipt;
             } catch (error) {
               this.db.exec("ROLLBACK");
