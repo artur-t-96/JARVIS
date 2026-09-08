@@ -39,6 +39,7 @@ export interface AppConfig {
   policies: Policy[];
   tokens: Map<string, Principal>;
   plannerKind: "demo" | "anthropic";
+  observabilityMode?: "lab" | "operational";
 }
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const mode = z
@@ -53,6 +54,22 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const plannerKind = env.JARVIS_PLANNER ?? "demo";
   if (plannerKind !== "demo" && plannerKind !== "anthropic")
     throw new Error("Invalid JARVIS_PLANNER");
+  const observabilityMode = env.JARVIS_OBSERVABILITY;
+  if (
+    observabilityMode !== undefined &&
+    observabilityMode !== "lab" &&
+    observabilityMode !== "operational"
+  )
+    throw new Error(
+      "Invalid JARVIS_OBSERVABILITY: select lab or operational explicitly.",
+    );
+  if (
+    (observabilityMode === "lab" && mode !== "local") ||
+    (observabilityMode === "operational" && mode !== "accounts")
+  )
+    throw new Error(
+      "Observability environment must match the JARVIS data mode.",
+    );
   let principals: Principal[], policies: Policy[];
   const tokens = new Map<string, Principal>();
   if (mode === "authenticated") {
@@ -113,6 +130,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     policies,
     tokens,
     plannerKind,
+    ...(observabilityMode ? { observabilityMode } : {}),
   };
 }
 export function authenticate(

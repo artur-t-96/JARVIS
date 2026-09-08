@@ -96,6 +96,8 @@ P03 i P04 mogą rozwijać kontrakty podczas budowy P01. P07 może być realizowa
 
 ## P03 — sprawy, ludzie i odbiór
 
+Projekt kontraktów, migracji, minimalnego zakresu i zależności: [P03 — sprawy, praca ludzi i typowany odbiór](p03-design.md). Dokument opisuje następną paczkę; nie potwierdza wykonania funkcji ani odbioru onboardingu.
+
 - Ujednolicić sprawę i rewizję zakresu, właściciela, termin, zobowiązania oraz powiązane wykonania.
 - Przygotować bazowe dwa profile firmy: obsada ról HR/IT/przełożonego, wariant pracownika/konsultanta i typowane wymagania szablonów. Zatwierdzane wersje tych profili muszą działać przed odbiorem onboardingu; P13 rozwija później pełną personalizację.
 - Zadania otrzymują właściwego wykonawcę według roli/profilu i możliwość jawnego przekazania. Nie przypisywać całego onboardingu nowej osobie.

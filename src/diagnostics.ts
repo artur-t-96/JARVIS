@@ -6,14 +6,28 @@ import {
   SpanStatusCode,
   trace,
   type Span,
+  type SpanContext,
+  type Tracer,
+  type Meter,
+  type Counter,
+  type Histogram,
 } from "@opentelemetry/api";
 import { MeterProvider, MetricReader } from "@opentelemetry/sdk-metrics";
 import {
   AlwaysOnSampler,
   BasicTracerProvider,
+  BatchSpanProcessor,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from "@opentelemetry/sdk-trace-base";
+
+import { resourceFromAttributes } from "@opentelemetry/resources";
+import { PrometheusExporter } from "@opentelemetry/exporter-prometheus";
+import {
+  LocalTraceExporter,
+  telemetryPorts,
+  type TelemetryMode,
+} from "./observability/telemetry.js";
 
 export interface QueueSnapshot {
   queued?: number;
@@ -33,6 +47,7 @@ export interface DiagnosticsOptions {
   backupMaxAgeMs?: number;
   clock?: () => number;
   writeLog?: (line: string) => void;
+  telemetryMode?: TelemetryMode;
 }
 
 const logFields = new Set([
@@ -49,6 +64,15 @@ const logFields = new Set([
   "method",
   "route",
   "count",
+  "attempt",
+  "usageId",
+  "provider",
+  "model",
+  "inputTokens",
+  "outputTokens",
+  "estimatedCost",
+  "pricingVersion",
+  "currency",
 ]);
 const secretPattern =
   /bearer|password|secret|api[-_]?key|token=|sk-[a-z0-9]|-----BEGIN/i;
@@ -79,40 +103,36 @@ class LocalMetricReader extends MetricReader {
   protected async onShutdown() {}
 }
 
-/** Explicit local providers: no globals, auto-instrumentation or outbound exporter. */
+/** Explicit providers; exporting requires a selected, fixed loopback environment. */
 export class Diagnostics {
   private readonly clock: () => number;
   private readonly createdAt: number;
   private readonly staleAfterMs: number;
   private readonly exporter = new InMemorySpanExporter();
-  private readonly traceProvider = new BasicTracerProvider({
-    sampler: new AlwaysOnSampler(),
-    spanProcessors: [new SimpleSpanProcessor(this.exporter)],
-  });
+  private readonly traceProvider: BasicTracerProvider;
   private readonly metricReader = new LocalMetricReader({
     cardinalitySelector: () => 64,
   });
-  private readonly meterProvider = new MeterProvider({
-    readers: [this.metricReader],
-  });
-  private readonly tracer = this.traceProvider.getTracer("jarvis.worker");
-  private readonly meter = this.meterProvider.getMeter("jarvis.local");
-  private readonly tickCounter = this.meter.createCounter(
-    "jarvis.worker.ticks",
-  );
-  private readonly tickDuration = this.meter.createHistogram(
-    "jarvis.worker.duration",
-    { unit: "ms" },
-  );
-  private readonly requestCounter = this.meter.createCounter(
-    "jarvis.http.requests",
-  );
-  private readonly requestDuration = this.meter.createHistogram(
-    "jarvis.http.duration",
-    { unit: "ms" },
-  );
+  private readonly meterProvider: MeterProvider;
+  private readonly tracer: Tracer;
+  private readonly meter: Meter;
+  private readonly tickCounter: Counter;
+  private readonly tickDuration: Histogram;
+  private readonly requestCounter: Counter;
+  private readonly requestDuration: Histogram;
+  private readonly modelCounter: Counter;
+  private readonly modelDuration: Histogram;
+  private readonly modelTokens: Counter;
+  private readonly modelCost: Counter;
+  private readonly executionEvents: Counter;
+  private readonly networkExporter?: LocalTraceExporter;
+  private readonly prometheus?: PrometheusExporter;
+  private metricsState: "disabled" | "starting" | "ready" | "unavailable" =
+    "disabled";
+  private readonly requestSpans = new WeakMap<object, Span>();
   private readonly spanContext = new AsyncLocalStorage<Span>();
   private readonly activeSpans = new Set<Span>();
+  private evictedActiveTraces = 0;
   private workerSpan: Span | undefined;
   private tickStartedAt: number | null = null;
   private tickCompletedAt: number | null = null;
@@ -133,6 +153,200 @@ export class Diagnostics {
     this.clock = options.clock ?? Date.now;
     this.createdAt = this.clock();
     this.staleAfterMs = options.staleAfterMs ?? 30_000;
+    const resource = resourceFromAttributes({
+      "service.name": "jarvis",
+      "service.version": options.version,
+      "deployment.environment.name": options.telemetryMode ?? "local",
+    });
+    if (options.telemetryMode) {
+      this.networkExporter = new LocalTraceExporter(options.telemetryMode);
+      this.prometheus = new PrometheusExporter({
+        host: "127.0.0.1",
+        port: telemetryPorts(options.telemetryMode).metrics,
+        endpoint: "/metrics",
+        preventServerStart: true,
+        withoutScopeInfo: true,
+        withResourceConstantLabels: /^deployment\.environment\.name$/,
+      });
+      this.metricsState = "starting";
+    }
+    this.traceProvider = new BasicTracerProvider({
+      resource,
+      sampler: new AlwaysOnSampler(),
+      spanProcessors: [
+        new SimpleSpanProcessor(this.exporter),
+        ...(this.networkExporter
+          ? [
+              new BatchSpanProcessor(this.networkExporter, {
+                maxQueueSize: 256,
+                maxExportBatchSize: 64,
+                scheduledDelayMillis: 500,
+                exportTimeoutMillis: 1000,
+              }),
+            ]
+          : []),
+      ],
+    });
+    this.meterProvider = new MeterProvider({
+      resource,
+      views: [{ instrumentName: "jarvis.*", aggregationCardinalityLimit: 64 }],
+      readers: [
+        this.metricReader,
+        ...(this.prometheus ? [this.prometheus] : []),
+      ],
+    });
+    this.tracer = this.traceProvider.getTracer("jarvis.operations", "1");
+    this.meter = this.meterProvider.getMeter("jarvis.local", "1");
+    this.tickCounter = this.meter.createCounter("jarvis.worker.ticks");
+    this.tickDuration = this.meter.createHistogram("jarvis.worker.duration", {
+      unit: "ms",
+    });
+    this.requestCounter = this.meter.createCounter("jarvis.http.requests");
+    this.requestDuration = this.meter.createHistogram("jarvis.http.duration", {
+      unit: "ms",
+    });
+    this.executionEvents = this.meter.createCounter("jarvis.execution.events");
+    this.modelCounter = this.meter.createCounter("jarvis.model.calls");
+    this.modelDuration = this.meter.createHistogram("jarvis.model.duration", {
+      unit: "ms",
+    });
+    this.modelTokens = this.meter.createCounter("jarvis.model.tokens");
+    this.modelCost = this.meter.createCounter("jarvis.model.estimated_cost");
+    this.meter
+      .createObservableGauge("jarvis.queue.jobs")
+      .addCallback((result) => {
+        for (const [state, value] of Object.entries(this.queue))
+          if (state !== "oldestPendingAgeMs" && typeof value === "number")
+            result.observe(value, { state });
+      });
+    this.meter
+      .createObservableGauge("jarvis.worker.age", { unit: "s" })
+      .addCallback((result) => {
+        if (this.tickCompletedAt !== null)
+          result.observe(
+            Math.max(0, this.clock() - this.tickCompletedAt) / 1000,
+          );
+      });
+    this.meter
+      .createObservableGauge("jarvis.worker.healthy")
+      .addCallback((result) => {
+        result.observe(
+          !this.closed &&
+            this.tickCompletedAt !== null &&
+            this.clock() - this.tickCompletedAt <= this.staleAfterMs &&
+            !this.consecutiveFailures
+            ? 1
+            : 0,
+        );
+      });
+  }
+
+  async start(): Promise<void> {
+    if (!this.prometheus || this.closed) return;
+    try {
+      await this.prometheus.startServer();
+      this.metricsState = "ready";
+    } catch {
+      this.metricsState = "unavailable";
+      this.log("warn", "telemetry.metrics.unavailable");
+    }
+  }
+  async flush(): Promise<void> {
+    // Export failures are counted by the exporter; a local monitoring outage is not a business failure.
+    await Promise.allSettled([this.traceProvider.forceFlush()]);
+  }
+
+  currentContext(): SpanContext | undefined {
+    const span = this.spanContext.getStore();
+    return span?.isRecording() ? span.spanContext() : undefined;
+  }
+  startRequest(request: object, next: () => void): void {
+    if (this.closed) {
+      next();
+      return;
+    }
+    const span = this.startSpan("http.request");
+    this.requestSpans.set(request, span);
+    this.spanContext.run(span, next);
+  }
+  finishRequest(
+    request: object,
+    input: Parameters<Diagnostics["recordRequest"]>[0],
+  ): void {
+    const span = this.requestSpans.get(request);
+    if (!span) return;
+    try {
+      span.setAttributes(redactLogFields(input));
+      span.setStatus({
+        code:
+          input.statusCode >= 500 ? SpanStatusCode.ERROR : SpanStatusCode.OK,
+      });
+      this.spanContext.run(span, () => this.recordRequest(input));
+    } finally {
+      this.requestSpans.delete(request);
+      this.endSpan(span);
+    }
+  }
+  recordExecution(event: string, fields: Record<string, unknown>) {
+    if (
+      [
+        "run_completed",
+        "verification_failed",
+        "step_blocked",
+        "outcome_unknown",
+        "approval_requested",
+        "approval_rejected",
+        "step_verified",
+      ].includes(event)
+    )
+      this.executionEvents.add(1, { event });
+    this.spanContext.getStore()?.addEvent(event, redactLogFields(fields));
+    this.log("info", `execution.${event}`, fields);
+  }
+  recordModel(input: {
+    provider: string;
+    model: string;
+    usageId: string;
+    status: "completed" | "failed";
+    durationMs: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    estimatedCost?: number | null;
+    currency?: string;
+    pricingVersion?: string;
+  }) {
+    const safe = redactLogFields(input);
+    const labels = {
+      provider: String(safe.provider ?? "unknown"),
+      model: String(safe.model ?? "unknown"),
+      status: input.status,
+    };
+    this.modelCounter.add(1, labels);
+    this.modelDuration.record(Math.max(0, input.durationMs), labels);
+    if (Number.isFinite(input.inputTokens))
+      this.modelTokens.add(Math.max(0, input.inputTokens!), {
+        ...labels,
+        direction: "input",
+      });
+    if (Number.isFinite(input.outputTokens))
+      this.modelTokens.add(Math.max(0, input.outputTokens!), {
+        ...labels,
+        direction: "output",
+      });
+    if (
+      typeof input.estimatedCost === "number" &&
+      Number.isFinite(input.estimatedCost) &&
+      input.estimatedCost >= 0 &&
+      safe.currency &&
+      safe.pricingVersion
+    )
+      this.modelCost.add(input.estimatedCost, {
+        ...labels,
+        currency: String(safe.currency),
+        pricingVersion: String(safe.pricingVersion),
+      });
+    this.spanContext.getStore()?.setAttributes(safe);
+    this.log(input.status === "failed" ? "warn" : "info", "model.call", safe);
   }
 
   workerTickStarted(): void {
@@ -142,9 +356,14 @@ export class Diagnostics {
   }
 
   /** Scope correlation to this operation and its awaited work, never to other requests. */
-  async withSpan<T>(name: string, operation: () => T | Promise<T>): Promise<T> {
+  async withSpan<T>(
+    name: string,
+    operation: () => T | Promise<T>,
+    fields: Record<string, unknown> = {},
+    link?: SpanContext,
+  ): Promise<T> {
     if (this.closed) throw new Error("Diagnostics is closed");
-    const span = this.startSpan(name);
+    const span = this.startSpan(name, fields, link);
     return this.spanContext.run(span, async () => {
       try {
         const result = await operation();
@@ -275,7 +494,9 @@ export class Diagnostics {
   }
 
   snapshot(input: { databaseHealthy: boolean; queue?: QueueSnapshot }) {
-    if (input.queue) this.queue = this.cleanQueue(input.queue);
+    const responseQueue = input.queue
+      ? this.cleanQueue(input.queue)
+      : this.queue;
     const now = this.clock();
     const ageMs =
       this.tickCompletedAt === null
@@ -343,13 +564,23 @@ export class Diagnostics {
         consecutiveFailures: this.consecutiveFailures,
         lastErrorCode: this.lastErrorCode,
       },
-      queue: { ...this.queue },
+      queue: { ...responseQueue },
       disk,
       backup,
       telemetry: {
-        mode: "local",
-        outboundExportEnabled: false,
+        mode: this.options.telemetryMode ? "local-oss" : "local",
+        outboundExportEnabled: Boolean(this.networkExporter),
+        externalExportEnabled: false,
+        metricsState: this.metricsState,
+        grafanaUrl: this.options.telemetryMode
+          ? `http://127.0.0.1:${telemetryPorts(this.options.telemetryMode).grafana}`
+          : null,
+        exporter: this.networkExporter
+          ? { ...this.networkExporter.state }
+          : null,
         retainedTraces: this.exporter.getFinishedSpans().length,
+        activeTraces: this.activeSpans.size,
+        evictedActiveTraces: this.evictedActiveTraces,
         counters: { ...this.counters },
       },
     };
@@ -365,20 +596,34 @@ export class Diagnostics {
     for (const span of this.activeSpans) this.endSpan(span);
     this.workerSpan = undefined;
     this.spanContext.disable();
-    await Promise.all([
+    await Promise.allSettled([
       this.traceProvider.shutdown(),
       this.meterProvider.shutdown(),
     ]);
   }
 
-  private startSpan(name: string): Span {
+  private startSpan(
+    name: string,
+    fields: Record<string, unknown> = {},
+    link?: SpanContext,
+  ): Span {
+    // Bound diagnostic retention even if a future operation never settles.
+    if (this.activeSpans.size >= 256) {
+      const oldest = this.activeSpans.values().next().value!;
+      oldest.setStatus({ code: SpanStatusCode.ERROR });
+      this.endSpan(oldest);
+      this.evictedActiveTraces++;
+    }
     const parent = this.spanContext.getStore();
     const context = parent?.isRecording()
       ? trace.setSpan(ROOT_CONTEXT, parent)
       : ROOT_CONTEXT;
     const span = this.tracer.startSpan(
       /^[a-z0-9_.-]{1,80}$/.test(name) ? name : "invalid_operation",
-      {},
+      {
+        attributes: redactLogFields(fields),
+        ...(link ? { links: [{ context: link }] } : {}),
+      },
       context,
     );
     this.activeSpans.add(span);

@@ -26,7 +26,12 @@ try {
 } catch {
   /* Source mode explicitly reports development. */
 }
-const diagnostics = new Diagnostics({ dataDir: config.dataDir, version });
+const diagnostics = new Diagnostics({
+  dataDir: config.dataDir,
+  version,
+  telemetryMode: config.observabilityMode,
+});
+await diagnostics.start();
 const demo = createDemoTools(resolve(config.dataDir, "demo-effects.sqlite"));
 const workspace = new WorkspaceStore(
   resolve(config.dataDir, "operations.sqlite"),
@@ -75,8 +80,8 @@ const engine = new Engine({
   tools,
   policies: config.policies,
   principals: config.principals,
-  onEvent: (event, details) =>
-    diagnostics.log("info", `execution.${event}`, details),
+  diagnostics,
+  onEvent: (event, details) => diagnostics.recordExecution(event, details),
 });
 const planner =
   config.plannerKind === "anthropic"
@@ -96,6 +101,7 @@ const conversations = new Conversations(
           : {}),
       }
     : undefined,
+  diagnostics,
 );
 const app = createApp({
   engine,

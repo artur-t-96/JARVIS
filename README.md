@@ -75,7 +75,7 @@ Claude otrzymuje ograniczone metadane wybranych rekordów, schematy narzędzi i 
 | `/api/documents/:id/export`, `/api/cases/:id/package`  | Eksport z wersją i SHA-256; pakiet sprawy wymaga odbioru.       |
 | `/api/ops`                                             | Technologia, terminy/blokady i zużycie modelu.                  |
 
-Inicjatywy powstają z konkretnych danych i reguł. Mają źródło, wiek, właściciela/termin, deduplikację, odłożenie i wyciszenie. Nie wysyłają wiadomości do ludzi przez zewnętrzne usługi. OpenTelemetry ma lokalny bufor; eksport sieciowy jest wyłączony. Trwały stos observability OSS jest zaplanowany w P01–P02 i nie jest jeszcze uruchomiony. Testy modułów nie oznaczają pełnego odbioru procesów biznesowych; wymagane powiązania i bramki opisuje roadmapa.
+Inicjatywy powstają z konkretnych danych i reguł. Mają źródło, wiek, właściciela/termin, deduplikację, odłożenie i wyciszenie. Nie wysyłają wiadomości do ludzi przez zewnętrzne usługi. OpenTelemetry domyślnie zachowuje tylko ograniczony lokalny bufor. Opcjonalny [natywny stos OSS](docs/observability.md) obejmuje Collector, Prometheus, Loki, Jaeger/Badger i Grafanę; uruchamia własne procesy i eksportuje wyłącznie na jawne porty loopback. Testy modułów nie oznaczają pełnego odbioru procesów biznesowych; wymagane powiązania i bramki opisuje roadmapa.
 
 ## Sprawdzenie i dostarczenie
 

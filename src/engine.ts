@@ -3,6 +3,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { migrateDatabase } from "./migrations.js";
+import type { Diagnostics } from "./diagnostics.js";
+import type { SpanContext } from "@opentelemetry/api";
 import {
   DomainError,
   hasToolAccess,
@@ -87,6 +89,7 @@ interface EngineOptions {
   maxAttempts?: number;
   workerId?: string;
   onEvent?: (event: string, details: JsonObject) => void;
+  diagnostics?: Diagnostics;
 }
 
 export class Engine {
@@ -101,6 +104,7 @@ export class Engine {
   private busy = false;
   private closed = false;
   private onEvent?: (event: string, details: JsonObject) => void;
+  private diagnostics?: Diagnostics;
   constructor(options: EngineOptions) {
     if (options.dbPath !== ":memory:")
       mkdirSync(dirname(options.dbPath), { recursive: true, mode: 0o700 });
@@ -110,6 +114,7 @@ export class Engine {
       "PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000; PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;",
     );
     this.onEvent = options.onEvent;
+    this.diagnostics = options.diagnostics;
     migrateDatabase(this.db, {
       namespace: "core",
       migrations: [
@@ -161,6 +166,14 @@ export class Engine {
           up: (db) =>
             db.exec("ALTER TABLE runs ADD COLUMN requester_authority TEXT;"),
         },
+        {
+          version: 4,
+          name: "durable execution trace links",
+          up: (db) =>
+            db.exec(
+              "CREATE TABLE execution_trace_links(run_id TEXT PRIMARY KEY REFERENCES runs(id) ON DELETE CASCADE,trace_id TEXT NOT NULL,span_id TEXT NOT NULL,trace_flags INTEGER NOT NULL);",
+            ),
+        },
       ],
     });
     this.tools = new Map(options.tools.map((t) => [t.id, t]));
@@ -197,9 +210,66 @@ export class Engine {
       .run(runId, type, this.now(), canonical(details));
     try {
       this.onEvent?.(type, { runId, ...details });
+      this.rememberTrace(runId);
     } catch {
       /* diagnostics must not interrupt effects */
     }
+  }
+  private rememberTrace(runId: string) {
+    const context = this.diagnostics?.currentContext();
+    if (context)
+      this.db
+        .prepare(
+          "INSERT INTO execution_trace_links(run_id,trace_id,span_id,trace_flags) VALUES(?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET trace_id=excluded.trace_id,span_id=excluded.span_id,trace_flags=excluded.trace_flags",
+        )
+        .run(runId, context.traceId, context.spanId, context.traceFlags);
+  }
+  private async observe<T>(
+    name: string,
+    fields: Record<string, unknown>,
+    operation: () => T | Promise<T>,
+    link?: SpanContext,
+  ): Promise<T> {
+    if (!this.diagnostics) return operation();
+    let started = false;
+    try {
+      return await this.diagnostics.withSpan(
+        name,
+        () => {
+          started = true;
+          return operation();
+        },
+        fields,
+        link,
+      );
+    } catch (error) {
+      // Telemetry may fail before an operation starts; never retry an operation it has already invoked.
+      if (!started) return operation();
+      throw error;
+    }
+  }
+  private previousTrace(runId: string): SpanContext | undefined {
+    try {
+      const row = this.db
+        .prepare(
+          "SELECT trace_id,span_id,trace_flags FROM execution_trace_links WHERE run_id=?",
+        )
+        .get(runId);
+      if (
+        row &&
+        /^[a-f0-9]{32}$/.test(String(row.trace_id)) &&
+        /^[a-f0-9]{16}$/.test(String(row.span_id))
+      )
+        return {
+          traceId: String(row.trace_id),
+          spanId: String(row.span_id),
+          traceFlags: Number(row.trace_flags),
+          isRemote: false,
+        };
+    } catch {
+      /* Trace correlation is optional, not an execution gate. */
+    }
+    return undefined;
   }
   private actor(principal: Principal, role?: "operator" | "approver") {
     const configured = this.principals.get(
@@ -879,6 +949,7 @@ export class Engine {
     tool: ToolDefinition;
     input: JsonObject;
     token: string;
+    traceLink?: SpanContext;
     mode: "execute" | "reconcile" | "verify";
   } | null {
     return this.tx(() => {
@@ -1031,6 +1102,7 @@ export class Engine {
             id,
             String(step.id),
           );
+        const traceLink = this.previousTrace(id);
         this.event(
           id,
           mode === "execute"
@@ -1040,7 +1112,7 @@ export class Engine {
               : "reconciliation_started",
           { stepId: String(step.id) },
         );
-        return { run, step, tool, input, token, mode };
+        return { run, step, tool, input, token, mode, traceLink };
       }
       return null;
     });
@@ -1061,194 +1133,230 @@ export class Engine {
       const { run, step, tool, input, token } = job;
       const runId = String(run.id),
         stepId = String(step.id);
-      const controller = new AbortController();
-      const timer = setTimeout(
-        () => controller.abort(),
-        Math.max(1, this.leaseMs - 10),
-      );
-      const bounded = async <T>(fn: () => Promise<T>): Promise<T> => {
-        controller.signal.throwIfAborted();
-        let abort: () => void = () => {};
-        const deadline = new Promise<never>((_resolve, reject) => {
-          abort = () => reject(new Error("Tool deadline exceeded"));
-          controller.signal.addEventListener("abort", abort, { once: true });
-        });
-        try {
-          return await Promise.race([fn(), deadline]);
-        } finally {
-          controller.signal.removeEventListener("abort", abort);
-        }
-      };
-      const boundApproval = this.db
-        .prepare(
-          "SELECT decided_by FROM approvals WHERE run_id=? AND step_id=? AND binding_hash=? AND status='approved'",
-        )
-        .get(runId, stepId, this.binding(run, step, tool, input)) as
-        Row | undefined;
-      const ctx: ToolContext = {
+      const telemetryFields = {
         tenantId: String(run.tenant_id),
-        actorId: String(run.requested_by),
-        ...(boundApproval?.decided_by
-          ? { approvedBy: String(boundApproval.decided_by) }
-          : {}),
         runId,
         stepId,
-        operationKey: String(step.operation_key),
-        signal: controller.signal,
+        toolId: tool.id,
+        attempt: Number(step.attempts) + (job.mode === "execute" ? 1 : 0),
       };
-      try {
-        let result: ToolResult;
-        if (job.mode === "verify") result = parse<ToolResult>(step.output_json);
-        else if (job.mode === "reconcile") {
-          const recovered = tool.reconcile
-            ? await bounded(() => tool.reconcile!(ctx, input))
-            : tool.effect === "read"
-              ? { status: "not_applied" as const }
-              : {
-                  status: "unknown" as const,
-                  reason: "Brak narzędzia do uzgodnienia wyniku.",
-                };
-          if (recovered.status === "unknown") {
+      return await this.observe(
+        "execution.attempt",
+        telemetryFields,
+        async () => {
+          try {
+            this.rememberTrace(runId);
+          } catch {
+            /* Telemetry must not interrupt effects. */
+          }
+          const controller = new AbortController();
+          const timer = setTimeout(
+            () => controller.abort(),
+            Math.max(1, this.leaseMs - 10),
+          );
+          const bounded = async <T>(fn: () => Promise<T>): Promise<T> => {
+            controller.signal.throwIfAborted();
+            let abort: () => void = () => {};
+            const deadline = new Promise<never>((_resolve, reject) => {
+              abort = () => reject(new Error("Tool deadline exceeded"));
+              controller.signal.addEventListener("abort", abort, {
+                once: true,
+              });
+            });
+            try {
+              return await Promise.race([fn(), deadline]);
+            } finally {
+              controller.signal.removeEventListener("abort", abort);
+            }
+          };
+          const boundApproval = this.db
+            .prepare(
+              "SELECT decided_by FROM approvals WHERE run_id=? AND step_id=? AND binding_hash=? AND status='approved'",
+            )
+            .get(runId, stepId, this.binding(run, step, tool, input)) as
+            Row | undefined;
+          const ctx: ToolContext = {
+            tenantId: String(run.tenant_id),
+            actorId: String(run.requested_by),
+            ...(boundApproval?.decided_by
+              ? { approvedBy: String(boundApproval.decided_by) }
+              : {}),
+            runId,
+            stepId,
+            operationKey: String(step.operation_key),
+            signal: controller.signal,
+          };
+          try {
+            let result: ToolResult;
+            if (job.mode === "verify")
+              result = parse<ToolResult>(step.output_json);
+            else if (job.mode === "reconcile") {
+              const recovered = tool.reconcile
+                ? await this.observe("tool.reconcile", telemetryFields, () =>
+                    bounded(() => tool.reconcile!(ctx, input)),
+                  )
+                : tool.effect === "read"
+                  ? { status: "not_applied" as const }
+                  : {
+                      status: "unknown" as const,
+                      reason: "Brak narzędzia do uzgodnienia wyniku.",
+                    };
+              if (recovered.status === "unknown") {
+                this.finishUnknown(
+                  runId,
+                  stepId,
+                  token,
+                  "Nie można potwierdzić skutku operacji. Wymagane uzgodnienie.",
+                );
+                return true;
+              }
+              if (recovered.status === "applied") result = recovered.result;
+              else {
+                const current = this.db
+                  .prepare("SELECT * FROM runs WHERE id=?")
+                  .get(runId) as Row;
+                if (current.cancellation_requested) {
+                  this.tx(() => {
+                    if (this.owns(runId, stepId, token)) {
+                      this.db
+                        .prepare(
+                          "UPDATE steps SET status='blocked',error='Anulowano przed skutkiem.',lease_token=NULL,lease_until=NULL WHERE run_id=? AND id=?",
+                        )
+                        .run(runId, stepId);
+                      this.setStatus(runId, "cancelled");
+                      this.event(runId, "cancelled_without_effect", { stepId });
+                    }
+                  });
+                  return true;
+                }
+                this.checkPolicy(current, tool);
+                // Definitely absent in a target with idempotency, or a pure read, permits a retry.
+                if (tool.effect === "write" && tool.recovery === "manual") {
+                  this.finishUnknown(
+                    runId,
+                    stepId,
+                    token,
+                    "Narzędzie wymaga ręcznego wznowienia.",
+                  );
+                  return true;
+                }
+                const allowed = this.tx(() => {
+                  if (!this.owns(runId, stepId, token)) return false;
+                  const latest = this.db
+                    .prepare(
+                      "SELECT attempts FROM steps WHERE run_id=? AND id=?",
+                    )
+                    .get(runId, stepId) as Row;
+                  if (Number(latest.attempts) >= this.maxAttempts) {
+                    this.block(runId, stepId, "Osiągnięto limit prób.");
+                    return false;
+                  }
+                  this.db
+                    .prepare(
+                      "UPDATE steps SET attempts=attempts+1 WHERE run_id=? AND id=?",
+                    )
+                    .run(runId, stepId);
+                  return true;
+                });
+                if (!allowed) return true;
+                this.executionAuthority(runId, step, tool, input, token);
+                result = await this.observe(
+                  "tool.execute",
+                  telemetryFields,
+                  () => bounded(() => tool.execute(ctx, input)),
+                );
+              }
+            } else {
+              this.executionAuthority(runId, step, tool, input, token);
+              result = await this.observe("tool.execute", telemetryFields, () =>
+                bounded(() => tool.execute(ctx, input)),
+              );
+            }
+            if (
+              !result ||
+              typeof result.data !== "object" ||
+              result.data === null ||
+              Array.isArray(result.data)
+            )
+              throw new Error("Invalid tool result");
+            if (canonical(result).length > 128_000)
+              throw new Error("Tool result too large");
+            const saved = this.tx(() => {
+              if (!this.owns(runId, stepId, token)) return false;
+              this.db
+                .prepare(
+                  "UPDATE steps SET status='verifying',output_json=? WHERE run_id=? AND id=? AND lease_token=?",
+                )
+                .run(canonical(result), runId, stepId, token);
+              this.event(runId, "effect_recorded", {
+                stepId,
+                reconciled: job.mode === "reconcile",
+              });
+              return true;
+            });
+            if (!saved) return true;
+            const verified = await this.observe(
+              "tool.verify",
+              telemetryFields,
+              () => bounded(() => tool.verify(ctx, input, result)),
+            );
+            this.validateVerification(verified);
+            this.tx(() => {
+              if (!this.owns(runId, stepId, token)) return;
+              this.db
+                .prepare(
+                  "UPDATE steps SET status=?,verification_json=?,error=?,lease_token=NULL,lease_until=NULL WHERE run_id=? AND id=?",
+                )
+                .run(
+                  verified.ok ? "succeeded" : "blocked",
+                  canonical(verified),
+                  verified.ok ? null : "Weryfikacja nie potwierdziła wyniku.",
+                  runId,
+                  stepId,
+                );
+              const current = this.db
+                .prepare("SELECT cancellation_requested FROM runs WHERE id=?")
+                .get(runId) as Row;
+              const remaining = this.db
+                .prepare(
+                  "SELECT id FROM steps WHERE run_id=? AND status!='succeeded' LIMIT 1",
+                )
+                .get(runId);
+              this.setStatus(
+                runId,
+                current.cancellation_requested
+                  ? "cancelled"
+                  : !verified.ok
+                    ? "blocked"
+                    : remaining
+                      ? "running"
+                      : "completed",
+              );
+              this.event(
+                runId,
+                verified.ok ? "step_verified" : "verification_failed",
+                { stepId, summary: verified.summary },
+              );
+              if (!remaining && !current.cancellation_requested)
+                this.event(runId, "run_completed");
+            });
+          } catch (e) {
+            // Provider exception text is intentionally not persisted: it may contain secrets.
             this.finishUnknown(
               runId,
               stepId,
               token,
-              "Nie można potwierdzić skutku operacji. Wymagane uzgodnienie.",
+              e instanceof DomainError
+                ? e.message
+                : "Operacja została przerwana. Jej wynik wymaga uzgodnienia.",
             );
-            return true;
+          } finally {
+            clearTimeout(timer);
           }
-          if (recovered.status === "applied") result = recovered.result;
-          else {
-            const current = this.db
-              .prepare("SELECT * FROM runs WHERE id=?")
-              .get(runId) as Row;
-            if (current.cancellation_requested) {
-              this.tx(() => {
-                if (this.owns(runId, stepId, token)) {
-                  this.db
-                    .prepare(
-                      "UPDATE steps SET status='blocked',error='Anulowano przed skutkiem.',lease_token=NULL,lease_until=NULL WHERE run_id=? AND id=?",
-                    )
-                    .run(runId, stepId);
-                  this.setStatus(runId, "cancelled");
-                  this.event(runId, "cancelled_without_effect", { stepId });
-                }
-              });
-              return true;
-            }
-            this.checkPolicy(current, tool);
-            // Definitely absent in a target with idempotency, or a pure read, permits a retry.
-            if (tool.effect === "write" && tool.recovery === "manual") {
-              this.finishUnknown(
-                runId,
-                stepId,
-                token,
-                "Narzędzie wymaga ręcznego wznowienia.",
-              );
-              return true;
-            }
-            const allowed = this.tx(() => {
-              if (!this.owns(runId, stepId, token)) return false;
-              const latest = this.db
-                .prepare("SELECT attempts FROM steps WHERE run_id=? AND id=?")
-                .get(runId, stepId) as Row;
-              if (Number(latest.attempts) >= this.maxAttempts) {
-                this.block(runId, stepId, "Osiągnięto limit prób.");
-                return false;
-              }
-              this.db
-                .prepare(
-                  "UPDATE steps SET attempts=attempts+1 WHERE run_id=? AND id=?",
-                )
-                .run(runId, stepId);
-              return true;
-            });
-            if (!allowed) return true;
-            this.executionAuthority(runId, step, tool, input, token);
-            result = await bounded(() => tool.execute(ctx, input));
-          }
-        } else {
-          this.executionAuthority(runId, step, tool, input, token);
-          result = await bounded(() => tool.execute(ctx, input));
-        }
-        if (
-          !result ||
-          typeof result.data !== "object" ||
-          result.data === null ||
-          Array.isArray(result.data)
-        )
-          throw new Error("Invalid tool result");
-        if (canonical(result).length > 128_000)
-          throw new Error("Tool result too large");
-        const saved = this.tx(() => {
-          if (!this.owns(runId, stepId, token)) return false;
-          this.db
-            .prepare(
-              "UPDATE steps SET status='verifying',output_json=? WHERE run_id=? AND id=? AND lease_token=?",
-            )
-            .run(canonical(result), runId, stepId, token);
-          this.event(runId, "effect_recorded", {
-            stepId,
-            reconciled: job.mode === "reconcile",
-          });
           return true;
-        });
-        if (!saved) return true;
-        const verified = await bounded(() => tool.verify(ctx, input, result));
-        this.validateVerification(verified);
-        this.tx(() => {
-          if (!this.owns(runId, stepId, token)) return;
-          this.db
-            .prepare(
-              "UPDATE steps SET status=?,verification_json=?,error=?,lease_token=NULL,lease_until=NULL WHERE run_id=? AND id=?",
-            )
-            .run(
-              verified.ok ? "succeeded" : "blocked",
-              canonical(verified),
-              verified.ok ? null : "Weryfikacja nie potwierdziła wyniku.",
-              runId,
-              stepId,
-            );
-          const current = this.db
-            .prepare("SELECT cancellation_requested FROM runs WHERE id=?")
-            .get(runId) as Row;
-          const remaining = this.db
-            .prepare(
-              "SELECT id FROM steps WHERE run_id=? AND status!='succeeded' LIMIT 1",
-            )
-            .get(runId);
-          this.setStatus(
-            runId,
-            current.cancellation_requested
-              ? "cancelled"
-              : !verified.ok
-                ? "blocked"
-                : remaining
-                  ? "running"
-                  : "completed",
-          );
-          this.event(
-            runId,
-            verified.ok ? "step_verified" : "verification_failed",
-            { stepId, summary: verified.summary },
-          );
-          if (!remaining && !current.cancellation_requested)
-            this.event(runId, "run_completed");
-        });
-      } catch (e) {
-        // Provider exception text is intentionally not persisted: it may contain secrets.
-        this.finishUnknown(
-          runId,
-          stepId,
-          token,
-          e instanceof DomainError
-            ? e.message
-            : "Operacja została przerwana. Jej wynik wymaga uzgodnienia.",
-        );
-      } finally {
-        clearTimeout(timer);
-      }
-      return true;
+        },
+        job.traceLink,
+      );
     } finally {
       this.busy = false;
     }

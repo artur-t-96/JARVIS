@@ -438,6 +438,24 @@ function OpsPage({
   );
   const pageRuns = historyPage > 0 ? (history.data?.runs ?? []) : runs;
   const visible = pageRuns.filter((run) => !filter || run.status === filter);
+  const telemetry = ops.data?.telemetry as
+    | {
+        mode: string;
+        metricsState: string;
+        grafanaUrl?: string | null;
+        exporter?: {
+          status?: "waiting" | "ready" | "unavailable";
+          exportedSpans: number;
+          failedBatches: number;
+          lastSuccessAt: string | null;
+        } | null;
+      }
+    | undefined;
+  const grafanaUrl =
+    telemetry?.grafanaUrl &&
+    /^http:\/\/127\.0\.0\.1:15[34]00$/.test(telemetry.grafanaUrl)
+      ? telemetry.grafanaUrl
+      : null;
   return (
     <>
       <div className="page-heading">
@@ -524,41 +542,102 @@ function OpsPage({
       ) : (
         <>
           {ops.error && <Notice tone="error">{ops.error}</Notice>}
+          {telemetry && (
+            <section className="card diagnostics-summary">
+              <div className="card-heading">
+                <h2>Metryki, logi i ślady</h2>
+                {grafanaUrl && (
+                  <a
+                    className="button secondary"
+                    href={`${grafanaUrl}/d/jarvis-${grafanaUrl.endsWith("15300") ? "lab" : "operational"}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Otwórz Grafanę
+                  </a>
+                )}
+              </div>
+              {telemetry.mode === "local-oss" ? (
+                <>
+                  <p>
+                    Połączenie z kolektorem:{" "}
+                    {telemetry.exporter?.status === "ready"
+                      ? "aktywne"
+                      : telemetry.exporter?.status === "unavailable"
+                        ? "niedostępne — JARVIS kontynuuje pracę"
+                        : "oczekiwanie na pierwszy eksport"}
+                    .
+                  </p>
+                  <p>
+                    Lokalna Grafana zbiera technologię, procesy i użycie modelu.
+                    Panel wymaga osobnego konta administratora instalacji.
+                  </p>
+                  <p className="small muted">
+                    Eksporter metryk:{" "}
+                    {telemetry.metricsState === "ready"
+                      ? "aktywny"
+                      : "niedostępny"}
+                    . Wysłane ślady: {telemetry.exporter?.exportedSpans ?? 0}.
+                    Nieudane wysyłki: {telemetry.exporter?.failedBatches ?? 0}.
+                  </p>
+                  <p className="small muted">
+                    Ostatni potwierdzony eksport:{" "}
+                    {telemetry.exporter?.lastSuccessAt
+                      ? new Date(
+                          telemetry.exporter.lastSuccessAt,
+                        ).toLocaleString("pl-PL")
+                      : "brak potwierdzenia"}
+                    . Stan eksportera nie potwierdza gotowości magazynów ani
+                    panelu.
+                  </p>
+                </>
+              ) : (
+                <p>
+                  Eksport do lokalnego stosu diagnostycznego jest wyłączony.
+                  Historia wykonań i audyt są dostępne w JARVIS.
+                </p>
+              )}
+            </section>
+          )}
           {ops.loading && !ops.data ? (
             <Loading />
           ) : (
             <div className="diagnostics-grid">
               {ops.data &&
-                Object.entries(ops.data).map(([key, value]) => (
-                  <section className="card" key={key}>
-                    <div className="card-heading">
-                      <h2>
-                        {(
-                          {
-                            modelUsage: "Model i koszt",
-                            health: "Stan usług",
-                            worker: "Praca silnika",
-                            runs: "Wykonania",
-                            counts: "Podsumowanie",
-                            queue: "Kolejka",
-                            storage: "Przechowywanie danych",
-                            version: "Wersja systemu",
-                            audit: "Audyt",
-                            errors: "Błędy",
-                            metrics: "Metryki",
-                            backups: "Kopie zapasowe",
-                            jobs: "Zadania w tle",
-                          } as Record<string, string>
-                        )[key] ?? key}
-                      </h2>
-                    </div>
-                    {value != null && typeof value === "object" ? (
-                      <JsonView value={value} />
-                    ) : (
-                      <p className="diagnostic-value">{displayValue(value)}</p>
-                    )}
-                  </section>
-                ))}
+                Object.entries(ops.data)
+                  .filter(([key]) => key !== "telemetry")
+                  .map(([key, value]) => (
+                    <section className="card" key={key}>
+                      <div className="card-heading">
+                        <h2>
+                          {(
+                            {
+                              modelUsage: "Model i koszt",
+                              health: "Stan usług",
+                              worker: "Praca silnika",
+                              runs: "Wykonania",
+                              counts: "Podsumowanie",
+                              queue: "Kolejka",
+                              storage: "Przechowywanie danych",
+                              version: "Wersja systemu",
+                              audit: "Audyt",
+                              errors: "Błędy",
+                              metrics: "Metryki",
+                              backups: "Kopie zapasowe",
+                              jobs: "Zadania w tle",
+                            } as Record<string, string>
+                          )[key] ?? key}
+                        </h2>
+                      </div>
+                      {value != null && typeof value === "object" ? (
+                        <JsonView value={value} />
+                      ) : (
+                        <p className="diagnostic-value">
+                          {displayValue(value)}
+                        </p>
+                      )}
+                    </section>
+                  ))}
             </div>
           )}
         </>

@@ -15,8 +15,8 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | Paczka | Status       | Następny warunek                                                                                                                                                                              |
 | ------ | ------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | P00    | odebrane     | [PR #4](https://github.com/artur-t-96/JARVIS/pull/4), merge `0ecee032cc69125c60fb8c75866ca60d3e9930c4`; [wymagane CI](https://github.com/artur-t-96/JARVIS/actions/runs/34215317438) zielone. |
-| P01    | do wykonania | Manifest natywnych komponentów OSS, konfiguracja i lifecycle.                                                                                                                                 |
-| P02    | w toku       | Kontekst asynchroniczny poprawiony w pierwszej paczce; eksport i instrumentacja HTTP/run/model do wykonania.                                                                                  |
+| P01    | w toku       | Natywny instalator i preview 5 usług; trwały zapis logów, restart oraz CI do domknięcia.                                                                                                      |
+| P02    | w toku       | HTTP/run/tool/model zinstrumentowane; OTLP i Prometheus działają, zgoda zachowuje link przez restart.                                                                                         |
 | P03    | do wykonania | Typowane warunki odbioru i właściwi wykonawcy zadań.                                                                                                                                          |
 | P04    | do wykonania | Kontrolowane odczyty kontekstu, ciągłość rozmowy i sprawy.                                                                                                                                    |
 | P05    | do wykonania | Kompletny obieg wyposażenia z poświadczeniami.                                                                                                                                                |
@@ -38,7 +38,7 @@ Statusy P01–P14 oznaczają brak pełnego odbioru paczki opisanej w roadmapie. 
 
 1. Zweryfikować main i otwarte PR-y/worktrees JARVIS; dokończyć istniejącą paczkę zamiast dublować implementację.
 2. Rozdzielić niezależne prace: manifest/instalator i zamknięty lifecycle, konfiguracje/panele, kontekst/instrumentacja oraz niezależny przegląd.
-3. Pierwsza poprawka kontekstu ma commit `b1e4b9b`: `AsyncLocalStorage`, `withSpan` i `withWorkerTick`, testy równoległego HTTP/workera, zagnieżdżeń, błędów, zakończenia i redakcji. Sprawdzono lokalnie 12 testów infrastruktury, backend TypeScript i format. Przed kontynuacją sprawdzić PR gałęzi `codex/observability-context` oraz dokładny merge/CI i lokalny SHA. Eksport, trwała korelacja run/step/model i spany HTTP nadal pozostają do wykonania.
+3. Pierwsza poprawka kontekstu jest scalona: [PR #5](https://github.com/artur-t-96/JARVIS/pull/5), merge `4ce6f3f1fcc37705b41afc8e23a860b00d5ea831`, [CI main](https://github.com/artur-t-96/JARVIS/actions/runs/34215909114) zielone. Commit implementacji `b1e4b9b`: `AsyncLocalStorage`, `withSpan` i `withWorkerTick`, testy równoległego HTTP/workera, zagnieżdżeń, błędów, zakończenia i redakcji. Sprawdzono lokalnie 12 testów infrastruktury, backend TypeScript i format. Oba zarządzane tryby zaktualizowano do merge SHA i potwierdzono izolację korelacji na rzeczywistych żądaniach.
 4. Przypiąć oficjalne binaria z SHA-256, przygotować własne katalogi i jawne porty loopback; bez globalnych usług i odczytu innych repozytoriów przez kolektor.
 5. Uruchomić na syntetycznym laboratorium rzeczywiste metryki, logi i ślady. Sprawdzić retencję, restart, awarię kolektora, rozdział danych i zużycie zasobów.
 6. Doprowadzić kod przez bot branch/PR/CI/merge. Po merge zaktualizować wyłącznie zarządzaną instalację JARVIS, z zachowaniem danych i sprawdzeniem wersji w przeglądarce.
@@ -55,3 +55,13 @@ Nie zmieniać innych systemów. Nie używać lokalnego Dockera. Nie pobierać cu
 Jeżeli brakuje klucza modelu, realnego poświadczenia albo zgody systemowej mikrofonu, zapisać blokadę konkretnego odbioru i kontynuować niezależne prace. Nie oznaczać całej roadmapy jako zablokowanej z tego powodu.
 
 W kolejnej aktualizacji wpisać: paczkę, branch/worktree, PR, commit, wynik wymaganych CI, lokalny SHA, dowód odbioru, otwarte problemy i jednoznaczny następny krok. Nie zapisywać haseł, tokenów ani treści danych operacyjnych. Wynik planowania i wynik implementacji mają pozostać rozdzielone.
+
+## P01/P02 — bieżąca implementacja
+
+Gałąź `codex/observability-oss`, worktree `/private/tmp/jarvis-observability-oss`. Kod źródłowy głównej instalacji pozostaje na scalonym SHA podczas sprawdzania preview na porcie 4330. Oficjalne dystrybucje pięciu komponentów pobrano, sprawdzono według SHA-256 i pełnego drzewa, zainstalowano w prywatnych katalogach JARVIS.
+
+Potwierdzone w preview: wszystkie pięć usług uruchomione, prawdziwe metryki Prometheus, ślady Jaeger, provisionowane trzy źródła i 14 paneli Grafany; listenery wyłącznie loopback. Testy HTTP abort, 300 równoległych oczekiwań, redakcji, eksportu OTLP i trwałego linkowania zgody przechodzą. Syntetyczny zapis `ops.assets.create` przeszedł zgodę i niezależny odbiór przy wyłączonym Collectorze; identyfikator `e453ff10-6640-496a-936e-32d69666daf4`, dowód prywatny `.data/observability/offline-effect-proof.json`.
+
+Podczas rzeczywistego startu usunięto konflikt portów Jaeger query HTTP/gRPC. Loki zwrócił 503 na zapis mimo /ready200: domyślny próg WAL 90% blokował dysk z 39 GiB wolnego. Konfiguracja zachowuje guard przy 95% oraz bezwzględną rezerwę supervisora 2 GiB. Zapis logów po tej zmianie, trwałość po restarcie, izolacja dwóch realnych stosów, browser Grafany oraz hosted CI pozostają do potwierdzenia.
+
+Nie uznawać jeszcze P01/P02 za odebrane. Po dostarczeniu tej gałęzi przejść do P03: oddzielenie wykonawcy zadania od zatwierdzającego zapis i typowane bramki biznesowego odbioru.
