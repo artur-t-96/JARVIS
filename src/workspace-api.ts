@@ -113,6 +113,10 @@ export function registerWorkspaceApi(
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { equipment: workspace.taskEquipment(principal(req), id) };
   });
+  app.get("/api/tasks/:id/access", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { access: workspace.taskAccess(principal(req), id) };
+  });
   app.get("/api/assets/:id/custodians", async (req) => {
     const actor = principal(req),
       { id } = z.object({ id: z.string().uuid() }).parse(req.params);

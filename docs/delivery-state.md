@@ -22,7 +22,7 @@ Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](r
 | P05    | w toku             | P05a odebrane w PR #9; P05b domyka ewidencję, serwis i rozbieżności.                                                                                                                          |
 | P06    | do wykonania       | Pełny onboarding po P08a/P09a i bazowych profilach z P03.                                                                                                                                     |
 | P07    | do wykonania       | Pełny proces IT, certyfikat i niezależna weryfikacja.                                                                                                                                         |
-| P08    | do wykonania       | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
+| P08    | w toku             | Dostawy, koszty, miejsca i odnowienia licencji.                                                                                                                                               |
 | P09    | do wykonania       | Kompletne źródła, dowody plikowe i gotowe dokumenty.                                                                                                                                          |
 | P10    | do wykonania       | Oferta, przekazanie, realizacja i pakiet rozliczeniowy.                                                                                                                                       |
 | P11    | do wykonania       | Rekrutacja i pełne zamknięcie konkretnej współpracy.                                                                                                                                          |
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P05b: ewidencja i inwentaryzacja wyposażenia.** P05a odebrano lokalnie w PR #9 na `7d188a41b23243f02a1908c4dc729d03b85a9e87`. Nowy worktree `/private/tmp/jarvis-asset-register`, gałąź `codex/asset-register`, od tego scalonego commitu. Rozwiniemy zamianę rezerwacji, metadane i odpowiedzialność za ewidencję, przeniesienia, serwis, wycofanie, spis z natury z rozbieżnościami i zatwierdzany import. P08a/P09a i pełny onboarding P06 pozostają kolejnymi zależnościami.
+**P08a2: poświadczenia przez zadanie IT.** Punkt startu: odebrany lokalnie PR #14, `b887e737afad858167f554447eebc750a985ced7`. Worktree `/private/tmp/jarvis-access-tasks`, gałąź `codex/access-tasks`. Bieżący wykonawca przyjętego zadania otrzyma minimalne dane odbiorcy, aplikacje/role właściwego zestawu i poświadczenia swojej współpracy. Zapis, odnowienie, cofnięcie i powiązanie dowodu wymagają osobnych zgód oraz kontroli obsady, zależności i wersji. Następne zależności to P09a i pełny onboarding P06. Spis z natury oraz import P05b pozostają otwarte.
 
 ## Kontynuacja w tym zadaniu
 
@@ -183,3 +183,27 @@ Chrome na odseparowanym podglądzie `a9c2021` wykonał formularz poświadczenia 
 Podgląd zatrzymano przed kopią. Backup `/private/tmp/jarvis-p08a1-backup-20260908T1520`, odtworzenie `/private/tmp/jarvis-p08a1-restored-20260908T1520`, manifest `2d4926e93c347415ea2182c7c3f5ebc2ac7b3ac8349cd3b2e0111c9d745431cb`. Rzeczywisty restore zachował sześć poświadczeń i powiązania trzech współprac; ponowny odczyt sześciu zapisanych poleceń nie dodał skutku. Konta pozostają poza tym pakietem kopii i nie zostały odtworzone.
 
 Źródła odbioru: `.data/p08a-preview/ui-proof.json`, `http-proof.ts`, `restore-proof.ts` i zapis CI w worktree paczki. Aktualizacja głównego lab/operational i sprawdzenie dokładnego SHA pozostają oddzielnym krokiem dostarczenia. P08a2 — wąskie zadanie IT — jest następnym przyrostem; P09a i P06 nadal otwarte. Nie wykonano połączeń ani zmian w zewnętrznych aplikacjach.
+
+## P08a1 — scalona instalacja odebrana
+
+[PR #14](https://github.com/artur-t-96/JARVIS/pull/14) scalono jako `b887e737afad858167f554447eebc750a985ced7`. Końcowe CI PR 34244185109 oraz [CI main](https://github.com/artur-t-96/JARVIS/actions/runs/34244554972) są zielone: 300 testów, format, typy, build i oba demonstratory.
+
+Przed aktualizacją zatrzymano oba tryby i wykonano po sześć plików kopii. Lab: `/private/tmp/jarvis-before-p08a1-lab-20260908T1525`, manifest `d6d9274f6da60b11268b61871de16f54f1c6eca4e1e56307c9877cda899b2afa`; operational: `/private/tmp/jarvis-before-p08a1-operational-20260908T1525`, manifest `73a63a2c43a651af36d0fd396895f6815ede00bd08fe55f910c24fa8f2a2c972`. Zarządzana aktualizacja i start obu trybów potwierdziły dokładny scalony SHA i działającego workera.
+
+Rzeczywisty Chrome głównego lab4310: `e5dabe88-8cb0-4b66-8bef-09cd9c478b82` poświadczył testowe konto poczty z właściwym miejscem licencji, a `ef171fd8-864d-4306-b312-14a2fd1b86e6` powiązał kompletny zestaw. Obie operacje mają osobne zgody, jedną próbę i niezależną weryfikację. Warunek dostępu jest spełniony; pozostałe wymagania i zadania nadal blokują onboarding. Wcześniejsza testowa rezerwacja P05b2 pozostała w wersji 2. Dowód: `.data/local-product/p08a1-verification.json`.
+
+OSS obu trybów: Grafana 13.2.1, 14 paneli, Prometheus/Loki/Jaeger ze statusem OK, działające liczniki workera i po jednym dopasowanym logu dla nowych śladów HTTP. Lab `6a1d0124f8e1bbd8e44d1cedc801d7a9`, operational `66fea46ed25255ba11437f4b67367b48`. Dowód `.data/local-product/p08a1-oss-verification.json`.
+
+## P08a2 — wykonanie z zadania IT
+
+Kod w worktree `codex/access-tasks` rozszerza ograniczone zadanie o wymagane aplikacje/role, właściwe miejsca licencji oraz cztery osobne narzędzia. Zapis wspólnie obejmuje poświadczenie, historię zadania, wersję sprawy, receipt i outbox. Nie zmienia schematu migracji v8 ani starszych narzędzi pełnej sprawy. Weryfikacja po utracie odpowiedzi odnosi się do zapisanego skutku; wygaśnięcie poświadczenia jest oddzielnym stanem gotowości. Po przekazaniu zadania były wykonawca zachowuje odczyt własnego wykonanego polecenia przy zachowaniu aktywnego konta, ale nie możliwość kolejnego zapisu.
+
+[PR #15](https://github.com/artur-t-96/JARVIS/pull/15), źródłowy `b81023ce1ff02ce0be0f5885dcaeb8b73b6edeae`: [CI 34246503879](https://github.com/artur-t-96/JARVIS/actions/runs/34246503879) zielone, 311 testów, format, typy, build i oba demonstratory. Cztery nowe testy rzeczywiście zabijają proces po zapisie narzędzia zadania, potem dwukrotnie wznawiają po wygaśnięciu poświadczenia; zachowują jedną próbę wykonania, jedną zmianę zadania/sprawy i jeden receipt.
+
+Chrome preview: konto tylko IT widzi minimalny kontekst przed przyjęciem, a po przyjęciu wyłącznie aplikacje/role zadania i miejsca licencji właściwej współpracy. Formularze: przyjęcie `89736275-ece5-4e5d-a33f-d21fc30b76aa`, poświadczenie z licencją `fb272113-62c2-4a8d-931c-8bea87f22d60`, odnowienie `bc49a094-b579-494e-aaa0-7febe194abb2`, powiązanie `b2098bac-de97-4fff-9e1a-ed64f5228296`, cofnięcie `1f881c02-639d-4903-b1cf-fdc08e513222`. Każdy plan z Chrome zatwierdzono przez API odrębnym kontem reviewer; jedna próba, niezależna weryfikacja. Cofnięcie unieważniło powiązany dowód, pozostawiając trzy wpisy historii. Końcowe dopracowanie widoku nadaje temu ostrzeżeniu kolor błędu.
+
+API obu firm: dziewięć dalszych zatwierdzonych komend, sześć poświadczeń dla trzech współprac; początkowo wszystkie trzy wymagania dostępu spełnione, onboarding nadal zablokowany. Po cofnięciu w firmie A jej warunek utracił aktualność. Chrome drugiej firmy pokazał osobne zadania i dowód projektu Beta tej samej osoby; API potwierdziło izolację okresów oraz odmowę pełnej sprawy, HR i całej ewidencji licencji.
+
+Preview zatrzymano. Rzeczywista kopia sześciu plików z 8.09, 15:50:14 UTC została odtworzona w `/private/tmp/jarvis-p08a2-restored-20260908T1550`; manifest `475f713e7973bcb138cc122105b245ce54151a5e10bdf48ce4a722d35bb03805`. Jedenaście zapisanych poleceń uzgodniono bez dodatkowego skutku; sześć grantów, autorzy, historia zadania i stan gotowości pozostały identyczne. Konta nie zostały odtworzone, serwera odtworzonej bazy nie uruchamiano. Dowody i skrypty: `/private/tmp/jarvis-access-tasks/.data/p08a2-preview/ui-proof.json`.
+
+Scalenie i odbiór głównej instalacji pozostają ostatnim krokiem dostarczenia P08a2. P09a i pełny onboarding P06 pozostają otwarte.
