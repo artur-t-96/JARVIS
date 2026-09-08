@@ -542,7 +542,9 @@ test("a tool ignoring AbortSignal cannot hold the worker forever or authorize a 
   });
   let work: Promise<boolean> | undefined;
   try {
-    ctx.reopen({ leaseMs: 50 });
+    // Exercise the adapter deadline without racing lease expiry under CI load.
+    // The next test advances the clock to verify fencing after an expired lease.
+    ctx.reopen({ leaseMs: 50, clock: () => 1000 });
     const run = ctx.engine.createRun(
       operator,
       "Zapisz.",
