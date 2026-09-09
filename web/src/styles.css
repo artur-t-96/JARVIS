@@ -1185,6 +1185,11 @@ tbody tr:hover {
 .asset-import-table .error-text {
   color: var(--danger, #a02c35);
 }
+.asset-import-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
 .asset-import-operation .pagination,
 .sheet .pagination {
   display: flex;

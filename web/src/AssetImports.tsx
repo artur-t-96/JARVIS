@@ -3,6 +3,7 @@ import { download, post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Entity, type Run } from "./types";
 import { Empty, Loading, Notice, Sheet } from "./ui";
+import { optionLabel } from "./references";
 
 const fields: Record<string, string> = {
   title: "Nazwa",
@@ -133,7 +134,7 @@ export function ImportRows({
                 {row.asset?.location}
                 {row.asset && (
                   <p className="small">
-                    {row.asset.assetType} ·{" "}
+                    {optionLabel(row.asset.assetType!)} ·{" "}
                     {row.asset.condition === "good"
                       ? "Sprawny"
                       : "Wymaga naprawy"}
@@ -391,9 +392,9 @@ function ImportForm({ onClose }: { onClose: () => void }) {
               ))}
               <h3>Wybór pozycji</h3>
               <p>
-                {preview.counts.total} w źródle · {preview.counts.eligible}{" "}
-                nowych · {preview.counts.existing} istniejących ·{" "}
-                {preview.counts.invalid} z błędami
+                Pozycje w źródle: {preview.counts.total} · nowe:{" "}
+                {preview.counts.eligible} · istniejące:{" "}
+                {preview.counts.existing} · błędne: {preview.counts.invalid}
               </p>
               <Notice tone="info">
                 Wybrano {selected.length}. Pominięte:{" "}
@@ -401,7 +402,7 @@ function ImportForm({ onClose }: { onClose: () => void }) {
                 zachowają obecne dane. Błędne pozycje można poprawić w pliku i
                 sprawdzić ponownie.
               </Notice>
-              <div className="actions">
+              <div className="asset-import-selection">
                 <button
                   type="button"
                   className="text-button"
