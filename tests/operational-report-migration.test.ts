@@ -40,7 +40,7 @@ test("v17 report preview migration rolls back on DDL conflict and preserves earl
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      17,
+      18,
     );
     assert.deepEqual(db.prepare("SELECT * FROM ops_entities").all(), before);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
@@ -56,7 +56,7 @@ test("v17 report preview migration rolls back on DDL conflict and preserves earl
             },
           })),
         }),
-      /v17 is newer than supported v16/,
+      /v18 is newer than supported v16/,
     );
   } finally {
     db.close();

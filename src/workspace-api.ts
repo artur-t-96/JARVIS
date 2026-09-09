@@ -305,6 +305,65 @@ export function registerWorkspaceApi(
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { holds: workspace.assetInventoryHolds(principal(req), id) };
   });
+  app.get("/api/sales/records", async (req) => {
+    const page = z
+      .object({
+        kind: z
+          .enum(["client", "contact", "deal", "offer", "next_step"])
+          .optional(),
+        parentId: z.string().uuid().optional(),
+        search: z.string().trim().max(200).default(""),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        offset: z.coerce.number().int().min(0).max(100_000).default(0),
+      })
+      .parse(req.query);
+    return workspace.salesList(principal(req), page);
+  });
+  app.get("/api/sales/owners", async (req) => {
+    const actor = principal(req);
+    if (!actor.scopes?.some((s) => s === "*" || s === "sales"))
+      throw new DomainError(
+        "SCOPE_REQUIRED",
+        "Wymagany dostęp do sprzedaży.",
+        403,
+      );
+    return {
+      owners: (principals?.(actor.tenantId) ?? [])
+        .filter(
+          (p) =>
+            p.tenantId === actor.tenantId &&
+            p.roles.includes("operator") &&
+            p.scopes?.some((s) => s === "*" || s === "sales"),
+        )
+        .map((p) => ({ id: p.id, label: p.id })),
+    };
+  });
+  app.get("/api/sales/:id/workflow", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(30),
+        offset: z.coerce.number().int().min(0).max(100_000).default(0),
+      })
+      .parse(req.query);
+    return {
+      workflow: workspace.salesView(
+        principal(req),
+        id,
+        page.limit,
+        page.offset,
+      ),
+    };
+  });
+  app.get("/api/sales/:id/versions/:version", async (req) => {
+    const { id, version } = z
+      .object({
+        id: z.string().uuid(),
+        version: z.coerce.number().int().positive(),
+      })
+      .parse(req.params);
+    return { item: workspace.salesVersion(principal(req), id, version) };
+  });
   app.get("/api/licenses/owners", async (req) => {
     const actor = principal(req);
     if (
@@ -796,18 +855,28 @@ export function registerWorkspaceApi(
     const tool = tools.find((t) => t.id === toolId);
     if (!tool) throw new DomainError("UNKNOWN_TOOL", "Nieznana operacja.");
     tool.inputSchema.parse(input);
+    const salesTitle = toolId.startsWith("ops.sales.")
+      ? typeof input.title === "string"
+        ? input.title
+        : typeof input.id === "string"
+          ? workspace.get(actor, "sales", input.id).title
+          : ""
+      : "";
+    const commandTitle = salesTitle
+      ? `${tool.description.split(". ")[0]} · ${salesTitle}`.slice(0, 160)
+      : tool.description.slice(0, 160);
     return reply.code(201).send({
       run: engine.createRun(
         actor,
         `Operacja ${tool.id}`,
         {
-          title: tool.description.slice(0, 160),
+          title: commandTitle,
           summary:
             "Sprawdź konkretny zakres operacji przed uruchomieniem i zatwierdzeniem zapisu.",
           steps: [
             {
               id: "command",
-              title: tool.description.slice(0, 160),
+              title: commandTitle,
               toolId,
               input: input as JsonObject,
             },

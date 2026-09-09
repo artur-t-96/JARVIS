@@ -1,3 +1,4 @@
+import { SalesForm, SalesWorkflow, SalesPage } from "./Sales";
 import { StocktakePage } from "./Stocktakes";
 import { AssetImportToolbar } from "./AssetImports";
 import { LicenseContracts, licenseSidebarAction } from "./LicenseContracts";
@@ -681,6 +682,8 @@ export function WorkspacePage(props: {
   context: Context;
   revision: number;
 }) {
+  if (props.module.id === "sales" && !props.entityId)
+    return <SalesPage context={props.context} revision={props.revision} />;
   return props.module.id === "inventory" ? (
     <StocktakePage {...props} />
   ) : (
@@ -713,6 +716,7 @@ function StandardWorkspacePage({
   const [form, setForm] = useState<FormSpec | null>(null);
   const [documentTemplate, setDocumentTemplate] = useState(false);
   const [purchaseCreate, setPurchaseCreate] = useState(false);
+  const [salesCreate, setSalesCreate] = useState(false);
   const closePurchase = useCallback(() => setPurchaseCreate(false), []);
   const [copyMessage, setCopyMessage] = useState("");
   const closeForm = useCallback(() => setForm(null), []);
@@ -725,14 +729,16 @@ function StandardWorkspacePage({
     (!cancelledCase || action === "create") &&
     context.tools.some((tool) => tool.id === `ops.${module.id}.${action}`);
   const create = () =>
-    module.id === "purchases"
-      ? setPurchaseCreate(true)
-      : setForm({
-          title: `Dodaj: ${module.label.toLocaleLowerCase("pl")}`,
-          action: "create",
-          fields: module.fields,
-          dataForm: true,
-        });
+    module.id === "sales"
+      ? setSalesCreate(true)
+      : module.id === "purchases"
+        ? setPurchaseCreate(true)
+        : setForm({
+            title: `Dodaj: ${module.label.toLocaleLowerCase("pl")}`,
+            action: "create",
+            fields: module.fields,
+            dataForm: true,
+          });
   const items = (resource.data?.items ?? [])
     .filter((item) => item.data.kind !== "license_terms")
     .filter(
@@ -799,6 +805,8 @@ function StandardWorkspacePage({
                 </div>
                 {allowedTool("update") &&
                   item.data.kind !== "license_terms" &&
+                  (module.id !== "sales" ||
+                    ["client", "contact"].includes(String(item.data.kind))) &&
                   (module.id !== "purchases" ||
                     item.data.kind === "supplier") &&
                   module.id !== "documents" &&
@@ -808,16 +816,25 @@ function StandardWorkspacePage({
                       onClick={() =>
                         setForm({
                           title:
-                            module.id === "assets"
-                              ? "Zmień dane ewidencji"
-                              : "Zmień nazwę",
+                            module.id === "sales"
+                              ? "Zmień dane klienta lub kontaktu"
+                              : module.id === "assets"
+                                ? "Zmień dane ewidencji"
+                                : "Zmień nazwę",
                           action: "update",
                           fields:
-                            module.id === "assets"
+                            module.id === "sales"
                               ? module.fields.filter((f) =>
-                                  ["manufacturer", "model"].includes(f.key),
+                                  (item.data.kind === "client"
+                                    ? ["organizationName", "contactEmail"]
+                                    : ["contactEmail", "phone", "jobTitle"]
+                                  ).includes(f.key),
                                 )
-                              : [],
+                              : module.id === "assets"
+                                ? module.fields.filter((f) =>
+                                    ["manufacturer", "model"].includes(f.key),
+                                  )
+                                : [],
                           entity: item,
                           dataForm: true,
                         })
@@ -849,6 +866,14 @@ function StandardWorkspacePage({
               )}
               {item.module === "cases" && !!item.data.laboratoryContext && (
                 <ItCase item={item} context={context} />
+              )}
+              {item.module === "sales" && (
+                <SalesWorkflow
+                  key={item.id}
+                  item={item}
+                  context={context}
+                  revision={revision}
+                />
               )}
               {item.module === "licenses" && (
                 <LicenseContracts
@@ -903,7 +928,9 @@ function StandardWorkspacePage({
                 <AccessDefinitions context={context} item={item} />
               )}
               {item.data.kind !== "license_terms" && (
-                <div className="detail-grid">
+                <div
+                  className={`detail-grid ${item.module === "sales" ? "sales-detail" : ""}`}
+                >
                   <section className="card">
                     <div className="card-heading">
                       <h2>Dane rekordu</h2>
@@ -922,6 +949,19 @@ function StandardWorkspacePage({
                                 field.key,
                               )) &&
                             item.data.kind !== "license_terms" &&
+                            (module.id !== "sales" ||
+                              (item.data.kind === "client"
+                                ? ["kind", "organizationName", "contactEmail"]
+                                : item.data.kind === "contact"
+                                  ? [
+                                      "kind",
+                                      "parentId",
+                                      "contactEmail",
+                                      "phone",
+                                      "jobTitle",
+                                    ]
+                                  : ["kind"]
+                              ).includes(field.key)) &&
                             (!isAccessDefinition(item) ||
                               ["kind", "description"].includes(field.key)),
                         )
@@ -976,138 +1016,141 @@ function StandardWorkspacePage({
                       </p>
                     )}
                   </section>
-                  <aside>
-                    <section className="card">
-                      <div className="card-heading">
-                        <h2>
-                          {cancelledCase ? "Historia sprawy" : "Kolejny krok"}
-                        </h2>
-                      </div>
-                      <p className="muted">
-                        {cancelledCase
-                          ? "Sprawa jest anulowana. Historia pozostaje dostępna; nowa potrzeba wymaga osobnej sprawy."
-                          : "Wybierz operację. JARVIS przygotuje jej zakres do sprawdzenia."}
-                      </p>
-                      <div className="action-list">
-                        {module.actions
-                          .filter(
-                            (action) =>
-                              allowedTool(action.id) &&
-                              action.id !== "importBatch" &&
-                              (module.id !== "licenses" ||
-                                licenseSidebarAction(item, action.id)) &&
-                              (module.id !== "purchases" ||
-                                purchasingSidebarAction(item, action.id)) &&
-                              !(
-                                module.id === "people" &&
-                                action.id === "cancelStart"
-                              ) &&
-                              !(
-                                module.id === "cases" &&
-                                item.data.caseType === "onboarding" &&
-                                ["submit", "accept"].includes(action.id)
-                              ) &&
-                              !(
-                                module.id === "documents" &&
-                                ([
-                                  "attachFile",
-                                  "detachFile",
-                                  "createReport",
-                                  "refreshReport",
-                                ].includes(action.id) ||
-                                  (action.id === "revise" &&
-                                    !!item.data.operationalReport))
-                              ) &&
-                              (module.id !== "it" ||
-                                (isAccessDefinition(item)
-                                  ? action.id === "retireAccessDefinition" &&
-                                    item.status === "active"
-                                  : ![
-                                      "reviseApplication",
-                                      "reviseAccessBundle",
-                                      "retireAccessDefinition",
-                                    ].includes(action.id))) &&
-                              (module.id !== "assets" ||
-                                action.id === "assignCustodian" ||
-                                (action.id === "reserve" &&
-                                  item.status === "available" &&
-                                  item.data.condition === "good") ||
-                                ([
-                                  "issue",
-                                  "release",
-                                  "expireReservation",
-                                  "replaceReservation",
-                                ].includes(action.id) &&
-                                  item.status === "reserved") ||
-                                (action.id === "return" &&
-                                  item.status === "issued") ||
-                                (["move", "sendToService", "retire"].includes(
-                                  action.id,
+                  {item.module !== "sales" && (
+                    <aside>
+                      <section className="card">
+                        <div className="card-heading">
+                          <h2>
+                            {cancelledCase ? "Historia sprawy" : "Kolejny krok"}
+                          </h2>
+                        </div>
+                        <p className="muted">
+                          {cancelledCase
+                            ? "Sprawa jest anulowana. Historia pozostaje dostępna; nowa potrzeba wymaga osobnej sprawy."
+                            : "Wybierz operację. JARVIS przygotuje jej zakres do sprawdzenia."}
+                        </p>
+                        <div className="action-list">
+                          {module.actions
+                            .filter(
+                              (action) =>
+                                allowedTool(action.id) &&
+                                module.id !== "sales" &&
+                                action.id !== "importBatch" &&
+                                (module.id !== "licenses" ||
+                                  licenseSidebarAction(item, action.id)) &&
+                                (module.id !== "purchases" ||
+                                  purchasingSidebarAction(item, action.id)) &&
+                                !(
+                                  module.id === "people" &&
+                                  action.id === "cancelStart"
                                 ) &&
-                                  ["available", "maintenance"].includes(
-                                    item.status,
-                                  )) ||
-                                (action.id === "markRepaired" &&
-                                  item.status === "maintenance")) &&
-                              !(
-                                module.id === "assets" &&
-                                action.id.endsWith("ForTask")
-                              ) &&
-                              !(
-                                module.id === "cases" &&
-                                [
-                                  "acceptTask",
-                                  "declineTask",
-                                  "transferTask",
-                                  "completeTask",
-                                  "cancelTask",
-                                  "bindEvidence",
-                                  "attestAccessForTask",
-                                  "renewAccessForTask",
-                                  "revokeAccessForTask",
-                                  "bindAccessForTask",
-                                  "attestAccess",
-                                  "renewAccess",
-                                  "revokeAccess",
-                                ].includes(action.id)
-                              ),
-                          )
-                          .map((action) => (
-                            <button
-                              className="action-row"
-                              key={action.id}
-                              onClick={() =>
-                                setForm({
-                                  title: action.label,
-                                  action: action.id,
-                                  fields: actionFields(module, action),
-                                  entity: item,
-                                  dataForm: false,
-                                })
-                              }
-                            >
-                              <span>{action.label}</span>
-                              <Icon name="arrow" size={17} />
-                            </button>
-                          ))}
-                        {!module.actions.some((action) =>
-                          allowedTool(action.id),
-                        ) && (
-                          <p className="small muted">
-                            Brak dostępnych operacji dla Twojej roli.
-                          </p>
-                        )}
+                                !(
+                                  module.id === "cases" &&
+                                  item.data.caseType === "onboarding" &&
+                                  ["submit", "accept"].includes(action.id)
+                                ) &&
+                                !(
+                                  module.id === "documents" &&
+                                  ([
+                                    "attachFile",
+                                    "detachFile",
+                                    "createReport",
+                                    "refreshReport",
+                                  ].includes(action.id) ||
+                                    (action.id === "revise" &&
+                                      !!item.data.operationalReport))
+                                ) &&
+                                (module.id !== "it" ||
+                                  (isAccessDefinition(item)
+                                    ? action.id === "retireAccessDefinition" &&
+                                      item.status === "active"
+                                    : ![
+                                        "reviseApplication",
+                                        "reviseAccessBundle",
+                                        "retireAccessDefinition",
+                                      ].includes(action.id))) &&
+                                (module.id !== "assets" ||
+                                  action.id === "assignCustodian" ||
+                                  (action.id === "reserve" &&
+                                    item.status === "available" &&
+                                    item.data.condition === "good") ||
+                                  ([
+                                    "issue",
+                                    "release",
+                                    "expireReservation",
+                                    "replaceReservation",
+                                  ].includes(action.id) &&
+                                    item.status === "reserved") ||
+                                  (action.id === "return" &&
+                                    item.status === "issued") ||
+                                  (["move", "sendToService", "retire"].includes(
+                                    action.id,
+                                  ) &&
+                                    ["available", "maintenance"].includes(
+                                      item.status,
+                                    )) ||
+                                  (action.id === "markRepaired" &&
+                                    item.status === "maintenance")) &&
+                                !(
+                                  module.id === "assets" &&
+                                  action.id.endsWith("ForTask")
+                                ) &&
+                                !(
+                                  module.id === "cases" &&
+                                  [
+                                    "acceptTask",
+                                    "declineTask",
+                                    "transferTask",
+                                    "completeTask",
+                                    "cancelTask",
+                                    "bindEvidence",
+                                    "attestAccessForTask",
+                                    "renewAccessForTask",
+                                    "revokeAccessForTask",
+                                    "bindAccessForTask",
+                                    "attestAccess",
+                                    "renewAccess",
+                                    "revokeAccess",
+                                  ].includes(action.id)
+                                ),
+                            )
+                            .map((action) => (
+                              <button
+                                className="action-row"
+                                key={action.id}
+                                onClick={() =>
+                                  setForm({
+                                    title: action.label,
+                                    action: action.id,
+                                    fields: actionFields(module, action),
+                                    entity: item,
+                                    dataForm: false,
+                                  })
+                                }
+                              >
+                                <span>{action.label}</span>
+                                <Icon name="arrow" size={17} />
+                              </button>
+                            ))}
+                          {!module.actions.some((action) =>
+                            allowedTool(action.id),
+                          ) && (
+                            <p className="small muted">
+                              Brak dostępnych operacji dla Twojej roli.
+                            </p>
+                          )}
+                        </div>
+                      </section>
+                      <RecordDownload item={item} />
+                      <div className="small muted detail-note">
+                        <Icon name="shield" size={18} />
+                        <span>
+                          Dane należą do bieżącej organizacji. Każda zmiana
+                          pozostawia ślad w historii wykonania.
+                        </span>
                       </div>
-                    </section>
-                    <RecordDownload item={item} />
-                    <div className="small muted detail-note">
-                      <Icon name="shield" size={18} />
-                      <span>
-                        Dane należą do bieżącej organizacji. Każda zmiana
-                        pozostawia ślad w historii wykonania.
-                      </span>
-                    </div>
-                  </aside>
+                    </aside>
+                  )}
                 </div>
               )}
               {item.module === "cases" && (
@@ -1133,6 +1176,9 @@ function StandardWorkspacePage({
     );
   return (
     <>
+      {salesCreate && (
+        <SalesForm context={context} onClose={() => setSalesCreate(false)} />
+      )}
       {documentTemplate && (
         <DocumentTemplate onClose={() => setDocumentTemplate(false)} />
       )}

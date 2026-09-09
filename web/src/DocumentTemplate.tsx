@@ -1,3 +1,4 @@
+import { SalesPicker } from "./Sales";
 import { useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
@@ -10,11 +11,12 @@ export function DocumentTemplate({ onClose }: { onClose: () => void }) {
   }>("/api/document-templates");
   const [templateId, setTemplateId] = useState("");
   const [sourceId, setSourceId] = useState("");
+  const [salesSource, setSalesSource] = useState<Entity | null>(null);
   const module = templates.data?.templates.find(
     (item) => item.id === templateId,
   )?.module;
   const sources = useResource<{ items: Entity[] }>(
-    module ? `/api/workspace/${module}` : null,
+    module && module !== "sales" ? `/api/workspace/${module}` : null,
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -42,7 +44,7 @@ export function DocumentTemplate({ onClose }: { onClose: () => void }) {
       subtitle="Wersjonowany szkic do sprawdzenia"
       onClose={onClose}
     >
-      <form onSubmit={(event) => void submit(event)}>
+      <form className="command-form" onSubmit={(event) => void submit(event)}>
         <div className="sheet-body">
           {(error || templates.error || sources.error) && (
             <Notice tone="error">
@@ -58,6 +60,7 @@ export function DocumentTemplate({ onClose }: { onClose: () => void }) {
               onChange={(event) => {
                 setTemplateId(event.target.value);
                 setSourceId("");
+                setSalesSource(null);
               }}
             >
               <option value="">Wybierz szablon…</option>
@@ -68,34 +71,47 @@ export function DocumentTemplate({ onClose }: { onClose: () => void }) {
               ))}
             </select>
           </label>
-          <label className="field">
-            <span>Rekord źródłowy</span>
-            <select
-              required
-              disabled={busy || !module || sources.loading}
-              value={sourceId}
-              onChange={(event) => setSourceId(event.target.value)}
-            >
-              <option value="">
-                {!module
-                  ? "Najpierw wybierz szablon…"
-                  : sources.loading
-                    ? "Pobieranie rekordów…"
-                    : sources.data?.items.length
-                      ? "Wybierz rekord…"
-                      : "Brak dostępnych rekordów"}
-              </option>
-              {!sources.loading &&
-                sources.data?.items.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.title} ·{" "}
-                    {templateId === "case_scope"
-                      ? `zakres ${String(item.data.scopeRevision)}`
-                      : `wersja ${item.version}`}
-                  </option>
-                ))}
-            </select>
-          </label>
+          {module === "sales" ? (
+            <SalesPicker
+              kind="offer"
+              label="Oferta źródłowa"
+              allowOffers
+              value={salesSource}
+              onChange={(e) => {
+                setSalesSource(e);
+                setSourceId(e.id);
+              }}
+            />
+          ) : (
+            <label className="field">
+              <span>Rekord źródłowy</span>
+              <select
+                required
+                disabled={busy || !module || sources.loading}
+                value={sourceId}
+                onChange={(event) => setSourceId(event.target.value)}
+              >
+                <option value="">
+                  {!module
+                    ? "Najpierw wybierz szablon…"
+                    : sources.loading
+                      ? "Pobieranie rekordów…"
+                      : sources.data?.items.length
+                        ? "Wybierz rekord…"
+                        : "Brak dostępnych rekordów"}
+                </option>
+                {!sources.loading &&
+                  sources.data?.items.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.title} ·{" "}
+                      {templateId === "case_scope"
+                        ? `zakres ${String(item.data.scopeRevision)}`
+                        : `wersja ${item.version}`}
+                    </option>
+                  ))}
+              </select>
+            </label>
+          )}
           <Notice>
             JARVIS ułoży dokument na podstawie wskazanego rekordu i zapisze
             informację o źródle. Sprawdzisz treść przed zatwierdzeniem zapisu

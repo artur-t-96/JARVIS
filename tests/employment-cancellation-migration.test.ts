@@ -79,7 +79,7 @@ test("v11 preserves historical employment and access foreign keys and permits a 
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      17,
+      18,
     );
     assert.throws(
       () => db.exec("UPDATE ops_employment SET status='cancelled'"),
@@ -115,7 +115,7 @@ test("v11 preserves historical employment and access foreign keys and permits a 
             },
           })),
         }),
-      /v17 is newer than supported v10/,
+      /v18 is newer than supported v10/,
     );
   } finally {
     db.close();

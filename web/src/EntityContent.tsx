@@ -352,6 +352,7 @@ export function EntityContent({
         </section>
       )}
       {Object.entries(sectionLabels).map(([key, title]) => {
+        if (item.module === "sales" && key === "history") return null;
         if (item.module === "assets" && key === "allocations") return null;
         const entries = rows(item.data[key]);
         if (!entries.length) return null;

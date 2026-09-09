@@ -399,27 +399,76 @@ test("all nine domain APIs execute through Core approvals; asset handover is ten
       kind: "client",
       organizationName: "Test",
     });
+    const contact = await f.create("sales", "Syntetyczny kontakt", {
+      kind: "contact",
+      parentId: client.id,
+      contactEmail: "synthetic@example.invalid",
+    });
     let deal = await f.create("sales", "Szansa", {
       kind: "deal",
       organizationName: "Test",
       parentId: client.id,
+      contactId: contact.id,
     });
     deal = await f.action(deal, "qualify", {
       qualification: "Warunki potwierdzone",
     });
     let offer = await f.create("sales", "Oferta", {
       kind: "offer",
-      organizationName: "Test",
       parentId: deal.id,
-      scope: "Test",
-      value: 100,
+      expectedDealVersion: deal.version,
+      expectedClientVersion: client.version,
+      expectedContactVersion: contact.version,
+      terms: {
+        scope: "Syntetyczna uzgodniona realizacja",
+        validUntil: "2099-01-01",
+        currency: "PLN",
+        priceBasis: "net",
+        lines: [
+          {
+            label: "Syntetyczna realizacja",
+            unit: "fixed",
+            quantityMilli: 1000,
+            unitPriceMinor: 10000,
+          },
+        ],
+      },
     });
     offer = await f.action(offer, "submitOffer");
+    offer = await f.action(offer, "reviewOffer", {
+      decision: "approved",
+      note: "Syntetyczna decyzja wewnętrzna",
+      humanDecision: true,
+    });
+    offer = await f.action(offer, "recordDispatch", {
+      channel: "meeting",
+      dispatchedOn: today,
+      evidenceReference: "SYNTHETIC-DISPATCH",
+      note: "Syntetyczne poświadczenie przekazania",
+      humanConfirmed: true,
+    });
     offer = await f.action(offer, "acceptOffer", {
+      evidenceReference: "SYNTHETIC-CLIENT-DECISION",
       acceptedOn: today,
       acceptanceNote: "Człowiek",
       humanDecision: true,
     });
+    deal = (await f.get(`/api/workspace/sales/${deal.id}`)).json<{
+      item: Entity;
+    }>().item;
+    deal = await f.action(deal, "scheduleNextStep", {
+      title: "Syntetyczny następny krok",
+      description: "Uzgodnienie realizacji",
+      dueDate: today,
+      ownerPrincipalId: "operator",
+    });
+    await f.action(
+      (
+        await f.get(`/api/workspace/sales/${String(deal.data.nextStepId)}`)
+      ).json<{ item: Entity }>().item,
+      "acceptNextStep",
+      { humanConfirmed: true },
+    );
     offer = await f.action(offer, "handoff", { acceptanceCriteria: "Test" });
     assert.ok(offer.data.deliveryCaseId);
     const candidate = await f.create("people", "Kandydat", {

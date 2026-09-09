@@ -366,28 +366,72 @@ try {
     kind: "client",
     organizationName: "Syntetyczna firma",
   });
+  const contact = await create("sales", "Syntetyczny kontakt", {
+    kind: "contact",
+    parentId: client.id,
+    contactEmail: "synthetic@example.invalid",
+  });
   let deal = await create("sales", "Szansa", {
     kind: "deal",
     organizationName: "Syntetyczna firma",
     parentId: client.id,
+    contactId: contact.id,
   });
   deal = await action(deal, "qualify", {
     qualification: "Syntetyczne warunki i budżet",
   });
   let offer = await create("sales", "Oferta", {
     kind: "offer",
-    organizationName: "Syntetyczna firma",
     parentId: deal.id,
-    scope: "Syntetyczny zakres realizacji",
-    value: 100,
-    currency: "PLN",
+    expectedDealVersion: deal.version,
+    expectedClientVersion: client.version,
+    expectedContactVersion: contact.version,
+    terms: {
+      scope: "Syntetyczna uzgodniona realizacja",
+      validUntil: "2099-01-01",
+      currency: "PLN",
+      priceBasis: "net",
+      lines: [
+        {
+          label: "Syntetyczna realizacja",
+          unit: "fixed",
+          quantityMilli: 1000,
+          unitPriceMinor: 10000,
+        },
+      ],
+    },
   });
   offer = await action(offer, "submitOffer");
+  offer = await action(offer, "reviewOffer", {
+    decision: "approved",
+    note: "Syntetyczna decyzja wewnętrzna",
+    humanDecision: true,
+  });
+  offer = await action(offer, "recordDispatch", {
+    channel: "meeting",
+    dispatchedOn: today,
+    evidenceReference: "SYNTHETIC-DISPATCH",
+    note: "Syntetyczne poświadczenie przekazania",
+    humanConfirmed: true,
+  });
   offer = await action(offer, "acceptOffer", {
+    evidenceReference: "SYNTHETIC-CLIENT-DECISION",
     acceptedOn: today,
     acceptanceNote: "Syntetyczna akceptacja",
     humanDecision: true,
   });
+  deal = workspace.get(operator, "sales", deal.id);
+  deal = await action(deal, "scheduleNextStep", {
+    title: "Syntetyczny następny krok",
+    description: "Uzgodnienie realizacji",
+    dueDate: today,
+    ownerPrincipalId: "demo-operator",
+  });
+  await action(
+    workspace.get(operator, "sales", String(deal.data.nextStepId)),
+    "acceptNextStep",
+    { humanConfirmed: true },
+  );
   offer = await action(offer, "handoff", {
     acceptanceCriteria: "Syntetyczny protokół odbioru",
   });

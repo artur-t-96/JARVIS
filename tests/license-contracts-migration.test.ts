@@ -92,7 +92,7 @@ test("v15 preserves historical seats and unknown costs, with atomic DDL rollback
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      17,
+      18,
     );
     assert.deepEqual(
       [

@@ -3683,3 +3683,63 @@ tbody tr:hover {
   overflow-wrap: anywhere;
   margin-top: 0.75rem;
 }
+
+.sales-picker,
+.sales-line {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  margin: 16px 0;
+  min-width: 0;
+}
+.sales-workflow {
+  margin-bottom: 24px;
+}
+.detail-grid.sales-detail {
+  grid-template-columns: minmax(0, 1fr);
+}
+.sales-history {
+  padding-left: 24px;
+}
+.sales-history li {
+  margin: 14px 0;
+}
+.sales-picker-options,
+.sales-workflow .button-row,
+.sales-picker .button-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 12px 0;
+}
+.sales-offer-snapshot {
+  margin: 16px 0;
+  overflow-wrap: anywhere;
+}
+.sales-offer-snapshot .table-scroll {
+  overflow-x: auto;
+}
+.sales-offer-snapshot table {
+  width: 100%;
+}
+.sales-offer-snapshot td,
+.sales-offer-snapshot th {
+  padding: 10px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+}
+.sales-proof {
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+}
+.sales-hash {
+  display: block;
+  overflow-wrap: anywhere;
+  margin: 12px 0;
+}
+.sales-workflow details {
+  margin: 16px 0;
+}
+.preserve-lines {
+  white-space: pre-wrap;
+}
