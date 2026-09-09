@@ -384,7 +384,7 @@ function BindingForm({
           </label>
           {module === "purchases" && source && (
             <Notice>
-              {delivery.error ??
+              {delivery.error ||
                 (delivery.loading
                   ? "Sprawdzam przyjęcie dostawy…"
                   : deliveryMatches
