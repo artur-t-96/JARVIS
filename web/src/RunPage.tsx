@@ -204,8 +204,15 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
       )}
       {run.status === "completed" && (
         <Notice tone="success">
-          Operacje zostały wykonane i zweryfikowane. Odbiór biznesowy sprawy
-          jest osobną decyzją w module Sprawy.
+          Operacje zostały wykonane i zweryfikowane.{" "}
+          {run.steps.some((step) =>
+            [
+              "ops.documents.createReport",
+              "ops.documents.refreshReport",
+            ].includes(step.toolId),
+          )
+            ? "Odbiór raportu jest osobną decyzją w module Dokumenty."
+            : "Odbiór biznesowy sprawy jest osobną decyzją w module Sprawy."}
         </Notice>
       )}
       {run.status === "needs_reconciliation" && (

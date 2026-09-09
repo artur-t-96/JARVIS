@@ -3677,3 +3677,9 @@ tbody tr:hover {
   gap: 0.8rem;
   margin: 1rem 0;
 }
+
+.report-history-content {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin-top: 0.75rem;
+}

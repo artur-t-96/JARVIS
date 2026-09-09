@@ -16,7 +16,7 @@ import { DomainError, type JsonObject, type Principal } from "./contracts.js";
 import type { Entity, WorkspaceStore } from "./workspace.js";
 import { exportArtifact, type Artifact } from "./artifacts.js";
 
-export const DOCUMENT_RENDERER = "p09a2-2";
+export const DOCUMENT_RENDERER = "p09a2-3";
 type Block = {
   kind: "title" | "heading" | "paragraph" | "bullet" | "small";
   text: string;
@@ -105,7 +105,9 @@ function blocksFor(entity: Entity): Block[] {
   if (!sources.length)
     blocks.push({
       kind: "paragraph",
-      text: "Nie wskazano rekordów źródłowych.",
+      text: entity.data.operationalReport
+        ? "Zakres i źródła raportu są opisane w jego treści."
+        : "Nie wskazano rekordów źródłowych.",
     });
   for (const source of sources) {
     const snapshot = source.snapshot as JsonObject | undefined;
