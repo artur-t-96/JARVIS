@@ -9,6 +9,12 @@ import {
 } from "./contracts.js";
 import { Engine, hash } from "./engine.js";
 import {
+  prepareReportSchema,
+  reportDefinitionSchema,
+  reportKinds,
+  reportRequiredScopes,
+} from "./operational-reports.js";
+import {
   assetImportPrepareSchema,
   assetImportPreviewSchema,
   MAX_ASSET_CSV_BYTES,
@@ -60,6 +66,91 @@ export function registerWorkspaceApi(
 ) {
   const moduleParam = (req: FastifyRequest) =>
     z.object({ module: z.string().max(30) }).parse(req.params).module;
+  app.get("/api/operational-reports", async (req) => {
+    const actor = principal(req);
+    return {
+      kinds: Object.entries(reportKinds)
+        .filter(([kind]) =>
+          reportRequiredScopes(
+            kind === "equipment"
+              ? { kind }
+              : { kind, from: "2000-01-01", to: "2000-01-01" },
+          ).every(
+            (scope) =>
+              actor.scopes?.includes("*") || actor.scopes?.includes(scope),
+          ),
+        )
+        .map(([id, value]) => ({
+          id,
+          title: value.title,
+          period: value.period,
+        })),
+      maxRows: 200,
+    };
+  });
+  app.post("/api/operational-reports/preview", async (req) => ({
+    preview: workspace.operationalReportPreview(
+      principal(req),
+      reportDefinitionSchema.parse(req.body),
+    ),
+  }));
+  app.post("/api/operational-reports/prepare", async (req, reply) => {
+    const actor = principal(req),
+      body = prepareReportSchema.parse(req.body),
+      request = `Raport operacyjny ${hash(body)}`;
+    const previous = engine.replayRun(actor, request, body.idempotencyKey);
+    if (previous) return reply.code(201).send({ run: previous });
+    const input = workspace.prepareOperationalReport(actor, body);
+    return reply.code(201).send({
+      run: engine.createRun(
+        actor,
+        request,
+        {
+          title: body.title,
+          summary:
+            "Sprawdź zachowany podgląd, zakres i braki. Zgoda zapisze szkic raportu; odbiór dokumentu jest osobną decyzją.",
+          steps: [
+            {
+              id: "report",
+              title: body.id
+                ? "Zapisz nową rewizję raportu"
+                : "Zapisz raport do odbioru",
+              toolId: `ops.documents.${body.id ? "refreshReport" : "createReport"}`,
+              input,
+            },
+          ],
+        },
+        body.idempotencyKey,
+      ),
+    });
+  });
+  app.get("/api/runs/:id/operational-report/:stepId", async (req) => {
+    const { id, stepId } = z
+        .object({ id: z.string().uuid(), stepId: z.string().min(1).max(100) })
+        .parse(req.params),
+      actor = principal(req),
+      run = engine.getRun(actor, id);
+    const step = run.steps.find(
+      (s) =>
+        s.id === stepId &&
+        ["ops.documents.createReport", "ops.documents.refreshReport"].includes(
+          s.toolId,
+        ),
+    );
+    if (!step)
+      throw new DomainError(
+        "REPORT_NOT_FOUND",
+        "To wykonanie nie zawiera wskazanego raportu.",
+        404,
+      );
+    return {
+      proposal: workspace.operationalReportProposal(
+        actor,
+        run.requestedBy,
+        step.input,
+      ),
+    };
+  });
   const importBodyLimit = Math.ceil(MAX_ASSET_CSV_BYTES / 3) * 4 + 16_384;
   app.post(
     "/api/asset-imports/preview",

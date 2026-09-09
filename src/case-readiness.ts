@@ -253,6 +253,10 @@ export class CaseReadinessStore {
       entity: Entity,
     ) => boolean,
     private readonly documentFiles?: DocumentFiles,
+    private readonly reportCurrent?: (
+      tenant: string,
+      entity: Entity,
+    ) => boolean,
   ) {}
   setLaboratoryProofReader(reader: LaboratoryProofReader) {
     this.laboratoryProof = reader;
@@ -533,7 +537,11 @@ export class CaseReadinessStore {
         : [];
       if (references.length > 20)
         error("DOCUMENT_SOURCES_INVALID", "Zbyt wiele źródeł dokumentu.");
-      const sources = new DocumentSources(this.db, this.documentFiles);
+      const sources = new DocumentSources(
+        this.db,
+        this.documentFiles,
+        this.reportCurrent,
+      );
       const sourceReferences = sources.references(tenant, references);
       const state = ["p09a1", "p09a2"].includes(String(data.sourceContract))
         ? sources.assessment(tenant, {

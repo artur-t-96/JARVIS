@@ -43,7 +43,7 @@ test("CSV v16 migration preserves v15 data and rolls back its entire schema on D
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      16,
+      17,
     );
     assert.equal(
       db.prepare("SELECT data_json FROM ops_entities WHERE id='asset'").get()!

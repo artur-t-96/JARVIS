@@ -2,6 +2,14 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { pcmWav } from "../web/src/audio.js";
 import { referenceOptions } from "../web/src/references.js";
+import { dateLabel } from "../web/src/types.js";
+
+test("report timestamps use the company timezone while date-only filters keep their calendar day", () => {
+  const capturedAt = "2026-09-09T00:30:00.000Z";
+  assert.match(dateLabel(capturedAt, true, "Europe/Warsaw"), /9 wrz.*02:30/);
+  assert.match(dateLabel(capturedAt, true, "America/New_York"), /8 wrz.*20:30/);
+  assert.equal(dateLabel("2026-09-01", false, "UTC"), "1 wrz 2026");
+});
 
 test("browser voice encoder produces mono PCM16 16kHz WAV and mixes stereo", () => {
   const wav = pcmWav(

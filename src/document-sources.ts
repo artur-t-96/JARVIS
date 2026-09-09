@@ -4,6 +4,7 @@ import { z } from "zod";
 import { DomainError, type JsonObject } from "./contracts.js";
 import type { Entity } from "./workspace.js";
 import type { DocumentFiles } from "./document-files.js";
+import { readReportSnapshot } from "./operational-reports.js";
 
 const modules = [
   "people",
@@ -74,6 +75,10 @@ export class DocumentSources {
   constructor(
     private readonly db: DatabaseSync,
     private readonly files?: DocumentFiles,
+    private readonly reportCurrent?: (
+      tenant: string,
+      entity: Entity,
+    ) => boolean,
   ) {}
   private entity(tenant: string, module: string, id: string): Entity {
     const row = this.db
@@ -268,6 +273,8 @@ export class DocumentSources {
             const files = objects(current.data.files);
             available =
               this.integrity(tenant, current) &&
+              (!current.data.operationalReport ||
+                this.reportCurrent?.(tenant, current) === true) &&
               (files.length === 0 ||
                 (!!this.files &&
                   this.files
@@ -305,6 +312,9 @@ export class DocumentSources {
       ownerId: e.data.ownerId ?? null,
       linkedCaseId: e.data.linkedCaseId ?? null,
       sources: e.data.sources ?? [],
+      ...(e.data.operationalReport
+        ? { operationalReport: e.data.operationalReport }
+        : {}),
       ...(e.data.sourceContract === "p09a2"
         ? { files: e.data.files ?? [] }
         : {}),
@@ -394,6 +404,18 @@ export class DocumentSources {
         saved.approvedBy !== row.approved_by
       )
         return false;
+      if (context.operationalReport) {
+        try {
+          readReportSnapshot(
+            tenant,
+            context.operationalReport,
+            String(row.content),
+          );
+          if (context.documentType !== "report") return false;
+        } catch {
+          return false;
+        }
+      }
       if (Number(row.revision) === Number(e.data.revision))
         return (
           String(row.content) === e.data.content &&
@@ -408,6 +430,13 @@ export class DocumentSources {
     const row = this.version(tenant, e.id, Number(e.data.revision));
     const integrity = this.integrity(tenant, e),
       blockers: string[] = [];
+    const reportCurrent = e.data.operationalReport
+      ? integrity && this.reportCurrent?.(tenant, e) === true
+      : null;
+    if (reportCurrent === false)
+      blockers.push(
+        "Zakres raportu, dane źródłowe lub profil firmy zmieniły się albo są niedostępne. Przygotuj aktualny podgląd i nową rewizję raportu.",
+      );
     const attachments =
       this.files?.assessment(tenant, e.id, e.data.files ?? []) ??
       objects(e.data.files).map((f) => ({
@@ -473,6 +502,7 @@ export class DocumentSources {
       revision: Number(e.data.revision),
       contract: row?.context_hash ? String(e.data.sourceContract) : "legacy",
       integrity,
+      reportCurrent,
       references,
       attachments,
       blockers,

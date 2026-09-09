@@ -163,6 +163,11 @@ export function EntityContent({
       refs.label(key, value)
     ) : key === "status" ? (
       <Badge status={String(value)} />
+    ) : key === "content" && item.data.operationalReport ? (
+      <details>
+        <summary>Pokaż treść rewizji</summary>
+        <div className="report-history-content">{displayValue(value)}</div>
+      </details>
     ) : ["kind", "decision"].includes(key) ? (
       optionLabel(String(value))
     ) : /(?:At|Date|On|Until)$/.test(key) ? (

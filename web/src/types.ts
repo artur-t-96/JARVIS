@@ -187,14 +187,19 @@ export const statusLabels: Record<string, string> = {
 };
 export const statusLabel = (value: string) =>
   statusLabels[value] ?? value.replaceAll("_", " ");
-export const dateLabel = (value?: string, full = false) => {
+export const dateLabel = (value?: string, full = false, timeZone?: string) => {
   if (!value || !Number.isFinite(Date.parse(value))) return "—";
-  return new Intl.DateTimeFormat(
-    "pl-PL",
-    full
-      ? { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }
-      : { day: "numeric", month: "short", year: "numeric" },
-  ).format(new Date(value));
+  return new Intl.DateTimeFormat("pl-PL", {
+    ...(full
+      ? ({
+          day: "numeric",
+          month: "short",
+          hour: "2-digit",
+          minute: "2-digit",
+        } as const)
+      : ({ day: "numeric", month: "short", year: "numeric" } as const)),
+    ...(timeZone ? { timeZone } : {}),
+  }).format(new Date(value));
 };
 export const numberLabel = (value: number) =>
   new Intl.NumberFormat("pl-PL").format(value);

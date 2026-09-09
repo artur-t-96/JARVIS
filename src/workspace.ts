@@ -11,6 +11,24 @@ import {
 } from "./asset-imports.js";
 import { AssetImportFiles } from "./asset-import-files.js";
 import {
+  buildReportSnapshot,
+  reportDefinitionSchema,
+  reportRequiredScopes,
+  prepareReportSchema,
+  createReportSchema,
+  refreshReportSchema,
+  readReportSnapshot,
+  reportAsJson,
+  reportContent,
+  type ReportDefinition,
+} from "./operational-reports.js";
+import { ReportPreviews, migrateReportPreviews } from "./report-previews.js";
+import {
+  collectReportRows,
+  type ReportSourceReaders,
+} from "./operational-report-sources.js";
+import { reportCandidateIds } from "./operational-report-query.js";
+import {
   LicenseContracts,
   licenseAuthority,
   migrateLicenseContracts,
@@ -163,6 +181,7 @@ type CommandInput = {
   [key: string]: unknown;
 };
 export interface LifecycleProfile {
+  companyName?: string;
   version: number;
   definitionVersion: string;
   timezone?: string;
@@ -264,6 +283,8 @@ export class WorkspaceStore {
   private readonly taskAccessStore: TaskAccess;
   private readonly fileStore: DocumentFiles;
   private readonly documentSources: DocumentSources;
+  private readonly reportPreviews: ReportPreviews;
+  private readonly assessingReports = new Set<string>();
   private readonly deliveryStore: PurchaseDeliveries;
   private readonly licenseStore: LicenseContracts;
   private readonly stocktakeStore: Stocktakes;
@@ -471,13 +492,23 @@ export class WorkspaceStore {
           name: "Approved CSV equipment sources and import receipts",
           up: migrateAssetImports,
         },
+        {
+          version: 17,
+          name: "Immutable operational report previews and generated revisions",
+          up: migrateReportPreviews,
+        },
       ],
     });
     this.fileStore = new DocumentFiles(
       dbPath === ":memory:" ? undefined : dirname(dbPath),
       options.clock,
     );
-    this.documentSources = new DocumentSources(this.db, this.fileStore);
+    this.reportPreviews = new ReportPreviews(this.db);
+    this.documentSources = new DocumentSources(
+      this.db,
+      this.fileStore,
+      (tenant, e) => this.operationalReportCurrent(tenant, e),
+    );
     this.registerStore = new AssetRegister(this.db);
     this.deliveryStore = new PurchaseDeliveries(this.db);
     this.licenseStore = new LicenseContracts(this.db);
@@ -501,6 +532,7 @@ export class WorkspaceStore {
         return !!owner && this.canManageCase(owner, e.id);
       },
       this.fileStore,
+      (tenant, e) => this.operationalReportCurrent(tenant, e),
     );
     this.taskStore = new WorkspaceTasks(
       this.db,
@@ -1098,6 +1130,327 @@ export class WorkspaceStore {
       ),
     };
   }
+  private reportReaders(
+    tenant: string,
+    now: string,
+    principal?: Principal,
+  ): ReportSourceReaders {
+    const record = (module: string, id: string): Entity => {
+      const e = this.read(tenant, this.module(module), id);
+      if (principal) {
+        this.scope(principal, module);
+        for (const scope of this.entityScopes(e.module, e.data, tenant))
+          this.scope(principal, scope);
+      }
+      if (!this.entityConsistent(tenant, e))
+        fail(
+          "REPORT_SOURCE_INCONSISTENT",
+          "Rekord raportu nie odpowiada zapisanej historii i powiązaniom.",
+        );
+      return this.projectEntity(tenant, e);
+    };
+    const readiness = (id: string) =>
+      this.readinessStore.evaluate(tenant, record("cases", id), now);
+    return {
+      record,
+      select: (definition, module) =>
+        reportCandidateIds(this.db, tenant, definition, module).map((id) =>
+          record(module, id),
+        ),
+      scopes: (e) => this.entityScopes(e.module, e.data, tenant),
+      reference: (e) => {
+        const saved = this.read(tenant, e.module, e.id);
+        if (
+          saved.version !== e.version ||
+          !this.entityConsistent(tenant, saved)
+        )
+          fail(
+            "REPORT_SOURCE_INCONSISTENT",
+            "Źródło raportu zmieniło się podczas odczytu.",
+          );
+        return {
+          module: e.module,
+          id: e.id,
+          version: e.version,
+          hash: digest(saved),
+          updatedAt: saved.updatedAt,
+        };
+      },
+      holds: (id) => this.stocktakeStore.holds(tenant, id),
+      readiness,
+      onboarding: (id) => {
+        const c = record("cases", id);
+        if (!c.data.personId || !c.data.employmentEpisodeId) return null;
+        const person = record("people", String(c.data.personId));
+        const episode = this.employmentRows(tenant, person.id)
+          .map((r) => this.projectEpisode(r))
+          .find(
+            (e) =>
+              e.id === c.data.employmentEpisodeId &&
+              e.onboardingCaseId === c.id,
+          );
+        if (!episode) return null;
+        const state = readiness(id),
+          profile = this.currentProfile(tenant),
+          today = this.companyDate({ now, profile });
+        const tasks = this.taskStore.rows(
+          tenant,
+          c.id,
+          Number(c.data.scopeRevision),
+        );
+        const engagement = episode.engagementRef
+          ? record(episode.engagementRef.module, episode.engagementRef.id)
+          : null;
+        return {
+          person: { id: person.id, title: person.title },
+          episode: {
+            id: episode.id,
+            version: episode.version,
+            kind: episode.kind,
+            status: episode.status,
+            startDate: episode.startDate,
+            role: episode.role,
+          },
+          engagement: engagement
+            ? {
+                module: engagement.module,
+                id: engagement.id,
+                title: engagement.title,
+              }
+            : null,
+          stage: onboardingStage({
+            caseStatus: c.status,
+            episodeStatus: episode.status,
+            ready: state.ready,
+            acceptanceCurrent: state.acceptanceCurrent,
+            startDate: episode.startDate,
+            today,
+          }),
+          tasks: tasks.map((t) => ({
+            id: t.id,
+            title: t.title,
+            status: t.status,
+            required: t.required,
+            assigneePrincipalId: t.assigneePrincipalId,
+            assigneeRole: t.assigneeRole,
+            dueDate: t.dueDate,
+            overdue:
+              ["open", "needs_changes"].includes(c.status) &&
+              !!t.dueDate &&
+              t.dueDate < today &&
+              !["completed", "cancelled"].includes(t.status),
+            waitingFor: t.dependsOn.flatMap((id) => {
+              const d = tasks.find((t) => t.id === id);
+              return d?.status === "completed"
+                ? []
+                : [d?.title ?? "Niedostępne zadanie zależne"];
+            }),
+          })),
+        };
+      },
+      deliveries: (id) => this.deliveryStore.projection(tenant, id),
+      license: (id) =>
+        this.licenseStore.view(
+          this.licenseServices({
+            ctx: {
+              tenantId: tenant,
+              actorId: principal?.id,
+              runId: "read-only",
+              stepId: "read-only",
+              operationKey: "read-only",
+              signal: new AbortController().signal,
+            },
+            actor: principal?.id ?? "read-only",
+            now,
+            toolId: "read-only",
+            changes: [],
+            profile: this.currentProfile(tenant),
+          }),
+          id,
+        ),
+    };
+  }
+  private buildOperationalReport(
+    tenant: string,
+    raw: unknown,
+    now: string,
+    principal?: Principal,
+  ) {
+    const definition = reportDefinitionSchema.parse(raw),
+      profile = this.currentProfile(tenant);
+    const snapshot = buildReportSnapshot(
+      {
+        tenantId: tenant,
+        companyName: this.profileProvider?.(tenant).companyName ?? tenant,
+        timezone: profile?.timezone ?? "UTC",
+        profileVersion: profile?.version ?? 0,
+        now,
+      },
+      definition,
+      collectReportRows(this.reportReaders(tenant, now, principal), definition),
+    );
+    if (principal)
+      for (const scope of snapshot.requiredScopes) this.scope(principal, scope);
+    return snapshot;
+  }
+  operationalReportPreview(principal: Principal, definition: ReportDefinition) {
+    for (const scope of reportRequiredScopes(definition))
+      this.scope(principal, scope);
+    return this.buildOperationalReport(
+      principal.tenantId,
+      definition,
+      new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      principal,
+    );
+  }
+  private operationalReportCurrent(tenant: string, e: Entity): boolean {
+    const key = tenant + ":" + e.id;
+    if (this.assessingReports.has(key) || this.assessingReports.size >= 30)
+      return false;
+    this.assessingReports.add(key);
+    try {
+      const saved = readReportSnapshot(
+        tenant,
+        e.data.operationalReport,
+        String(e.data.content),
+      );
+      return (
+        this.buildOperationalReport(
+          tenant,
+          saved.definition,
+          new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+        ).previewHash === saved.previewHash
+      );
+    } catch {
+      return false;
+    } finally {
+      this.assessingReports.delete(key);
+    }
+  }
+  prepareOperationalReport(principal: Principal, raw: unknown) {
+    const input = prepareReportSchema.parse(raw);
+    if (!principal.roles.includes("operator"))
+      fail(
+        "REPORT_AUTHOR_FORBIDDEN",
+        "Przygotowanie zlecenia wymaga roli operatora.",
+        403,
+      );
+    if (input.id) {
+      const document = this.get(principal, "documents", input.id);
+      if (
+        !document.data.operationalReport ||
+        !this.entityConsistent(principal.tenantId, document)
+      )
+        fail(
+          "REPORT_DOCUMENT_REQUIRED",
+          "Wskaż spójny dokument wygenerowanego raportu.",
+        );
+      if (document.version !== input.expectedVersion)
+        fail(
+          "VERSION_CONFLICT",
+          "Raport zmienił wersję. Odczytaj bieżący dokument.",
+        );
+      this.state(document, "draft", "review", "approved", "rejected");
+    }
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const snapshot = this.operationalReportPreview(
+        principal,
+        input.definition,
+      );
+      if (
+        snapshot.previewHash !== input.previewHash ||
+        snapshot.profileVersion !== input.profileVersion
+      )
+        fail(
+          "REPORT_PREVIEW_CHANGED",
+          "Dane lub zakres zmieniły się od podglądu. Sprawdź aktualny raport przed przygotowaniem zgody.",
+        );
+      reportContent(snapshot);
+      const saved = this.reportPreviews.stage(
+        principal.tenantId,
+        principal.id,
+        input.idempotencyKey,
+        snapshot,
+        snapshot.capturedAt,
+      );
+      const { idempotencyKey, ...command } = input;
+      const result = (
+        input.id ? refreshReportSchema : createReportSchema
+      ).parse({ ...command, previewId: saved.id });
+      this.db.exec("COMMIT");
+      return result;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  operationalReportProposal(
+    principal: Principal,
+    requestedBy: string,
+    input: JsonObject,
+  ) {
+    this.scope(principal, "documents");
+    const saved = this.reportPreviews.input(principal.tenantId, input);
+    if (saved.requestedBy !== requestedBy)
+      fail(
+        "REPORT_AUTHOR_FORBIDDEN",
+        "Podgląd nie należy do autora tego zlecenia.",
+        403,
+      );
+    for (const scope of saved.snapshot.requiredScopes)
+      this.scope(principal, scope);
+    if (input.id) this.get(principal, "documents", String(input.id));
+    let current = false;
+    if (
+      !saved.documentId &&
+      saved.expiresAt >
+        new Date(this.options.clock?.() ?? Date.now()).toISOString()
+    ) {
+      try {
+        current =
+          this.operationalReportPreview(principal, saved.snapshot.definition)
+            .previewHash === saved.snapshot.previewHash;
+      } catch {
+        /* No live rows or counts cross the access boundary. */
+      }
+    }
+    return {
+      snapshot: saved.snapshot,
+      content: reportContent(saved.snapshot),
+      current,
+      expiresAt: saved.expiresAt,
+      documentId: saved.documentId,
+    };
+  }
+  private approvedReport(cmd: Command, input: JsonObject) {
+    const snapshot = this.reportPreviews.requirePending(
+      cmd.ctx,
+      input,
+      cmd.now,
+    );
+    const current = this.buildOperationalReport(
+      cmd.ctx.tenantId,
+      snapshot.definition,
+      cmd.now,
+    );
+    if (current.previewHash !== snapshot.previewHash)
+      fail(
+        "REPORT_PREVIEW_CHANGED",
+        "Zakres raportu, źródła lub profil zmieniły się. Przygotuj nowy podgląd i zgodę.",
+      );
+    for (const id of [cmd.ctx.actorId, cmd.ctx.approvedBy]) {
+      const principal = this.livePrincipal(cmd.ctx.tenantId, id);
+      if (!principal)
+        fail(
+          "REPORT_AUTHORITY_REVOKED",
+          "Brak aktywnego autora lub osoby zatwierdzającej.",
+          403,
+        );
+      for (const scope of current.requiredScopes) this.scope(principal, scope);
+    }
+    return snapshot;
+  }
   documentReadiness(principal: Principal, documentId: string) {
     return this.documentSources.assessment(
       principal.tenantId,
@@ -1482,6 +1835,16 @@ export class WorkspaceStore {
     }
     if (module === "it" && data.ownerId) scopes.push("people");
     if (module === "documents") {
+      for (const raw of [
+        data.operationalReport,
+        ...arr(data.versions).map(
+          (v) => (v.context as JsonObject | null)?.operationalReport,
+        ),
+      ].filter(Boolean)) {
+        if (!tenant)
+          fail("REPORT_TENANT_REQUIRED", "Raport wymaga kontekstu firmy.");
+        scopes.push(...readReportSnapshot(tenant, raw).requiredScopes);
+      }
       if (tenant)
         for (const source of [
           ...arr(data.sources),
@@ -1519,7 +1882,14 @@ export class WorkspaceStore {
     tenant: string,
   ): string[] {
     if (module === "assets" && action === "importBatch") return [];
-    const scopes: string[] = [];
+    const reportScopes =
+      module === "documents" &&
+      ["createReport", "refreshReport"].includes(action)
+        ? this.reportPreviews.input(tenant, input).snapshot.requiredScopes
+        : [];
+    if (module === "documents" && action === "createReport")
+      return reportScopes;
+    const scopes: string[] = [...reportScopes];
     const data =
       action === "create"
         ? ((input.data ?? {}) as JsonObject)
@@ -4372,6 +4742,24 @@ export class WorkspaceStore {
       }
     }
     if (e.module === "documents") {
+      if (action === "refreshReport") {
+        this.state(e, "draft", "review", "approved", "rejected");
+        if (!d.operationalReport || d.documentType !== "report")
+          fail(
+            "REPORT_DOCUMENT_REQUIRED",
+            "Odświeżenie wymaga wygenerowanego raportu.",
+          );
+        const snapshot = this.approvedReport(cmd, asJson(input)),
+          revision = Number(d.revision) + 1;
+        e.title = String(input.title);
+        d.operationalReport = reportAsJson(snapshot);
+        d.content = reportContent(snapshot);
+        this.documentVersion(cmd, e, String(d.content), revision);
+        d.revision = revision;
+        d.changeNote = String(input.changeNote);
+        e.status = "draft";
+        this.reportPreviews.publish(cmd.ctx, asJson(input), e.id);
+      }
       if (action === "attachFile" || action === "detachFile") {
         this.state(e, "draft", "review", "approved", "rejected");
         const files = arr(d.files),
@@ -4424,6 +4812,11 @@ export class WorkspaceStore {
         e.status = "draft";
       }
       if (action === "revise") {
+        if (d.operationalReport)
+          fail(
+            "REPORT_REFRESH_REQUIRED",
+            "Wygenerowany raport zmień przez aktualny podgląd i nową rewizję raportu.",
+          );
         this.state(e, "draft", "review", "approved", "rejected");
         const revision = Number(d.revision) + 1;
         if (input.title !== undefined) e.title = String(input.title);
@@ -4644,6 +5037,9 @@ export class WorkspaceStore {
       }).map(([action, inputSchema]): ToolDefinition => {
         const toolId = `ops.${module}.${action}`;
         const assetImport = module === "assets" && action === "importBatch";
+        const reportMutation =
+          module === "documents" &&
+          ["createReport", "refreshReport"].includes(action);
         const cancelStart = module === "people" && action === "cancelStart";
         const lifecycle = [
           "people.startEmployment",
@@ -4824,6 +5220,29 @@ export class WorkspaceStore {
             ...this.inputScopes(module, action, input, ctx.tenantId),
           ])
             this.scope(actor, area);
+          if (reportMutation) {
+            const saved = this.reportPreviews.input(ctx.tenantId, input);
+            if (saved.requestedBy !== ctx.actorId)
+              fail(
+                "REPORT_AUTHOR_FORBIDDEN",
+                "Podgląd należy do innego autora.",
+                403,
+              );
+            const approver = this.livePrincipal(ctx.tenantId, ctx.approvedBy);
+            if (!approver?.roles.includes("approver"))
+              fail(
+                "REPORT_APPROVER_FORBIDDEN",
+                "Wymagane aktywne konto osoby zatwierdzającej.",
+                403,
+              );
+            for (const area of this.inputScopes(
+              module,
+              action,
+              input,
+              ctx.tenantId,
+            ))
+              this.scope(approver, area);
+          }
         };
         const requirePurchaseAuthority = (
           ctx: ToolContext,
@@ -4958,6 +5377,7 @@ export class WorkspaceStore {
         const requireCommittedDocument = (
           ctx: ToolContext,
           row: Row | undefined,
+          input: JsonObject,
         ) => {
           if (module !== "documents" || !row) return;
           const changes = JSON.parse(String(row.changes_json)) as {
@@ -4989,6 +5409,19 @@ export class WorkspaceStore {
                 "Nie można potwierdzić zapisanej rewizji i pochodzenia dokumentu.",
               );
             const snapshot = JSON.parse(String(saved.snapshot_json)) as Entity;
+            if (reportMutation) {
+              const preview = this.reportPreviews.input(ctx.tenantId, input);
+              if (
+                preview.operationKey !== ctx.operationKey ||
+                preview.documentId !== change.id ||
+                digest(snapshot.data.operationalReport) !==
+                  digest(preview.snapshot)
+              )
+                fail(
+                  "REPORT_RECEIPT_INCONSISTENT",
+                  "Zapisany raport nie odpowiada zatwierdzonemu podglądowi.",
+                );
+            }
             if (
               this.fileStore
                 .assessment(ctx.tenantId, snapshot.id, snapshot.data.files)
@@ -5105,7 +5538,9 @@ export class WorkspaceStore {
                       : lifecycle
                         ? "5"
                         : module === "documents"
-                          ? "10"
+                          ? reportMutation
+                            ? "1"
+                            : "11"
                           : taskAccess
                             ? "1"
                             : accessMutation ||
@@ -5296,7 +5731,7 @@ export class WorkspaceStore {
               requireLicenseReceipt(ctx, existing);
               requireStocktakeReceipt(ctx, existing);
               requireImportReceipt(ctx, input, existing);
-              requireCommittedDocument(ctx, existing);
+              requireCommittedDocument(ctx, existing, input);
               // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
               const profile =
@@ -5354,6 +5789,16 @@ export class WorkspaceStore {
                   importedCount: imported.assets.length,
                   skippedCount: imported.receipt.skippedRows.length,
                 };
+              } else if (reportMutation && action === "createReport") {
+                const snapshot = this.approvedReport(cmd, input);
+                e = this.create(cmd, "documents", String(input.title), {
+                  accessScope: "documents",
+                  documentType: "report",
+                  content: reportContent(snapshot),
+                  sources: [],
+                  operationalReport: reportAsJson(snapshot),
+                });
+                this.reportPreviews.publish(ctx, input, e.id);
               } else if (action === "create")
                 e = this.create(cmd, module, String(p.title), asJson(p.data!));
               else {
@@ -5700,7 +6145,7 @@ export class WorkspaceStore {
             if (lifecycle && !row)
               this.pinnedProfile(ctx.tenantId, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));
-            requireCommittedDocument(ctx, row);
+            requireCommittedDocument(ctx, row, asJson(parsed.data));
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
               requireCommittedCustody(ctx, asJson(parsed.data));
@@ -5735,7 +6180,7 @@ export class WorkspaceStore {
             if (cancelStart)
               this.cancelStartAuthority(ctx, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));
-            requireCommittedDocument(ctx, row);
+            requireCommittedDocument(ctx, row, asJson(parsed.data));
             if (row) {
               requireCommittedTask(ctx, asJson(parsed.data));
               if (accessMutation && !taskAccess)

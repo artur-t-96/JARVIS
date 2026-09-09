@@ -32,6 +32,7 @@ import {
 } from "./Purchasing";
 import { PurchaseDeliveries } from "./PurchaseDeliveries";
 import { DocumentTemplate } from "./DocumentTemplate";
+import { GeneratedReport, ReportToolbar } from "./OperationalReports";
 import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
 import { DocumentFiles } from "./DocumentFiles";
 import { CaseReadiness } from "./CaseReadiness";
@@ -875,6 +876,10 @@ function StandardWorkspacePage({
               )}
               {item.module === "documents" && (
                 <>
+                  <GeneratedReport
+                    item={item}
+                    canRefresh={allowedTool("refreshReport")}
+                  />
                   <DocumentReadiness key={item.id} item={item} />
                   <DocumentFiles
                     item={item}
@@ -908,6 +913,10 @@ function StandardWorkspacePage({
                       {module.fields
                         .filter(
                           (field) =>
+                            !(
+                              item.data.operationalReport &&
+                              field.key === "content"
+                            ) &&
                             (item.module !== "purchases" ||
                               ["kind", "description", "supplierEmail"].includes(
                                 field.key,
@@ -1000,7 +1009,14 @@ function StandardWorkspacePage({
                               ) &&
                               !(
                                 module.id === "documents" &&
-                                ["attachFile", "detachFile"].includes(action.id)
+                                ([
+                                  "attachFile",
+                                  "detachFile",
+                                  "createReport",
+                                  "refreshReport",
+                                ].includes(action.id) ||
+                                  (action.id === "revise" &&
+                                    !!item.data.operationalReport))
                               ) &&
                               (module.id !== "it" ||
                                 (isAccessDefinition(item)
@@ -1158,6 +1174,9 @@ function StandardWorkspacePage({
             Użyj szablonu
           </button>
         </section>
+      )}
+      {module.id === "documents" && (
+        <ReportToolbar canWrite={allowedTool("createReport")} />
       )}
       {module.id === "it" && <LaboratoryPanel context={context} />}
       {module.id === "it" && <AccessDefinitions context={context} />}

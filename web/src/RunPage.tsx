@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AssetImportOperation } from "./AssetImports";
+import { ReportOperation } from "./OperationalReports";
 import { post } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
@@ -203,8 +204,15 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
       )}
       {run.status === "completed" && (
         <Notice tone="success">
-          Operacje zostały wykonane i zweryfikowane. Odbiór biznesowy sprawy
-          jest osobną decyzją w module Sprawy.
+          Operacje zostały wykonane i zweryfikowane.{" "}
+          {run.steps.some((step) =>
+            [
+              "ops.documents.createReport",
+              "ops.documents.refreshReport",
+            ].includes(step.toolId),
+          )
+            ? "Odbiór raportu jest osobną decyzją w module Dokumenty."
+            : "Odbiór biznesowy sprawy jest osobną decyzją w module Sprawy."}
         </Notice>
       )}
       {run.status === "needs_reconciliation" && (
@@ -226,7 +234,11 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
             <p className="request-text">
               {run.steps.length === 1 &&
               (fileOperation(run.steps[0]!.toolId) ||
-                run.steps[0]!.toolId === "ops.assets.importBatch")
+                [
+                  "ops.assets.importBatch",
+                  "ops.documents.createReport",
+                  "ops.documents.refreshReport",
+                ].includes(run.steps[0]!.toolId))
                 ? run.title
                 : run.request}
             </p>
@@ -268,6 +280,11 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                   </div>
                   {step.toolId === "ops.assets.importBatch" ? (
                     <AssetImportOperation runId={run.id} step={step} />
+                  ) : [
+                      "ops.documents.createReport",
+                      "ops.documents.refreshReport",
+                    ].includes(step.toolId) ? (
+                    <ReportOperation runId={run.id} step={step} />
                   ) : fileOperation(step.toolId) ? (
                     <FileOperation
                       input={step.input}
