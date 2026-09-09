@@ -1266,18 +1266,37 @@ test("CRM offer handoff atomically creates delivery case and wins linked deal", 
         kind: "client",
         organizationName: "Firma",
       });
+    const contact = await h.create("sales", "Syntetyczny kontakt", {
+      kind: "contact",
+      parentId: client.id,
+      contactEmail: "synthetic@example.invalid",
+    });
     let deal = await h.create("sales", "Szansa", {
       kind: "deal",
       organizationName: "Firma",
       parentId: client.id,
+      contactId: contact.id,
     });
     let offer = await h.create("sales", "Oferta", {
       kind: "offer",
-      organizationName: "Firma",
       parentId: deal.id,
-      scope: "Realizacja testowa",
-      value: 100,
-      currency: "PLN",
+      expectedDealVersion: deal.version,
+      expectedClientVersion: client.version,
+      expectedContactVersion: contact.version,
+      terms: {
+        scope: "Syntetyczna uzgodniona realizacja",
+        validUntil: "2099-01-01",
+        currency: "PLN",
+        priceBasis: "net",
+        lines: [
+          {
+            label: "Syntetyczna realizacja",
+            unit: "fixed",
+            quantityMilli: 1000,
+            unitPriceMinor: 10000,
+          },
+        ],
+      },
     });
     await assert.rejects(
       h.action(offer, "submitOffer"),
@@ -1287,14 +1306,40 @@ test("CRM offer handoff atomically creates delivery case and wins linked deal", 
       qualification: "Zakres i budżet potwierdzone",
     });
     offer = await h.action(offer, "submitOffer");
+    offer = await h.action(offer, "reviewOffer", {
+      decision: "approved",
+      note: "Syntetyczna decyzja wewnętrzna",
+      humanDecision: true,
+    });
+    offer = await h.action(offer, "recordDispatch", {
+      channel: "meeting",
+      dispatchedOn: today,
+      evidenceReference: "SYNTHETIC-DISPATCH",
+      note: "Syntetyczne poświadczenie przekazania",
+      humanConfirmed: true,
+    });
     offer = await h.action(offer, "acceptOffer", {
+      evidenceReference: "SYNTHETIC-CLIENT-DECISION",
       acceptedOn: today,
       acceptanceNote: "Człowiek potwierdza",
       humanDecision: true,
     });
+    deal = store.get(principal(), "sales", deal.id);
     await assert.rejects(
       h.action(deal, "lose", { reason: "T", humanDecision: true }),
       code("ACCEPTED_OFFER_EXISTS"),
+    );
+    deal = store.get(principal(), "sales", deal.id);
+    deal = await h.action(deal, "scheduleNextStep", {
+      title: "Syntetyczny następny krok",
+      description: "Uzgodnienie realizacji",
+      dueDate: today,
+      ownerPrincipalId: "human-reviewer",
+    });
+    await h.action(
+      store.get(principal(), "sales", String(deal.data.nextStepId)),
+      "acceptNextStep",
+      { humanConfirmed: true },
     );
     offer = await h.action(offer, "handoff", {
       acceptanceCriteria: "Potwierdzenie odbioru przez człowieka",

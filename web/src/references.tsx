@@ -42,6 +42,8 @@ export const optionLabels: Record<string, string> = {
   net: "Netto",
   order: "Zamówienie",
   client: "Klient",
+  contact: "Kontakt klienta",
+  next_step: "Następny krok",
   deal: "Szansa sprzedaży",
   offer: "Oferta",
   vacancy: "Rekrutacja",

@@ -305,6 +305,56 @@ export function registerWorkspaceApi(
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { holds: workspace.assetInventoryHolds(principal(req), id) };
   });
+  app.get("/api/sales/records", async (req) => {
+    const page = z
+      .object({
+        kind: z
+          .enum(["client", "contact", "deal", "offer", "next_step"])
+          .optional(),
+        parentId: z.string().uuid().optional(),
+        search: z.string().trim().max(200).default(""),
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        offset: z.coerce.number().int().min(0).max(100_000).default(0),
+      })
+      .parse(req.query);
+    return workspace.salesList(principal(req), page);
+  });
+  app.get("/api/sales/owners", async (req) => {
+    const actor = principal(req);
+    if (!actor.scopes?.some((s) => s === "*" || s === "sales"))
+      throw new DomainError(
+        "SCOPE_REQUIRED",
+        "Wymagany dostęp do sprzedaży.",
+        403,
+      );
+    return {
+      owners: (principals?.(actor.tenantId) ?? [])
+        .filter(
+          (p) =>
+            p.tenantId === actor.tenantId &&
+            p.roles.includes("operator") &&
+            p.scopes?.some((s) => s === "*" || s === "sales"),
+        )
+        .map((p) => ({ id: p.id, label: p.id })),
+    };
+  });
+  app.get("/api/sales/:id/workflow", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(30),
+        offset: z.coerce.number().int().min(0).max(100_000).default(0),
+      })
+      .parse(req.query);
+    return {
+      workflow: workspace.salesView(
+        principal(req),
+        id,
+        page.limit,
+        page.offset,
+      ),
+    };
+  });
   app.get("/api/licenses/owners", async (req) => {
     const actor = principal(req);
     if (

@@ -1,3 +1,4 @@
+import { salesActions, salesCreateSchema } from "./sales-models.js";
 import { stocktakeActions, stocktakeCreateSchema } from "./stocktake-models.js";
 import { assetImportCommandSchema } from "./asset-import-csv.js";
 import {
@@ -303,17 +304,7 @@ export const createDataSchemas = {
       supplierId: id.optional(),
     })
     .strict(),
-  sales: z
-    .object({
-      kind: z.enum(["client", "deal", "offer"]),
-      organizationName: short,
-      parentId: id.optional(),
-      contactEmail: email,
-      value: money.optional(),
-      currency: z.enum(["PLN", "EUR", "USD"]).optional(),
-      scope: optionalText,
-    })
-    .strict(),
+  sales: salesCreateSchema,
   recruitment: z
     .object({
       kind: z.enum(["vacancy", "application"]),
@@ -815,22 +806,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
       })
       .strict(),
   },
-  sales: {
-    qualify: z.object({ ...base, qualification: text }).strict(),
-    submitOffer: z.object(base).strict(),
-    acceptOffer: z
-      .object({
-        ...base,
-        acceptedOn: date,
-        acceptanceNote: text,
-        humanDecision: yes,
-      })
-      .strict(),
-    handoff: z
-      .object({ ...base, acceptanceCriteria: text, ownerId: id.optional() })
-      .strict(),
-    lose: z.object({ ...base, reason: text, humanDecision: yes }).strict(),
-  },
+  sales: salesActions,
   recruitment: {
     screen: z
       .object({
@@ -1034,17 +1010,19 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
     f("supplierId", "ID dostawcy", "text", false),
   ],
   sales: [
-    f("kind", "Rodzaj wpisu", "select", true, ["client", "deal", "offer"]),
-    f("organizationName", "Firma"),
-    f(
-      "parentId",
-      "ID klienta / szansy (wymagane dla deal/offer)",
-      "text",
-      false,
-    ),
+    f("kind", "Rodzaj wpisu", "select", true, [
+      "client",
+      "contact",
+      "deal",
+      "offer",
+      "next_step",
+    ]),
+    f("organizationName", "Firma", "text", false),
+    f("parentId", "Powiązany klient lub szansa", "text", false),
     f("contactEmail", "E-mail kontaktowy", "text", false),
-    f("value", "Wartość", "number", false),
-    f("currency", "Waluta", "select", false, ["PLN", "EUR", "USD"]),
+    f("phone", "Telefon kontaktu", "text", false),
+    f("jobTitle", "Rola u klienta", "text", false),
+    f("ownerPrincipalId", "Odpowiedzialny", "text", false),
     f("scope", "Zakres oferty", "textarea", false),
   ],
   recruitment: [
@@ -1094,6 +1072,19 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
   ],
 };
 const actionLabels: Record<string, string> = {
+  setDealContact: "Wskaż kontakt klienta",
+  assignSalesOwner: "Przekaż odpowiedzialność za sprzedaż",
+  reviseOffer: "Przygotuj nową rewizję oferty",
+  reviewOffer: "Podejmij decyzję wewnętrzną",
+  recordDispatch: "Potwierdź przekazanie klientowi",
+  declineOffer: "Zapisz odmowę klienta",
+  cancelOffer: "Potwierdź wycofanie oferty",
+  scheduleNextStep: "Zaplanuj następny krok",
+  acceptNextStep: "Przyjmij następny krok",
+  declineNextStep: "Odmów przyjęcia kroku",
+  completeNextStep: "Potwierdź rezultat kroku",
+  cancelNextStep: "Anuluj następny krok",
+
   reviseStocktake: "Zmień zakres spisu",
   recordObservation: "Zapisz obserwację sprzętu",
   resolveDiscrepancy: "Wyjaśnij rozbieżność",
@@ -1168,7 +1159,7 @@ const actionLabels: Record<string, string> = {
   resize: "Zmień liczbę stanowisk",
   renew: "Zarejestruj odnowienie",
   qualify: "Zakwalifikuj szansę",
-  submitOffer: "Przekaż ofertę do decyzji",
+  submitOffer: "Przekaż do decyzji wewnętrznej",
   acceptOffer: "Zarejestruj akceptację oferty",
   handoff: "Przekaż do realizacji",
   lose: "Zamknij jako przegrane",

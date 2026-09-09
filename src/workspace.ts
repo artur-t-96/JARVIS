@@ -1,4 +1,10 @@
 import {
+  Sales,
+  salesAuthority,
+  migrateSales,
+  type SalesServices,
+} from "./sales.js";
+import {
   Stocktakes,
   stocktakeAuthority,
   type StocktakeServices,
@@ -261,9 +267,14 @@ const editableSchemas: Record<ModuleId, z.ZodType> = {
     })
     .strict(),
   licenses: z.object({}).strict(),
-  sales: createDataSchemas.sales
-    .pick({ contactEmail: true, scope: true })
-    .partial(),
+  sales: z
+    .object({
+      organizationName: z.string().trim().min(1).max(200).optional(),
+      contactEmail: z.string().email().max(254).optional(),
+      phone: z.string().trim().min(1).max(200).optional(),
+      jobTitle: z.string().trim().min(1).max(200).optional(),
+    })
+    .strict(),
   recruitment: createDataSchemas.recruitment
     .pick({ description: true, requirements: true })
     .partial(),
@@ -287,6 +298,7 @@ export class WorkspaceStore {
   private readonly assessingReports = new Set<string>();
   private readonly deliveryStore: PurchaseDeliveries;
   private readonly licenseStore: LicenseContracts;
+  private readonly salesStore: Sales;
   private readonly stocktakeStore: Stocktakes;
   private readonly importFiles: AssetImportFiles;
   private readonly importStore: AssetImports;
@@ -497,6 +509,11 @@ export class WorkspaceStore {
           name: "Immutable operational report previews and generated revisions",
           up: migrateReportPreviews,
         },
+        {
+          version: 18,
+          name: "Versioned commercial offers and owned next steps",
+          up: migrateSales,
+        },
       ],
     });
     this.fileStore = new DocumentFiles(
@@ -512,6 +529,7 @@ export class WorkspaceStore {
     this.registerStore = new AssetRegister(this.db);
     this.deliveryStore = new PurchaseDeliveries(this.db);
     this.licenseStore = new LicenseContracts(this.db);
+    this.salesStore = new Sales(this.db);
     this.stocktakeStore = new Stocktakes(this.db);
     this.importFiles = new AssetImportFiles(
       dbPath === ":memory:" ? undefined : dirname(dbPath),
@@ -1722,6 +1740,8 @@ export class WorkspaceStore {
   }
   private relationalStateMatches(tenant: string, entity: Entity): boolean {
     if (entity.module === "purchases") return purchaseIntegrity(entity);
+    if (entity.module === "sales")
+      return this.salesStore.consistent(tenant, entity);
     if (entity.module === "documents")
       return this.documentSources.integrity(tenant, entity);
     if (entity.module === "cases")
@@ -2255,6 +2275,65 @@ export class WorkspaceStore {
     // The evidence contains purchase facts and asset identifiers, never an asset's person/custody record.
     return this.deliveryStore.projection(principal.tenantId, id);
   }
+  private salesServices(cmd: Command): SalesServices {
+    return {
+      ctx: cmd.ctx,
+      now: cmd.now,
+      day: this.companyDate(cmd),
+      dayOf: (instant) => companyDay(instant, cmd.profile?.timezone ?? "UTC"),
+      principal: (id) => this.livePrincipal(cmd.ctx.tenantId, id),
+      save: (e) => this.save(cmd, e),
+      insert: (title, data, status) =>
+        this.saveNew(cmd, this.insert(cmd, "sales", title, data, status)),
+      deliver: (offer, input) => {
+        const c = this.create(
+          cmd,
+          "cases",
+          `Realizacja: ${offer.title}`.slice(0, 160),
+          asJson({
+            caseType: "delivery",
+            brief: offer.data.scope,
+            acceptanceCriteria: input.acceptanceCriteria,
+            ...(input.ownerId ? { ownerId: input.ownerId } : {}),
+          }),
+        );
+        c.data.sourceOfferId = offer.id;
+        c.data.sourceOfferSnapshot = asJson({
+          offer: offer.data.offer,
+          acceptance: offer.data.acceptance,
+        });
+        return this.save(cmd, c);
+      },
+    };
+  }
+  salesList(principal: Principal, page: Parameters<Sales["list"]>[1]) {
+    this.scope(principal, "sales");
+    return this.salesStore.list(principal.tenantId, page);
+  }
+  salesView(principal: Principal, id: string, limit = 30, offset = 0) {
+    this.get(principal, "sales", id);
+    const ctx: ToolContext = {
+      tenantId: principal.tenantId,
+      actorId: principal.id,
+      operationKey: "read-only",
+      runId: "read-only",
+      stepId: "read-only",
+      signal: new AbortController().signal,
+    };
+    return this.salesStore.view(
+      this.salesServices({
+        ctx,
+        actor: principal.id,
+        now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+        toolId: "read-only",
+        changes: [],
+        profile: this.currentProfile(principal.tenantId),
+      }),
+      id,
+      limit,
+      offset,
+    );
+  }
   private licenseServices(cmd: Command): LicenseServices {
     return {
       ctx: cmd.ctx,
@@ -2618,25 +2697,8 @@ export class WorkspaceStore {
       data.assignments = [];
       data.provisioning = "local_register_only";
     }
-    if (module === "sales") {
-      if (data.kind === "client") status = "active";
-      else {
-        const parent = this.ref(cmd, "sales", data.parentId);
-        this.kind(parent, data.kind === "deal" ? "client" : "deal");
-        if (data.kind === "deal") {
-          this.state(parent, "active");
-          status = "open";
-        } else {
-          this.state(parent, "open", "qualified");
-          if (!data.scope || Number(data.value) <= 0)
-            fail(
-              "OFFER_TERMS_REQUIRED",
-              "Oferta wymaga zakresu i dodatniej wartości.",
-            );
-        }
-      }
-      data.history = [];
-    }
+    if (module === "sales")
+      return this.salesStore.create(this.salesServices(cmd), title, data);
     if (module === "recruitment") {
       if (data.kind === "vacancy") {
         status = "open";
@@ -3021,7 +3083,10 @@ export class WorkspaceStore {
   ): { reference: EngagementRef; key: string } | null {
     if (!value) return null;
     const reference = value as EngagementRef;
-    const record = this.ref(cmd, reference.module, reference.id);
+    const record =
+      reference.module === "sales"
+        ? this.salesStore.read(cmd.ctx.tenantId, reference.id)
+        : this.ref(cmd, reference.module, reference.id);
     let key = `${reference.module}:${record.id}`;
     if (reference.module === "sales") {
       if (
@@ -4591,81 +4656,13 @@ export class WorkspaceStore {
       d.assignments = this.licenseAssignments(cmd.ctx.tenantId, e.id);
       d.assignedSeats = count();
     }
-    if (e.module === "sales") {
-      if (action === "qualify") {
-        this.kind(e, "deal");
-        this.state(e, "open");
-        e.status = "qualified";
-        d.qualification = String(input.qualification);
-      }
-      if (action === "submitOffer") {
-        this.kind(e, "offer");
-        this.state(e, "draft");
-        const deal = this.ref(cmd, "sales", d.parentId);
-        this.state(deal, "qualified");
-        e.status = "proposed";
-        d.dispatch = "not_sent_local_record";
-      }
-      if (action === "acceptOffer") {
-        this.kind(e, "offer");
-        this.state(e, "proposed");
-        this.human(cmd, input);
-        const deal = this.ref(cmd, "sales", d.parentId);
-        this.state(deal, "qualified");
-        if (String(input.acceptedOn) > this.companyDate(cmd))
-          fail("FUTURE_ACCEPTANCE", "Akceptacja nie może mieć przyszłej daty.");
-        e.status = "accepted";
-        d.acceptance = {
-          acceptedOn: String(input.acceptedOn),
-          note: String(input.acceptanceNote),
-          reportedBy: cmd.actor,
-        };
-      }
-      if (action === "handoff") {
-        this.kind(e, "offer");
-        this.state(e, "accepted");
-        const deal = this.ref(cmd, "sales", d.parentId);
-        this.state(deal, "qualified");
-        const c = this.create(
-          cmd,
-          "cases",
-          `Realizacja: ${e.title}`,
-          asJson({
-            caseType: "delivery",
-            brief: d.scope,
-            acceptanceCriteria: input.acceptanceCriteria,
-            ...(input.ownerId ? { ownerId: input.ownerId } : {}),
-          }),
-        );
-        c.data.sourceOfferId = e.id;
-        this.save(cmd, c);
-        d.deliveryCaseId = c.id;
-        e.status = "handed_over";
-        deal.status = "won";
-        deal.data.acceptedOfferId = e.id;
-        deal.data.deliveryCaseId = c.id;
-        this.save(cmd, deal);
-      }
-      if (action === "lose") {
-        this.kind(e, "deal");
-        this.state(e, "open", "qualified");
-        this.human(cmd, input);
-        if (
-          this.db
-            .prepare(
-              "SELECT id FROM ops_entities WHERE tenant_id=? AND module='sales' AND json_extract(data_json,'$.parentId')=? AND status IN ('accepted','handed_over')",
-            )
-            .get(cmd.ctx.tenantId, e.id)
-        )
-          fail("ACCEPTED_OFFER_EXISTS", "Szansa ma zaakceptowaną ofertę.");
-        e.status = "lost";
-        d.lossReason = String(input.reason);
-      }
-      d.history = [
-        ...arr(d.history),
-        { action, actor: cmd.actor, at: cmd.now },
-      ];
-    }
+    if (e.module === "sales")
+      return this.salesStore.change(
+        this.salesServices(cmd),
+        e,
+        action,
+        asJson(input),
+      );
     if (e.module === "recruitment") {
       if (action === "close") {
         this.kind(e, "vacancy");
@@ -5270,6 +5267,40 @@ export class WorkspaceStore {
               this.scope(principal, area);
           }
         };
+        const requireSalesAuthority = (ctx: ToolContext, input: JsonObject) => {
+          if (module !== "sales") return;
+          salesAuthority(
+            this.salesServices({
+              ctx,
+              actor: ctx.actorId ?? "",
+              now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+              toolId,
+              changes: [],
+              profile: this.currentProfile(ctx.tenantId),
+            }),
+          );
+          for (const id of [ctx.actorId, ctx.approvedBy]) {
+            const p = this.livePrincipal(ctx.tenantId, id)!;
+            if (action === "handoff") this.scope(p, "cases");
+            for (const area of this.inputScopes(
+              module,
+              action,
+              input,
+              ctx.tenantId,
+            ))
+              this.scope(p, area);
+          }
+        };
+        const requireSalesReceipt = (
+          ctx: ToolContext,
+          row: Row | undefined,
+        ) => {
+          if (module === "sales" && row)
+            this.salesStore.requireCommitted(
+              ctx.tenantId,
+              JSON.parse(String(row.changes_json)),
+            );
+        };
         const requireLicenseAuthority = (
           ctx: ToolContext,
           input: JsonObject,
@@ -5518,51 +5549,53 @@ export class WorkspaceStore {
         return {
           id: toolId,
           version:
-            module === "inventory" || assetImport
-              ? "1"
-              : module === "assets" &&
-                  [
-                    "reserve",
-                    "replaceReservation",
-                    "issue",
-                    "issueForTask",
-                    "bindAssetForTask",
-                  ].includes(action)
-                ? "8"
-                : module === "purchases"
-                  ? "6"
-                  : module === "licenses"
-                    ? "5"
-                    : cancelStart
-                      ? "1"
-                      : lifecycle
-                        ? "5"
-                        : module === "documents"
-                          ? reportMutation
-                            ? "1"
-                            : "11"
-                          : taskAccess
-                            ? "1"
-                            : accessMutation ||
-                                (module === "it" &&
-                                  [
-                                    "reviseAccessBundle",
-                                    "reviseApplication",
-                                    "retireAccessDefinition",
-                                  ].includes(action))
-                              ? "8"
-                              : module === "assets"
-                                ? ["create", "replaceReservation"].includes(
-                                    action,
-                                  )
-                                  ? "7"
-                                  : "6"
-                                : module === "cases" &&
-                                    action === "bindEvidence"
-                                  ? "10"
-                                  : module === "cases" && action === "create"
-                                    ? "6"
-                                    : "4",
+            module === "sales"
+              ? "5"
+              : module === "inventory" || assetImport
+                ? "1"
+                : module === "assets" &&
+                    [
+                      "reserve",
+                      "replaceReservation",
+                      "issue",
+                      "issueForTask",
+                      "bindAssetForTask",
+                    ].includes(action)
+                  ? "8"
+                  : module === "purchases"
+                    ? "6"
+                    : module === "licenses"
+                      ? "5"
+                      : cancelStart
+                        ? "1"
+                        : lifecycle
+                          ? "5"
+                          : module === "documents"
+                            ? reportMutation
+                              ? "1"
+                              : "11"
+                            : taskAccess
+                              ? "1"
+                              : accessMutation ||
+                                  (module === "it" &&
+                                    [
+                                      "reviseAccessBundle",
+                                      "reviseApplication",
+                                      "retireAccessDefinition",
+                                    ].includes(action))
+                                ? "8"
+                                : module === "assets"
+                                  ? ["create", "replaceReservation"].includes(
+                                      action,
+                                    )
+                                    ? "7"
+                                    : "6"
+                                  : module === "cases" &&
+                                      action === "bindEvidence"
+                                    ? "10"
+                                    : module === "cases" && action === "create"
+                                      ? "6"
+                                      : "4",
           ...(taskAccess
             ? {
                 canAccess: (
@@ -5721,6 +5754,7 @@ export class WorkspaceStore {
             requireDocumentAuthority(ctx, input);
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
+            requireSalesAuthority(ctx, asJson(parsed.data));
             requireStocktakeAuthority(ctx);
             requireImportAuthority(ctx);
             const p = input as CommandInput;
@@ -5729,6 +5763,7 @@ export class WorkspaceStore {
               const existing = this.ledger(ctx, toolId, input);
               requirePurchaseReceipt(ctx, existing);
               requireLicenseReceipt(ctx, existing);
+              requireSalesReceipt(ctx, existing);
               requireStocktakeReceipt(ctx, existing);
               requireImportReceipt(ctx, input, existing);
               requireCommittedDocument(ctx, existing, input);
@@ -5835,6 +5870,33 @@ export class WorkspaceStore {
                     "Historia ewidencji urządzenia jest niespójna.",
                   );
                 if (action === "update") {
+                  if (module === "sales") {
+                    this.salesStore.read(ctx.tenantId, e.id);
+                    if (!["client", "contact"].includes(String(e.data.kind)))
+                      fail(
+                        "REVISION_REQUIRED",
+                        "Sprzedaż zmieniają właściwe operacje domenowe i rewizje ofert.",
+                      );
+                    if (
+                      e.data.kind === "contact" &&
+                      p.data?.organizationName !== undefined
+                    )
+                      fail(
+                        "INVALID_DOMAIN_INPUT",
+                        "Nazwę firmy zmień w rekordzie klienta.",
+                        400,
+                      );
+                    if (
+                      e.data.kind === "client" &&
+                      (p.data?.phone !== undefined ||
+                        p.data?.jobTitle !== undefined)
+                    )
+                      fail(
+                        "INVALID_DOMAIN_INPUT",
+                        "Telefon i rola należą do konkretnego kontaktu.",
+                        400,
+                      );
+                  }
                   if (module === "purchases" && e.data.kind !== "supplier")
                     fail(
                       "REVISION_REQUIRED",
@@ -6128,10 +6190,12 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
+            requireSalesAuthority(ctx, asJson(parsed.data));
             requireStocktakeAuthority(ctx);
             requireImportAuthority(ctx);
             requirePurchaseReceipt(ctx, row);
             requireLicenseReceipt(ctx, row);
+            requireSalesReceipt(ctx, row);
             requireStocktakeReceipt(ctx, row);
             requireImportReceipt(ctx, asJson(parsed.data), row);
             if (cancelStart) {
@@ -6171,10 +6235,12 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
+            requireSalesAuthority(ctx, asJson(parsed.data));
             requireStocktakeAuthority(ctx);
             requireImportAuthority(ctx);
             requirePurchaseReceipt(ctx, row);
             requireLicenseReceipt(ctx, row);
+            requireSalesReceipt(ctx, row);
             requireStocktakeReceipt(ctx, row);
             requireImportReceipt(ctx, asJson(parsed.data), row);
             if (cancelStart)

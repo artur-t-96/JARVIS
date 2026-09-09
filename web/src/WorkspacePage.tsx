@@ -1,3 +1,4 @@
+import { SalesForm, SalesWorkflow, SalesPage } from "./Sales";
 import { StocktakePage } from "./Stocktakes";
 import { AssetImportToolbar } from "./AssetImports";
 import { LicenseContracts, licenseSidebarAction } from "./LicenseContracts";
@@ -681,6 +682,8 @@ export function WorkspacePage(props: {
   context: Context;
   revision: number;
 }) {
+  if (props.module.id === "sales" && !props.entityId)
+    return <SalesPage context={props.context} revision={props.revision} />;
   return props.module.id === "inventory" ? (
     <StocktakePage {...props} />
   ) : (
@@ -713,6 +716,7 @@ function StandardWorkspacePage({
   const [form, setForm] = useState<FormSpec | null>(null);
   const [documentTemplate, setDocumentTemplate] = useState(false);
   const [purchaseCreate, setPurchaseCreate] = useState(false);
+  const [salesCreate, setSalesCreate] = useState(false);
   const closePurchase = useCallback(() => setPurchaseCreate(false), []);
   const [copyMessage, setCopyMessage] = useState("");
   const closeForm = useCallback(() => setForm(null), []);
@@ -725,14 +729,16 @@ function StandardWorkspacePage({
     (!cancelledCase || action === "create") &&
     context.tools.some((tool) => tool.id === `ops.${module.id}.${action}`);
   const create = () =>
-    module.id === "purchases"
-      ? setPurchaseCreate(true)
-      : setForm({
-          title: `Dodaj: ${module.label.toLocaleLowerCase("pl")}`,
-          action: "create",
-          fields: module.fields,
-          dataForm: true,
-        });
+    module.id === "sales"
+      ? setSalesCreate(true)
+      : module.id === "purchases"
+        ? setPurchaseCreate(true)
+        : setForm({
+            title: `Dodaj: ${module.label.toLocaleLowerCase("pl")}`,
+            action: "create",
+            fields: module.fields,
+            dataForm: true,
+          });
   const items = (resource.data?.items ?? [])
     .filter((item) => item.data.kind !== "license_terms")
     .filter(
@@ -799,6 +805,8 @@ function StandardWorkspacePage({
                 </div>
                 {allowedTool("update") &&
                   item.data.kind !== "license_terms" &&
+                  (module.id !== "sales" ||
+                    ["client", "contact"].includes(String(item.data.kind))) &&
                   (module.id !== "purchases" ||
                     item.data.kind === "supplier") &&
                   module.id !== "documents" &&
@@ -808,16 +816,25 @@ function StandardWorkspacePage({
                       onClick={() =>
                         setForm({
                           title:
-                            module.id === "assets"
-                              ? "Zmień dane ewidencji"
-                              : "Zmień nazwę",
+                            module.id === "sales"
+                              ? "Zmień dane klienta lub kontaktu"
+                              : module.id === "assets"
+                                ? "Zmień dane ewidencji"
+                                : "Zmień nazwę",
                           action: "update",
                           fields:
-                            module.id === "assets"
+                            module.id === "sales"
                               ? module.fields.filter((f) =>
-                                  ["manufacturer", "model"].includes(f.key),
+                                  (item.data.kind === "client"
+                                    ? ["organizationName", "contactEmail"]
+                                    : ["contactEmail", "phone", "jobTitle"]
+                                  ).includes(f.key),
                                 )
-                              : [],
+                              : module.id === "assets"
+                                ? module.fields.filter((f) =>
+                                    ["manufacturer", "model"].includes(f.key),
+                                  )
+                                : [],
                           entity: item,
                           dataForm: true,
                         })
@@ -849,6 +866,14 @@ function StandardWorkspacePage({
               )}
               {item.module === "cases" && !!item.data.laboratoryContext && (
                 <ItCase item={item} context={context} />
+              )}
+              {item.module === "sales" && (
+                <SalesWorkflow
+                  key={item.id}
+                  item={item}
+                  context={context}
+                  revision={revision}
+                />
               )}
               {item.module === "licenses" && (
                 <LicenseContracts
@@ -922,6 +947,10 @@ function StandardWorkspacePage({
                                 field.key,
                               )) &&
                             item.data.kind !== "license_terms" &&
+                            (module.id !== "sales" ||
+                              ["client", "contact"].includes(
+                                String(item.data.kind),
+                              )) &&
                             (!isAccessDefinition(item) ||
                               ["kind", "description"].includes(field.key)),
                         )
@@ -993,6 +1022,7 @@ function StandardWorkspacePage({
                           .filter(
                             (action) =>
                               allowedTool(action.id) &&
+                              module.id !== "sales" &&
                               action.id !== "importBatch" &&
                               (module.id !== "licenses" ||
                                 licenseSidebarAction(item, action.id)) &&
@@ -1133,6 +1163,9 @@ function StandardWorkspacePage({
     );
   return (
     <>
+      {salesCreate && (
+        <SalesForm context={context} onClose={() => setSalesCreate(false)} />
+      )}
       {documentTemplate && (
         <DocumentTemplate onClose={() => setDocumentTemplate(false)} />
       )}

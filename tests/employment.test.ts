@@ -54,7 +54,10 @@ function fixture(t: TestContext) {
   const directory = mkdtempSync(join(tmpdir(), "jarvis-employment-")),
     path = join(directory, "workspace.db");
   const workspace = new WorkspaceStore(path, { clock: () => Date.parse(now) });
-  workspace.setPrincipalProvider(() => [principal]);
+  workspace.setPrincipalProvider(() => [
+    principal,
+    { ...principal, id: "independent-approver", roles: ["approver"] },
+  ]);
   const initiatives = new InitiativeStore(
     join(directory, "profile.db"),
     workspace,
@@ -447,26 +450,70 @@ test("offer, won deal and its delivery case identify one engagement rather than 
     kind: "client",
     organizationName: "Test",
   });
+  const contact = await h.create("sales", "Syntetyczny kontakt", {
+    kind: "contact",
+    parentId: client.id,
+    contactEmail: "synthetic@example.invalid",
+  });
   let deal = await h.create("sales", "Deal", {
     kind: "deal",
     organizationName: "Test",
     parentId: client.id,
+    contactId: contact.id,
   });
   deal = await h.action(deal, "qualify", { qualification: "Agreed test need" });
   let offer = await h.create("sales", "Offer", {
     kind: "offer",
-    organizationName: "Test",
     parentId: deal.id,
-    value: 1,
-    currency: "PLN",
-    scope: "Agreed test service",
+    expectedDealVersion: deal.version,
+    expectedClientVersion: client.version,
+    expectedContactVersion: contact.version,
+    terms: {
+      scope: "Syntetyczna uzgodniona realizacja",
+      validUntil: "2099-01-01",
+      currency: "PLN",
+      priceBasis: "net",
+      lines: [
+        {
+          label: "Syntetyczna realizacja",
+          unit: "fixed",
+          quantityMilli: 1000,
+          unitPriceMinor: 10000,
+        },
+      ],
+    },
   });
   offer = await h.action(offer, "submitOffer");
+  offer = await h.action(offer, "reviewOffer", {
+    decision: "approved",
+    note: "Syntetyczna decyzja wewnętrzna",
+    humanDecision: true,
+  });
+  offer = await h.action(offer, "recordDispatch", {
+    channel: "meeting",
+    dispatchedOn: "2026-09-08",
+    evidenceReference: "SYNTHETIC-DISPATCH",
+    note: "Syntetyczne poświadczenie przekazania",
+    humanConfirmed: true,
+  });
   offer = await h.action(offer, "acceptOffer", {
+    evidenceReference: "SYNTHETIC-CLIENT-DECISION",
     acceptedOn: "2026-09-08",
     acceptanceNote: "Explicit business acceptance",
     humanDecision: true,
   });
+  deal = h.get("sales", deal.id);
+  deal = await h.action(deal, "scheduleNextStep", {
+    title: "Syntetyczny następny krok",
+    description: "Uzgodnienie realizacji",
+    dueDate: "2026-09-08",
+    ownerPrincipalId: "operator",
+  });
+  await h.action(
+    h.get("sales", String(deal.data.nextStepId)),
+    "acceptNextStep",
+    { humanConfirmed: true },
+  );
   offer = await h.action(offer, "handoff", {
     acceptanceCriteria: "Deliver agreed scope",
   });

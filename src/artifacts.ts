@@ -3,6 +3,7 @@ import { mkdirSync, writeFileSync, lstatSync, readFileSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { DomainError, type Principal, type JsonObject } from "./contracts.js";
 import { WorkspaceStore } from "./workspace.js";
+import { salesDocument } from "./sales-document.js";
 
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -179,6 +180,25 @@ export function prepareDocument(
   const template = documentTemplates.find((t) => t.id === templateId);
   if (!template) throw new DomainError("UNKNOWN_TEMPLATE", "Nieznany szablon.");
   const source = workspace.get(p, template.module, sourceId);
+  if (template.id === "sales_offer") {
+    const workflow = workspace.salesView(p, sourceId);
+    return {
+      title: `${template.label}: ${source.title}`.slice(0, 160),
+      data: {
+        accessScope: "sales",
+        documentType: "offer",
+        content: salesDocument(workflow.record, workflow.acceptanceCurrent),
+        sources: [
+          {
+            module: "sales",
+            id: source.id,
+            version: source.version,
+            observedAt: source.updatedAt,
+          },
+        ],
+      },
+    };
+  }
   if (template.id === "case_scope") {
     const scope = workspace.documentScope(p, sourceId);
     const s = scope.snapshot;

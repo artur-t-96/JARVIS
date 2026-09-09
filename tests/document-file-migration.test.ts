@@ -46,7 +46,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      17,
+      18,
     );
     assert.throws(
       () =>
@@ -60,7 +60,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
             },
           })),
         }),
-      /v17 is newer than supported v9/,
+      /v18 is newer than supported v9/,
     );
     assert.deepEqual(db.prepare("SELECT * FROM ops_entities").all(), records);
   } finally {
