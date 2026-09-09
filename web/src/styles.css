@@ -1162,6 +1162,49 @@ tbody tr:hover {
 .stocktake-form .sheet-body > * + * {
   margin-top: 20px;
 }
+.asset-import-table {
+  overflow-x: auto;
+  margin: 18px 0;
+}
+.asset-import-table table {
+  width: 100%;
+  min-width: 480px;
+}
+.asset-import-table td {
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.asset-import-table details {
+  margin-top: 10px;
+}
+.asset-import-table dd {
+  margin: 2px 0 10px;
+  white-space: pre-wrap;
+}
+.asset-import-table .error-text {
+  color: var(--danger, #a02c35);
+}
+.asset-import-selection {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+}
+.asset-import-operation .pagination,
+.sheet .pagination {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 18px 0;
+}
+.sheet:has(.asset-import-table) {
+  width: 900px;
+}
+.sheet:has(.asset-import-table) .sheet-body > * + * {
+  margin-top: 18px;
+}
 .stocktake-lines {
   display: grid;
   gap: 20px;

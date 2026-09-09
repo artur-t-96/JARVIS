@@ -4,6 +4,13 @@ import {
   type StocktakeServices,
 } from "./stocktakes.js";
 import {
+  AssetImports,
+  assetImportAuthority,
+  migrateAssetImports,
+  type AssetImportServices,
+} from "./asset-imports.js";
+import { AssetImportFiles } from "./asset-import-files.js";
+import {
   LicenseContracts,
   licenseAuthority,
   migrateLicenseContracts,
@@ -200,6 +207,7 @@ interface Command {
   custodyEvent?: CustodyEvent;
   replacement?: JsonObject;
   accessEvent?: AccessEvent;
+  assetImport?: JsonObject;
 }
 function fail(code: string, message: string, status = 409): never {
   throw new DomainError(code, message, status);
@@ -259,6 +267,8 @@ export class WorkspaceStore {
   private readonly deliveryStore: PurchaseDeliveries;
   private readonly licenseStore: LicenseContracts;
   private readonly stocktakeStore: Stocktakes;
+  private readonly importFiles: AssetImportFiles;
+  private readonly importStore: AssetImports;
   private laboratory?: LocalLaboratory;
   constructor(
     dbPath: string,
@@ -456,6 +466,11 @@ export class WorkspaceStore {
           name: "License terms and confirmed contract documents",
           up: migrateLicenseContracts,
         },
+        {
+          version: 16,
+          name: "Approved CSV equipment sources and import receipts",
+          up: migrateAssetImports,
+        },
       ],
     });
     this.fileStore = new DocumentFiles(
@@ -467,6 +482,11 @@ export class WorkspaceStore {
     this.deliveryStore = new PurchaseDeliveries(this.db);
     this.licenseStore = new LicenseContracts(this.db);
     this.stocktakeStore = new Stocktakes(this.db);
+    this.importFiles = new AssetImportFiles(
+      dbPath === ":memory:" ? undefined : dirname(dbPath),
+      options.clock,
+    );
+    this.importStore = new AssetImports(this.db, this.importFiles);
     this.custodyStore = new AssetCustody(this.db);
     this.accessStore = new AccessRegister(this.db);
     this.readinessStore = new CaseReadinessStore(
@@ -1498,6 +1518,7 @@ export class WorkspaceStore {
     input: JsonObject,
     tenant: string,
   ): string[] {
+    if (module === "assets" && action === "importBatch") return [];
     const scopes: string[] = [];
     const data =
       action === "create"
@@ -1911,6 +1932,79 @@ export class WorkspaceStore {
       }),
       id,
     );
+  }
+  private importServices(cmd: Command): AssetImportServices {
+    return {
+      ctx: cmd.ctx,
+      now: cmd.now,
+      timezone: cmd.profile?.timezone ?? "UTC",
+      profileVersion: cmd.profile?.version ?? 0,
+      principal: (id) => this.livePrincipal(cmd.ctx.tenantId, id),
+      matchingAssets: (keys) => {
+        const selected = new Set(keys);
+        return this.db
+          .prepare(
+            "SELECT id,json_extract(data_json,'$.serial') serial FROM ops_entities WHERE tenant_id=? AND module='assets'",
+          )
+          .all(cmd.ctx.tenantId)
+          .filter((row) => selected.has(equipmentSerialKey(String(row.serial))))
+          .map((row) => this.stocktakeServices(cmd).asset(String(row.id)));
+      },
+      create: (values, provenance) => {
+        const { title, ...data } = values;
+        return this.create(cmd, "assets", title, {
+          ...data,
+          importSource: provenance,
+        });
+      },
+    };
+  }
+  private importReadServices(principal: Principal) {
+    this.scope(principal, "assets");
+    return this.importServices({
+      ctx: {
+        tenantId: principal.tenantId,
+        actorId: principal.id,
+        runId: "read-only",
+        stepId: "read-only",
+        operationKey: "read-only",
+        signal: new AbortController().signal,
+      },
+      actor: principal.id,
+      now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      toolId: "read-only",
+      changes: [],
+      profile: this.currentProfile(principal.tenantId),
+    });
+  }
+  assetImportPreview(principal: Principal, input: unknown) {
+    return this.importStore.preview(this.importReadServices(principal), input);
+  }
+  assetImportProposal(principal: Principal, actorId: string, input: unknown) {
+    return this.importStore.proposal(
+      this.importReadServices(principal),
+      actorId,
+      input,
+    );
+  }
+  prepareAssetImport(principal: Principal, input: unknown) {
+    return this.importStore.prepare(
+      this.importReadServices(principal),
+      principal,
+      input,
+    );
+  }
+  assetImports(principal: Principal, page: { limit: number; offset: number }) {
+    this.scope(principal, "assets");
+    return this.importStore.list(principal.tenantId, page);
+  }
+  assetImportReport(principal: Principal, id: string) {
+    this.scope(principal, "assets");
+    return this.importStore.report(principal.tenantId, id);
+  }
+  assetImportSource(principal: Principal, id: string) {
+    this.scope(principal, "assets");
+    return this.importStore.download(principal.tenantId, id);
   }
   private stocktakeServices(cmd: Command): StocktakeServices {
     return {
@@ -4549,6 +4643,7 @@ export class WorkspaceStore {
         ...actionSchemas[module],
       }).map(([action, inputSchema]): ToolDefinition => {
         const toolId = `ops.${module}.${action}`;
+        const assetImport = module === "assets" && action === "importBatch";
         const cancelStart = module === "people" && action === "cancelStart";
         const lifecycle = [
           "people.startEmployment",
@@ -4933,6 +5028,28 @@ export class WorkspaceStore {
               JSON.parse(String(row.changes_json)),
             );
         };
+        const requireImportAuthority = (ctx: ToolContext) => {
+          if (assetImport)
+            assetImportAuthority(
+              this.importServices({
+                ctx,
+                actor: ctx.actorId ?? "",
+                now: new Date(
+                  this.options.clock?.() ?? Date.now(),
+                ).toISOString(),
+                toolId,
+                changes: [],
+                profile: this.currentProfile(ctx.tenantId),
+              }),
+            );
+        };
+        const requireImportReceipt = (
+          ctx: ToolContext,
+          input: JsonObject,
+          row: Row | undefined,
+        ) => {
+          if (assetImport) this.importStore.requireCommitted(ctx, input, row);
+        };
         const requiredScopes =
           module === "inventory"
             ? ["assets"]
@@ -4957,8 +5074,9 @@ export class WorkspaceStore {
                         ? ["people"]
                         : [];
         const definition = catalog.find((m) => m.id === module)!;
-        const actionLabel =
-          action === "create"
+        const actionLabel = assetImport
+          ? "Importuj wybraną partię sprzętu z CSV"
+          : action === "create"
             ? "Utwórz rekord"
             : action === "update"
               ? "Zapisz zmiany"
@@ -4967,7 +5085,7 @@ export class WorkspaceStore {
         return {
           id: toolId,
           version:
-            module === "inventory"
+            module === "inventory" || assetImport
               ? "1"
               : module === "assets" &&
                   [
@@ -5169,6 +5287,7 @@ export class WorkspaceStore {
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
             requireStocktakeAuthority(ctx);
+            requireImportAuthority(ctx);
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
             try {
@@ -5176,6 +5295,7 @@ export class WorkspaceStore {
               requirePurchaseReceipt(ctx, existing);
               requireLicenseReceipt(ctx, existing);
               requireStocktakeReceipt(ctx, existing);
+              requireImportReceipt(ctx, input, existing);
               requireCommittedDocument(ctx, existing);
               // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
@@ -5207,6 +5327,8 @@ export class WorkspaceStore {
                 this.db.exec("COMMIT");
                 if (module === "documents" && action === "attachFile")
                   this.fileStore.releaseStage(ctx, String(input.uploadId));
+                if (assetImport)
+                  this.importFiles.releaseStage(ctx, String(input.uploadId));
                 return JSON.parse(String(existing.receipt_json)) as ToolResult;
               }
               const cmd: Command = {
@@ -5220,7 +5342,19 @@ export class WorkspaceStore {
                 changes: [],
               };
               let e: Entity;
-              if (action === "create")
+              if (assetImport) {
+                const imported = this.importStore.apply(
+                  this.importServices(cmd),
+                  input,
+                );
+                e = imported.assets[0]!;
+                cmd.assetImport = {
+                  importId: imported.receipt.id,
+                  importHash: imported.receipt.hash,
+                  importedCount: imported.assets.length,
+                  skippedCount: imported.receipt.skippedRows.length,
+                };
+              } else if (action === "create")
                 e = this.create(cmd, module, String(p.title), asJson(p.data!));
               else {
                 e = this.read(ctx.tenantId, module, String(p.id));
@@ -5475,6 +5609,7 @@ export class WorkspaceStore {
                       version: e.version,
                       status: e.status,
                       title: e.title,
+                      ...(cmd.assetImport ?? {}),
                       ...(cmd.replacement
                         ? { replacement: cmd.replacement }
                         : {}),
@@ -5532,6 +5667,8 @@ export class WorkspaceStore {
               this.db.exec("COMMIT");
               if (module === "documents" && action === "attachFile")
                 this.fileStore.releaseStage(ctx, String(input.uploadId));
+              if (assetImport)
+                this.importFiles.releaseStage(ctx, String(input.uploadId));
               return receipt;
             } catch (error) {
               this.db.exec("ROLLBACK");
@@ -5547,9 +5684,11 @@ export class WorkspaceStore {
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
             requireStocktakeAuthority(ctx);
+            requireImportAuthority(ctx);
             requirePurchaseReceipt(ctx, row);
             requireLicenseReceipt(ctx, row);
             requireStocktakeReceipt(ctx, row);
+            requireImportReceipt(ctx, asJson(parsed.data), row);
             if (cancelStart) {
               this.cancelStartAuthority(ctx, asJson(parsed.data));
               if (row && !this.cancellationCommitted(ctx, asJson(parsed.data)))
@@ -5588,9 +5727,11 @@ export class WorkspaceStore {
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
             requireStocktakeAuthority(ctx);
+            requireImportAuthority(ctx);
             requirePurchaseReceipt(ctx, row);
             requireLicenseReceipt(ctx, row);
             requireStocktakeReceipt(ctx, row);
+            requireImportReceipt(ctx, asJson(parsed.data), row);
             if (cancelStart)
               this.cancelStartAuthority(ctx, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));

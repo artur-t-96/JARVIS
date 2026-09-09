@@ -28,7 +28,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     );
     const schema = db
         .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement','ops_open_laboratory_case','ops_purchase_quote_source','ops_purchase_order_request','ops_delivery_document_line','ops_delivery_order','ops_license_terms_pool','ops_license_confirmation_source') ORDER BY name",
+          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement','ops_open_laboratory_case','ops_purchase_quote_source','ops_purchase_order_request','ops_delivery_document_line','ops_delivery_order','ops_license_terms_pool','ops_license_confirmation_source','ops_asset_imports','ops_asset_import_history') ORDER BY name",
         )
         .all(),
       records = db.prepare("SELECT * FROM ops_entities").all();
@@ -37,7 +37,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     assert.deepEqual(
       db
         .prepare(
-          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement','ops_open_laboratory_case','ops_purchase_quote_source','ops_purchase_order_request','ops_delivery_document_line','ops_delivery_order','ops_license_terms_pool','ops_license_confirmation_source') ORDER BY name",
+          "SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT IN('ops_employment','ops_one_open_internal','ops_one_open_engagement','ops_open_laboratory_case','ops_purchase_quote_source','ops_purchase_order_request','ops_delivery_document_line','ops_delivery_order','ops_license_terms_pool','ops_license_confirmation_source','ops_asset_imports','ops_asset_import_history') ORDER BY name",
         )
         .all(),
       schema,
@@ -46,7 +46,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      15,
+      16,
     );
     assert.throws(
       () =>
@@ -60,7 +60,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
             },
           })),
         }),
-      /v15 is newer than supported v9/,
+      /v16 is newer than supported v9/,
     );
     assert.deepEqual(db.prepare("SELECT * FROM ops_entities").all(), records);
   } finally {

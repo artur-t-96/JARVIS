@@ -1,4 +1,5 @@
 import { StocktakePage } from "./Stocktakes";
+import { AssetImportToolbar } from "./AssetImports";
 import { LicenseContracts, licenseSidebarAction } from "./LicenseContracts";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
@@ -983,6 +984,7 @@ function StandardWorkspacePage({
                           .filter(
                             (action) =>
                               allowedTool(action.id) &&
+                              action.id !== "importBatch" &&
                               (module.id !== "licenses" ||
                                 licenseSidebarAction(item, action.id)) &&
                               (module.id !== "purchases" ||
@@ -1136,6 +1138,9 @@ function StandardWorkspacePage({
         )}
       </div>
       {resource.error && <Notice tone="error">{resource.error}</Notice>}
+      {module.id === "assets" && (
+        <AssetImportToolbar canWrite={allowedTool("importBatch")} />
+      )}
       {module.id === "documents" && allowedTool("create") && (
         <section className="card document-template-callout">
           <div>

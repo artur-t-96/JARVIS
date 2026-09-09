@@ -1,7 +1,10 @@
 import { DatabaseSync } from "node:sqlite";
 import { join } from "node:path";
 import { writeFileSync, readFileSync } from "node:fs";
-import { itCaseFixture } from "../tests/helpers/it-case-fixture.js";
+import {
+  itCaseFixture,
+  itCaseLeaseMs,
+} from "../tests/helpers/it-case-fixture.js";
 import { custodyNow } from "../tests/helpers/custody-fixture.js";
 import {
   laboratoryTargetSchema,
@@ -25,7 +28,8 @@ let hold: ReturnType<typeof setInterval> | undefined;
 const f = await itCaseFixture(directory, {
   target,
   engineClock: () =>
-    custodyNow + (mode === "apply" ? 1000 : mode === "resume" ? 2000 : 0),
+    custodyNow +
+    (mode === "apply" ? 2 : mode === "resume" ? 4 : 0) * itCaseLeaseMs,
   wrap: (tool) =>
     tool.id !== renewalTool
       ? tool
