@@ -281,7 +281,7 @@ export function ReportComposer({
       }
       onClose={onClose}
     >
-      <form onSubmit={(event) => void inspect(event)}>
+      <form className="command-form" onSubmit={(event) => void inspect(event)}>
         <div className="sheet-body">
           {(error || catalog.error) && (
             <Notice tone="error">{error || catalog.error}</Notice>
