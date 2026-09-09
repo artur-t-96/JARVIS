@@ -45,16 +45,17 @@ export function ReportSnapshot({
     <div className="operational-report">
       <h3>{names[snapshot.definition.kind]}</h3>
       <p>
-        {snapshot.companyName} · {dateLabel(snapshot.capturedAt, true)} ·{" "}
+        {snapshot.companyName} ·{" "}
+        {dateLabel(snapshot.capturedAt, true, snapshot.timezone)} ·{" "}
         {snapshot.timezone}
       </p>
       <p>
         {"from" in snapshot.definition
-          ? `Okres: ${dateLabel(snapshot.definition.from)} – ${dateLabel(snapshot.definition.to)}`
+          ? `Okres: ${dateLabel(snapshot.definition.from, false, "UTC")} – ${dateLabel(snapshot.definition.to, false, "UTC")}`
           : `Lokalizacja: ${snapshot.definition.location ?? "wszystkie"}`}
       </p>
       <div className="report-summary">
-        <strong>{snapshot.summary.rows} pozycji</strong>
+        <strong>Pozycje: {snapshot.summary.rows}</strong>
         <span>{snapshot.summary.withWarnings} z brakami lub uwagami</span>
       </div>
       {snapshot.summary.money.length > 0 && (
@@ -116,7 +117,9 @@ export function ReportSnapshot({
                     >
                       Otwórz źródło · wersja {ref.version}
                     </button>
-                    <small>{dateLabel(ref.updatedAt, true)}</small>
+                    <small>
+                      {dateLabel(ref.updatedAt, true, snapshot.timezone)}
+                    </small>
                     <code>{ref.hash}</code>
                   </li>
                 ))}
