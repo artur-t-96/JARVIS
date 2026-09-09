@@ -1,9 +1,13 @@
 import { useState, type FormEvent } from "react";
-import { calculateOffer, type OfferTerms } from "../../src/sales-models";
+import {
+  calculateOffer,
+  offerTermsSchema,
+  type OfferTerms,
+} from "../../src/sales-models";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Entity, type Run } from "./types";
-import { Badge, Loading, Notice, Sheet } from "./ui";
+import { Badge, JsonView, Loading, Notice, Sheet } from "./ui";
 
 const rec = (v: unknown): Record<string, unknown> =>
   v && typeof v === "object" && !Array.isArray(v)
@@ -13,6 +17,7 @@ const list = (v: unknown): Record<string, unknown>[] =>
   Array.isArray(v) ? (v as Record<string, unknown>[]) : [];
 export const salesLabels: Record<string, string> = {
   create: "Dodaj do sprzedaży",
+  update: "Zmień dane klienta lub kontaktu",
   qualify: "Potwierdź kwalifikację szansy",
   setDealContact: "Wskaż kontakt klienta",
   assignSalesOwner: "Przekaż odpowiedzialność",
@@ -45,6 +50,69 @@ const units: Record<string, string> = {
   item: "sztuka",
   fixed: "ryczałt",
 };
+/** The calculation is derived only from the exact plan arguments shown for approval. */
+export function SalesOperation({ input }: { input: Record<string, unknown> }) {
+  const terms = offerTermsSchema.safeParse(
+    input.terms ?? rec(input.data).terms,
+  );
+  let pricing: ReturnType<typeof calculateOffer> | undefined;
+  if (terms.success) {
+    try {
+      pricing = calculateOffer(terms.data);
+    } catch {
+      /* The raw arguments remain visible for invalid historical plans. */
+    }
+  }
+  return (
+    <>
+      {terms.success && pricing && (
+        <section className="sales-offer-snapshot">
+          <h3>{String(input.title ?? "Kalkulacja oferty")}</h3>
+          <p className="preserve-lines">{terms.data.scope}</p>
+          <p>
+            Ważna do {dateLabel(terms.data.validUntil)} · ceny{" "}
+            {terms.data.priceBasis === "net" ? "netto" : "brutto"}
+          </p>
+          <div className="table-scroll">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Pozycja</th>
+                  <th>Ilość</th>
+                  <th>Jednostka</th>
+                  <th>Cena jednostkowa</th>
+                  <th>Wartość</th>
+                </tr>
+              </thead>
+              <tbody>
+                {pricing.lines.map((line, i) => (
+                  <tr key={i}>
+                    <td>{line.label}</td>
+                    <td>
+                      {(line.quantityMilli / 1000).toLocaleString("pl-PL")}
+                    </td>
+                    <td>{units[line.unit]}</td>
+                    <td>
+                      {salesAmount(line.unitPriceMinor, pricing!.currency)}
+                    </td>
+                    <td>{salesAmount(line.totalMinor, pricing!.currency)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p>
+            <strong>
+              Łącznie: {salesAmount(pricing.totalMinor, pricing.currency)}{" "}
+              {pricing.priceBasis === "net" ? "netto" : "brutto"}
+            </strong>
+          </p>
+        </section>
+      )}
+      <JsonView value={input} />
+    </>
+  );
+}
 export function SalesPage({
   context,
   revision,
@@ -612,6 +680,35 @@ export function SalesWorkflow({
             Dalsze wpisy
           </button>
         </div>
+      )}
+      {list(e.data.history).length > 0 && (
+        <details>
+          <summary>
+            Historia decyzji i zmian ({list(e.data.history).length})
+          </summary>
+          <ol className="sales-history">
+            {[...list(e.data.history)].reverse().map((event, i) => (
+              <li key={i}>
+                <strong>
+                  {salesLabels[String(event.action)] ??
+                    String(event.action ?? "Zmiana")}
+                </strong>
+                <p>
+                  {dateLabel(String(event.at ?? event.createdAt ?? ""), true)} ·
+                  zgłosił{" "}
+                  {String(event.actorId ?? event.createdBy ?? "nie zapisano")} ·
+                  zatwierdził {String(event.approvedBy ?? "nie zapisano")}
+                </p>
+                {!!(event.reason || event.note) && (
+                  <p>{String(event.reason ?? event.note)}</p>
+                )}
+                {event.revision != null && (
+                  <p>Rewizja oferty: {String(event.revision)}</p>
+                )}
+              </li>
+            ))}
+          </ol>
+        </details>
       )}
       {spec && (
         <SalesForm

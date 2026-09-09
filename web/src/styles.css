@@ -3692,6 +3692,18 @@ tbody tr:hover {
   margin: 16px 0;
   min-width: 0;
 }
+.sales-workflow {
+  margin-bottom: 24px;
+}
+.detail-grid.sales-detail {
+  grid-template-columns: minmax(0, 1fr);
+}
+.sales-history {
+  padding-left: 24px;
+}
+.sales-history li {
+  margin: 14px 0;
+}
 .sales-picker-options,
 .sales-workflow .button-row,
 .sales-picker .button-row {

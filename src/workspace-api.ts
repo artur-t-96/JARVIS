@@ -846,18 +846,28 @@ export function registerWorkspaceApi(
     const tool = tools.find((t) => t.id === toolId);
     if (!tool) throw new DomainError("UNKNOWN_TOOL", "Nieznana operacja.");
     tool.inputSchema.parse(input);
+    const salesTitle = toolId.startsWith("ops.sales.")
+      ? typeof input.title === "string"
+        ? input.title
+        : typeof input.id === "string"
+          ? workspace.get(actor, "sales", input.id).title
+          : ""
+      : "";
+    const commandTitle = salesTitle
+      ? `${tool.description.split(". ")[0]} · ${salesTitle}`.slice(0, 160)
+      : tool.description.slice(0, 160);
     return reply.code(201).send({
       run: engine.createRun(
         actor,
         `Operacja ${tool.id}`,
         {
-          title: tool.description.slice(0, 160),
+          title: commandTitle,
           summary:
             "Sprawdź konkretny zakres operacji przed uruchomieniem i zatwierdzeniem zapisu.",
           steps: [
             {
               id: "command",
-              title: tool.description.slice(0, 160),
+              title: commandTitle,
               toolId,
               input: input as JsonObject,
             },

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { AssetImportOperation } from "./AssetImports";
 import { ReportOperation } from "./OperationalReports";
+import { SalesOperation } from "./Sales";
 import { post } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
@@ -290,6 +291,8 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                       input={step.input}
                       attach={step.toolId === "ops.documents.attachFile"}
                     />
+                  ) : step.toolId.startsWith("ops.sales.") ? (
+                    <SalesOperation input={step.input} />
                   ) : (
                     <JsonView value={step.input} />
                   )}
