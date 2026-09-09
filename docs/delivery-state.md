@@ -1,6 +1,6 @@
 # Dziennik realizacji pełnego JARVIS
 
-Aktualizacja: 8.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](roadmap.md). Ten plik jest punktem wznowienia pracy, nie deklaracją ukończenia produktu.
+Aktualizacja: 9.09.2026. Właściciel: Codex. Kolejność i zakres: [roadmapa](roadmap.md). Ten plik jest punktem wznowienia pracy, nie deklaracją ukończenia produktu.
 
 ## Baza potwierdzona przed roadmapą
 
@@ -34,7 +34,7 @@ Status inny niż „odebrane” oznacza brak pełnego odbioru paczki opisanej w 
 
 ## Najbliższa paczka wykonawcza
 
-**P08b1: zapotrzebowanie, oferty i zgoda kosztowa.** Baza: odebrany lokalnie PR #22, `856f367495bd5aeb68a1ac135fa8a48816fd03db`. Worktree `/private/tmp/jarvis-procurement`, gałąź `codex/procurement-workflow`. Najpierw porównanie i decyzja dotycząca konkretnej oferty, następnie lokalne zamówienie; P08b2 domyka tożsamość dostaw i wejście wyposażenia do ewidencji. [Projekt P08b](p08b-design.md). Pełny spis/import P05b i pozostałe kompetencje pozostają w roadmapie.
+**P08b2: dostarczenie poświadczonych dostaw i wyposażenia.** Baza: odebrany lokalnie PR #23, `f91c6b74f5b57b174eba673efa8656868787d5fd`. Worktree `/private/tmp/jarvis-delivery-receipts`, gałąź `codex/delivery-receipts`, PR #24. Kod, CI, Chrome dwóch firm i odtworzenie kopii potwierdzone poniżej; pozostają scalenie, aktualizacja obu trybów i odbiór właściwego SHA. Następnie P08c: koszty i odnowienia licencji. Pełny spis/import P05b i pozostałe kompetencje pozostają w roadmapie.
 
 ## Kontynuacja w tym zadaniu
 
@@ -439,3 +439,29 @@ Podgląd zatrzymano. Kopia `/private/tmp/jarvis-p08b1-backup-20260908T2057` → 
 Dowody prywatne: `/private/tmp/jarvis-procurement/.data/p08b1-preview/ui-proof.json`, `boundaries.mjs`, `pending.mjs`, `restore-proof.ts`. Odbiór dotyczy lokalnych decyzji i zapisów. Rejestracja nie jest wysyłką ani przyjęciem dostawy. Odbiór scalonej głównej instalacji i świeża telemetria OSS pozostają wymagane; P08b2 oraz reszta roadmapy pozostają otwarte.
 
 Końcowy skan dokumentacji (CI 34277858643) błędnie zaklasyfikował powyższy UUID wykonania jako sekret z powodu sąsiedniej frazy. Wpis `.gitleaksignore` obejmuje wyłącznie wskazany historyczny commit, plik, regułę i wiersz; nie wyłącza żadnej reguły ani pliku. Opis został doprecyzowany. [Mechanizm pojedynczych trafień Gitleaks](https://github.com/gitleaks/gitleaks#gitleaksignore) — oficjalna dokumentacja `.gitleaksignore`.
+
+### P08b1 — dostarczone lokalnie
+
+[PR #23](https://github.com/artur-t-96/JARVIS/pull/23) scalono jako `f91c6b74f5b57b174eba673efa8656868787d5fd`. Końcowe [CI PR 34278007876](https://github.com/artur-t-96/JARVIS/actions/runs/34278007876), head `58d68c086884584121e3dcdd33031c7d3e07de86`, i [CI main 34278294778](https://github.com/artur-t-96/JARVIS/actions/runs/34278294778) zielone: 402/402, pełne bramki oraz oba demonstratory. Zarządzana aktualizacja 8.09.2026 21:03 UTC, Node22.23.0; oba lokalne tryby mają ten SHA, operations v13 i poprawne FK. Provider pozostaje wyłączony.
+
+Kopie zatrzymanych aplikacji: lab `/private/tmp/jarvis-before-p08b1-lab-20260908T2103`, 20 plików, manifest `da90d0da7a0433a7827be179aa82561a1c134890c58fee960a3170758e454093`; operational `/private/tmp/jarvis-before-p08b1-operational-20260908T2103`, sześć plików, manifest `10ee52565935a171901b7deca9319f6a46e9029260114011eec0479c8e57e02a`. Czternaście wcześniejszych spraw pozostało identycznych; odbiór onboardingu PR #18 jest nadal aktualny.
+
+Sześć zatwierdzonych komend API przygotowało dostawcę, potrzebę, dwie oferty, wybór i decyzję kosztową. Chrome głównego lab przygotował, rozpoczął i zatwierdził zamówienie; identyfikator wykonania `76d89d7d-8789-47f5-b775-f03deac9c201`. Wynik `23772121-ad10-4590-8442-634081b1c285`: 8100 zł brutto, dwie sztuki, jedna próba i pozytywna niezależna weryfikacja. Oferta 12100 zł pozostaje zablokowana budżetem 10000 zł. Widok zamówienia obejrzano w Chrome; świeża konsola bez błędów i ostrzeżeń. Dowód `.data/local-product/p08b1-verification.json` zawiera siedem zapisów i zachowaną bazę wcześniejszych spraw.
+
+OSS 21:06–21:07 UTC: obie Grafany13.2.1, po 14 paneli, trzy źródła OK i rzeczywiste metryki workera. Ślady HTTP właściwego SHA: lab `70d5f82d315a7d43a9dc61d0f83a6ac1`, operational `9758cd6958ffa1fddf0afc21786ffbff`, każdy z powiązanym logiem. Rzeczywiste zamówienie ma ślad `16f19219ce3a44d05774b31f4e3405ae`, wykonanie, niezależną weryfikację i cztery logi. `.data/local-product/p08b1-oss-verification.json`. Dostarczony jest obieg kosztowy; dostawy, licencje i reszta roadmapy pozostają otwarte.
+
+### P08b2 — dostawy i urządzenia, implementacja
+
+Powstaje rejestr dokumentów/pozycji, ilości fizycznych, przyjętych i odrzuconych, zwrotów oraz konkretnych urządzeń. Przyjęcie, zwrot, ewidencja sprzętu i powiązanie dowodu są osobnymi zatwierdzanymi operacjami. Poświadczenia nie zmieniają zatwierdzonego kosztu; nadwyżka wymaga odrębnego zakupu. Stare ilości pozostają bez fikcyjnych dokumentów i mogą zostać jawnie uzupełnione poświadczeniem bez ponownego naliczenia. Sześć celowanych testów domeny/API/UI oraz typy przeszły. Migracja v14, dwa rzeczywiste SIGKILL, pełne CI, odbiór Chrome i restore są jeszcze wymagane. Szczegóły kontraktu w [projekcie P08b](p08b-design.md).
+
+### P08b2 — odbiór podglądu i odtworzenia
+
+[PR #24](https://github.com/artur-t-96/JARVIS/pull/24), końcowy kod `f81c95825095aad66fd4497d6b085a8576491b22`, [CI 34318681094](https://github.com/artur-t-96/JARVIS/actions/runs/34318681094): 411/411, pełne bramki i demonstratory. Nowe testy obejmują v13 → v14 oraz rzeczywisty SIGKILL przed zgodą i po zapisaniu dostawy lub urządzeń. Pierwsze CI zaliczyło wszystkie nowe scenariusze; pięć starszych testów wymagało aktualizacji oczekiwanej wersji i listy dodanych indeksów, przy zachowaniu porównań historycznych danych.
+
+Podgląd dwóch firm na 4330: 31 zatwierdzonych komend API/Chrome, odrębni operatorzy i zatwierdzający. Firma A przyjęła jedną zgodną i jedną uszkodzoną sztukę; powtórzony dokument pod nowym kluczem nie zmienił danych. Dostawa uzupełniająca pokryła brak, ale rozbieżność pozostała do poświadczenia zwrotu. Chrome zarejestrował oba numery seryjne osobnymi operacjami. Firma B zarejestrowała dwie sztuki jedną operacją; formularz odrzucił powtórzony numer. Ten sam numer w innej firmie jest niezależny. Oba profile przeszły rezerwację, wydanie przez własne konto IT i powiązanie urządzenia z właściwym onboardingiem. Wymaganie sprzętowe jest spełnione; brak dokumentów i dostępów nadal blokuje całość.
+
+Chrome firmy B powiązał dostawę z wymaganiem sprawy `2368861e-a5b3-48e7-8749-1f5399e1c329`, przekazał do odbioru i przygotował akceptację. Oddzielne zgody zatwierdziło konto testowe przez API; wykonanie decyzji `74bca74d-6431-45db-911b-2f6519a07546` zakończyło się jedną próbą i niezależną weryfikacją. Bieżący odbiór sprawy v7 jest aktualny. Po odblokowaniu Maca 9.09 formularze przyjęcia i zwrotu sprawdzono również z natywnym wpisaniem daty: wykonania `4250edb7-be8c-4cf6-98a0-48ddde01aa16` i `d117f5c6-a26d-4c68-a1b1-526b23fb8a46`. Nadmiarowa sztuka nie zwiększyła przyjętych ilości; po zwrocie A ma 4 fizycznie otrzymane, 2 przyjęte, 2 odrzucone i 0 otwartych rozbieżności, nadal 2 urządzenia. Obrazy formularzy, wyniku i odebranej sprawy obejrzano; świeża konsola bez błędów/ostrzeżeń. Naprawiono pusty komunikat o kompletności wybranego źródła i sprawdzono go w Chrome.
+
+Kopia zatrzymanego podglądu `/private/tmp/jarvis-p08b2-backup-20260909T0620` → `/private/tmp/jarvis-p08b2-restored-20260909T0620`, sześć plików, manifest `443924a5dfab47afddd02764184c7ac1e2b3b1904f0d654d33e10be9564273aa`. Uzgodniono 29 wcześniejszych zapisów bez zmian. Oczekująca dostawa `a9e25b76-834c-4b70-a5bb-46780c9e26ed` po osobnej zgodzie wykonała się raz: pozycje 3 → 4, rekordy 20 → 21, wersje 60 → 62, komendy 42 → 43; urządzenia nadal 4, przydziały 2, zdarzenia ewidencji 8 i odbiory 1. Nadmiar pozostaje do zwrotu. Replay oraz uzgodnienie 30 zapisów nie zmieniły liczników, historycznych urządzeń, spraw ani danych drugiej firmy; FK poprawne. Konta i sesje nie należą do kopii. Pierwsza kontrola helpera porównała surowe wejście bez domyślnego zera; po uwzględnieniu walidacji wejścia próba przeszła bez zmiany kodu aplikacji. W oryginalnym podglądzie osobno odrzucono tę oczekującą operację: zero prób i skutków.
+
+Dowody prywatne: `/private/tmp/jarvis-delivery-receipts/.data/p08b2-preview/ui-proof.json`, `receive.mjs`, `assign-delivered.mjs`, `restore-proof.ts`. Ten odbiór nie potwierdza fizycznych zdarzeń poza laboratorium ani nie zamyka kosztów licencji P08c. Dostarczenie scalonej głównej instalacji i świeża telemetria OSS pozostają następnym krokiem.

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { equipmentType } from "./purchase-delivery-models.js";
 import {
   DomainError,
   hasToolAccess,
@@ -28,7 +29,7 @@ export const businessTaskSchema = z
       "employment",
       "unknown",
     ]),
-    assetType: z.enum(["laptop", "phone", "monitor", "other"]).optional(),
+    assetType: equipmentType.optional(),
     readyOn: date.optional(),
     reservationUntil: date.optional(),
     selectedRefs: z

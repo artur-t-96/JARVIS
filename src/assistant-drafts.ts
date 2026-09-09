@@ -1,6 +1,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { equipmentType } from "./purchase-delivery-models.js";
 import {
   DomainError,
   planSchema,
@@ -48,7 +49,7 @@ export const needDraftSchema = z
       .max(40)
       .refine((value) => Number.isFinite(Date.parse(value)))
       .optional(),
-    assetType: z.enum(["laptop", "phone", "monitor", "other"]).optional(),
+    assetType: equipmentType.optional(),
     missingFields: z.array(z.string().min(1).max(80)).max(30),
     clarification: z
       .object({

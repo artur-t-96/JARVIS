@@ -27,6 +27,7 @@ import {
   PurchaseWorkflow,
   purchasingSidebarAction,
 } from "./Purchasing";
+import { PurchaseDeliveries } from "./PurchaseDeliveries";
 import { DocumentTemplate } from "./DocumentTemplate";
 import { DocumentReadiness, DocumentRevision } from "./DocumentReadiness";
 import { DocumentFiles } from "./DocumentFiles";
@@ -831,12 +832,20 @@ export function WorkspacePage({
                 <ItCase item={item} context={context} />
               )}
               {item.module === "purchases" && (
-                <PurchaseWorkflow
-                  key={item.id}
-                  item={item}
-                  context={context}
-                  revision={revision}
-                />
+                <>
+                  <PurchaseWorkflow
+                    key={item.id}
+                    item={item}
+                    context={context}
+                    revision={revision}
+                  />
+                  <PurchaseDeliveries
+                    key={`delivery-${item.id}`}
+                    item={item}
+                    context={context}
+                    revision={revision}
+                  />
+                </>
               )}
               {item.module === "documents" && (
                 <>
@@ -1063,6 +1072,9 @@ export function WorkspacePage({
                 onAction={showAction}
                 allowedTool={allowedTool}
                 hideTasks={item.module === "cases"}
+                canReadPurchases={context.principal.scopes?.some(
+                  (s) => s === "*" || s === "purchases",
+                )}
               />
             </>
           )

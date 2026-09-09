@@ -3550,3 +3550,11 @@ tbody tr:hover {
   white-space: normal;
   overflow-wrap: anywhere;
 }
+.delivery-receipt {
+  border-top: 1px solid var(--line, #e3e8e6);
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+}
+.delivery-receipt > .text-button {
+  margin-right: 1rem;
+}

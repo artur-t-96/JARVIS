@@ -26,6 +26,8 @@ export const optionLabels: Record<string, string> = {
   delivery: "Realizacja",
   it: "IT",
   laptop: "Laptop",
+  desktop: "Komputer stacjonarny",
+  accessory: "Akcesorium",
   phone: "Telefon",
   monitor: "Monitor",
   other: "Inne",

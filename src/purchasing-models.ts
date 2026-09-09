@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { equipmentType } from "./purchase-delivery-models.js";
 
 const short = z.string().trim().min(1).max(200);
 const text = z.string().trim().min(1).max(2000);
@@ -18,14 +19,6 @@ export const purchaseCurrency = z.enum(["PLN", "EUR", "USD"]);
 export const priceBasis = z.enum(["net", "gross"]);
 export const purchaseMinor = z.number().int().min(0).max(100_000_000_000);
 const quantity = z.number().int().positive().max(100_000);
-const equipment = z.enum([
-  "laptop",
-  "desktop",
-  "phone",
-  "monitor",
-  "accessory",
-  "other",
-]);
 export const requestFields = {
   description: text,
   quantity,
@@ -33,7 +26,7 @@ export const requestFields = {
   currency: purchaseCurrency,
   priceBasis,
   requiredBy: day,
-  assetType: equipment.optional(),
+  assetType: equipmentType.optional(),
 };
 const caseLink = {
   caseId: id.optional(),
@@ -87,6 +80,7 @@ export const purchasingActions = {
       ...base,
       ...requestFields,
       caseScopeRevision: version.optional(),
+      caseRequirementId: id.nullable().optional(),
       reason: text,
     })
     .strict(),

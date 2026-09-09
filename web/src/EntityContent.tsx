@@ -143,11 +143,13 @@ export function EntityContent({
   onAction,
   allowedTool,
   hideTasks = false,
+  canReadPurchases = false,
 }: {
   item: Entity;
   onAction: (action: string, values?: Record<string, unknown>) => void;
   allowedTool: (action: string) => boolean;
   hideTasks?: boolean;
+  canReadPurchases?: boolean;
 }) {
   const tasks = rows(item.data.tasks);
   const refs = useReferences(
@@ -175,7 +177,11 @@ export function EntityContent({
   return (
     <div className="record-content">
       {item.module === "assets" && (
-        <AssetRegister key={`register-${item.id}`} item={item} />
+        <AssetRegister
+          key={`register-${item.id}`}
+          item={item}
+          canReadPurchases={canReadPurchases}
+        />
       )}
       {item.module === "assets" && (
         <AssetCustody

@@ -13,6 +13,14 @@ import {
   type PurchasingServices,
 } from "./purchasing.js";
 import { purchasingActionNames } from "./purchasing-models.js";
+import {
+  PurchaseDeliveries,
+  migratePurchaseDeliveries,
+} from "./purchase-deliveries.js";
+import {
+  deliveryActionNames,
+  equipmentSerialKey,
+} from "./purchase-delivery-models.js";
 import { DocumentFiles, MAX_DOCUMENT_FILES } from "./document-files.js";
 import type { LocalLaboratory } from "./laboratory.js";
 import {
@@ -235,6 +243,7 @@ export class WorkspaceStore {
   private readonly taskAccessStore: TaskAccess;
   private readonly fileStore: DocumentFiles;
   private readonly documentSources: DocumentSources;
+  private readonly deliveryStore: PurchaseDeliveries;
   private laboratory?: LocalLaboratory;
   constructor(
     dbPath: string,
@@ -422,6 +431,11 @@ export class WorkspaceStore {
               WHERE module='purchases' AND json_extract(data_json,'$.kind')='order' AND json_extract(data_json,'$.procurementVersion')=1;
           `),
         },
+        {
+          version: 14,
+          name: "Attested delivery lines and equipment provenance",
+          up: migratePurchaseDeliveries,
+        },
       ],
     });
     this.fileStore = new DocumentFiles(
@@ -430,6 +444,7 @@ export class WorkspaceStore {
     );
     this.documentSources = new DocumentSources(this.db, this.fileStore);
     this.registerStore = new AssetRegister(this.db);
+    this.deliveryStore = new PurchaseDeliveries(this.db);
     this.custodyStore = new AssetCustody(this.db);
     this.accessStore = new AccessRegister(this.db);
     this.readinessStore = new CaseReadinessStore(
@@ -1460,6 +1475,8 @@ export class WorkspaceStore {
         ? ((input.data ?? {}) as JsonObject)
         : this.read(tenant, module, String(input.id)).data;
     scopes.push(...this.entityScopes(module, data, tenant));
+    if (module === "purchases" && action === "registerDeliveredAssets")
+      scopes.push("assets");
     if (module === "people" && action === "cancelStart") {
       const c = this.read(tenant, "cases", String(input.onboardingCaseId));
       scopes.push(...this.entityScopes("cases", c.data, tenant));
@@ -1777,8 +1794,10 @@ export class WorkspaceStore {
             .find((r) => r.id === data.caseRequirementId);
           if (
             !requirement ||
-            requirement.kind !== "asset_issued" ||
-            requirement.expected.assetType !== data.assetType
+            !["asset_issued", "delivery_received"].includes(requirement.kind) ||
+            (requirement.kind === "asset_issued" &&
+              requirement.expected.assetType !== undefined &&
+              requirement.expected.assetType !== data.assetType)
           )
             return "Zapotrzebowanie nie odpowiada wymaganemu wyposażeniu sprawy.";
         }
@@ -1808,6 +1827,11 @@ export class WorkspaceStore {
       this.purchasingServices(cmd),
       this.purchasingRead(principal.tenantId, id),
     );
+  }
+  purchaseDeliveries(principal: Principal, id: string) {
+    this.get(principal, "purchases", id);
+    // The evidence contains purchase facts and asset identifiers, never an asset's person/custody record.
+    return this.deliveryStore.projection(principal.tenantId, id);
   }
   private create(
     cmd: Command,
@@ -1913,9 +1937,14 @@ export class WorkspaceStore {
     if (module === "assets") {
       const dupe = this.db
         .prepare(
-          "SELECT id FROM ops_entities WHERE tenant_id=? AND module='assets' AND json_extract(data_json,'$.serial')=?",
+          "SELECT json_extract(data_json,'$.serial') AS serial FROM ops_entities WHERE tenant_id=? AND module='assets'",
         )
-        .get(cmd.ctx.tenantId, String(data.serial));
+        .all(cmd.ctx.tenantId)
+        .some(
+          (r) =>
+            equipmentSerialKey(String(r.serial)) ===
+            equipmentSerialKey(String(data.serial)),
+        );
       if (dupe)
         fail("DUPLICATE_SERIAL", "Sprzęt o tym numerze seryjnym już istnieje.");
       status = data.condition === "good" ? "available" : "maintenance";
@@ -3722,6 +3751,17 @@ export class WorkspaceStore {
       d.allocations = this.allocations(cmd.ctx.tenantId, e.id);
     }
     if (e.module === "purchases") {
+      if (deliveryActionNames.includes(action))
+        return this.deliveryStore.change(
+          {
+            ...this.purchasingServices(cmd),
+            insertAsset: (title, data) =>
+              this.create(cmd, "assets", title, data),
+          },
+          e,
+          action,
+          input as JsonObject,
+        );
       if (purchasingActionNames.includes(action))
         return changePurchase(
           this.purchasingServices(cmd),
@@ -3765,39 +3805,6 @@ export class WorkspaceStore {
             evidenceNote: String(input.evidenceNote),
             reportedBy: cmd.actor,
           };
-        }
-        if (action === "recordDelivery") {
-          this.state(e, "acknowledged", "part_received");
-          this.human(cmd, input);
-          if (
-            String(input.receivedOn) > this.companyDate(cmd) ||
-            String(input.receivedOn) <
-              String((d.acknowledgment as JsonObject).date)
-          )
-            fail(
-              "INVALID_DELIVERY_DATE",
-              "Dostawa musi nastąpić po potwierdzeniu i nie może być w przyszłości.",
-            );
-          const total =
-            Number(d.receivedQuantity) + Number(input.quantityReceived);
-          if (total > Number(d.quantity))
-            fail(
-              "DELIVERY_EXCEEDS_ORDER",
-              "Dostawa przekracza zamówioną ilość.",
-            );
-          d.receivedQuantity = total;
-          d.deliveries = [
-            ...arr(d.deliveries),
-            {
-              id: randomUUID(),
-              quantity: Number(input.quantityReceived),
-              receivedOn: String(input.receivedOn),
-              note: String(input.deliveryNote),
-              reportedBy: cmd.actor,
-            },
-          ];
-          e.status =
-            total === Number(d.quantity) ? "received" : "part_received";
         }
         if (action === "cancel") {
           this.state(e, "draft", "ordered", "acknowledged");
@@ -4541,7 +4548,35 @@ export class WorkspaceStore {
               "Brak zapisanego skutku zakupu.",
             );
           for (const change of changes) {
-            this.purchasingRead(ctx.tenantId, change.id);
+            const row = this.db
+              .prepare(
+                "SELECT module FROM ops_entities WHERE tenant_id=? AND id=?",
+              )
+              .get(ctx.tenantId, change.id);
+            if (row?.module === "assets") {
+              const asset = this.deliveryStore.read(
+                ctx.tenantId,
+                change.id,
+                "assets",
+              );
+              if (
+                !this.registerStore.verify(ctx.tenantId, asset) ||
+                !this.registerStore.verifyCommitted(ctx, asset.id)
+              )
+                fail(
+                  "PURCHASE_STATE_INCONSISTENT",
+                  "Brak spójnej historii urządzenia utworzonego z dostawy.",
+                );
+            } else {
+              const purchase = this.purchasingRead(ctx.tenantId, change.id);
+              if (purchase.data.kind === "receipt")
+                this.deliveryStore.projection(
+                  ctx.tenantId,
+                  String(purchase.data.orderId),
+                );
+              if (purchase.data.kind === "order")
+                this.deliveryStore.projection(ctx.tenantId, purchase.id);
+            }
             const saved = this.db
               .prepare(
                 "SELECT snapshot_json,snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
@@ -4641,7 +4676,7 @@ export class WorkspaceStore {
           id: toolId,
           version:
             module === "purchases"
-              ? "5"
+              ? "6"
               : cancelStart
                 ? "1"
                 : lifecycle
@@ -4659,11 +4694,11 @@ export class WorkspaceStore {
                             ].includes(action))
                         ? "8"
                         : module === "assets"
-                          ? action === "replaceReservation"
+                          ? ["create", "replaceReservation"].includes(action)
                             ? "7"
                             : "6"
                           : module === "cases" && action === "bindEvidence"
-                            ? "8"
+                            ? "9"
                             : module === "cases" && action === "create"
                               ? "6"
                               : "4",
@@ -4781,6 +4816,15 @@ export class WorkspaceStore {
                         this.options.clock?.() ?? Date.now(),
                       ).toISOString(),
                     ).hash;
+                  if (
+                    accessBinding &&
+                    input.sourceModule === "purchases" &&
+                    input.sourceProofHash === undefined
+                  )
+                    prepared.sourceProofHash = this.deliveryStore.projection(
+                      tenantId,
+                      String(input.sourceId),
+                    ).proof.hash;
                   if (module === "assets" && action === "replaceReservation") {
                     const pins = this.replacementPins(tenantId, input);
                     for (const [key, value] of Object.entries(pins))

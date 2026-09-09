@@ -1083,6 +1083,9 @@ test("purchase acknowledgment is distinct from delivery; partial receipt and sup
     await assert.rejects(
       h.action(order, "recordDelivery", {
         quantityReceived: 1,
+        quantityAccepted: 1,
+        documentNumber: "SYNTHETIC-DELIVERY-1",
+        documentLine: 1,
         receivedOn: today,
         deliveryNote: "Test",
         humanConfirmed: true,
@@ -1104,6 +1107,9 @@ test("purchase acknowledgment is distinct from delivery; partial receipt and sup
     );
     order = await h.action(order, "recordDelivery", {
       quantityReceived: 1,
+      quantityAccepted: 1,
+      documentNumber: "SYNTHETIC-DELIVERY-2",
+      documentLine: 1,
       receivedOn: today,
       deliveryNote: "Test",
       humanConfirmed: true,
@@ -1112,6 +1118,9 @@ test("purchase acknowledgment is distinct from delivery; partial receipt and sup
     await assert.rejects(
       h.action(order, "recordDelivery", {
         quantityReceived: 2,
+        quantityAccepted: 2,
+        documentNumber: "SYNTHETIC-DELIVERY-3",
+        documentLine: 1,
         receivedOn: today,
         deliveryNote: "Test",
         humanConfirmed: true,
@@ -1120,6 +1129,9 @@ test("purchase acknowledgment is distinct from delivery; partial receipt and sup
     );
     order = await h.action(order, "recordDelivery", {
       quantityReceived: 1,
+      quantityAccepted: 1,
+      documentNumber: "SYNTHETIC-DELIVERY-4",
+      documentLine: 1,
       receivedOn: today,
       deliveryNote: "Test",
       humanConfirmed: true,

@@ -9,7 +9,8 @@ export type RequirementDefinition = RequirementBase &
     | {
         kind: "asset_issued";
         expected: {
-          assetType?: "laptop" | "phone" | "monitor" | "other";
+          assetType?:
+            "laptop" | "desktop" | "phone" | "monitor" | "accessory" | "other";
           assetId?: string;
         };
       }
