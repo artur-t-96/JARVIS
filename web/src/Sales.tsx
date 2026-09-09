@@ -52,6 +52,11 @@ const units: Record<string, string> = {
 };
 /** The calculation is derived only from the exact plan arguments shown for approval. */
 export function SalesOperation({ input }: { input: Record<string, unknown> }) {
+  const previous = useResource<{ item: Entity }>(
+    typeof input.id === "string" && typeof input.expectedVersion === "number"
+      ? `/api/sales/${encodeURIComponent(input.id)}/versions/${input.expectedVersion}`
+      : null,
+  );
   const terms = offerTermsSchema.safeParse(
     input.terms ?? rec(input.data).terms,
   );
@@ -65,6 +70,26 @@ export function SalesOperation({ input }: { input: Record<string, unknown> }) {
   }
   return (
     <>
+      {previous.error && (
+        <Notice tone="error">
+          Nie można odczytać wersji objętej planem: {previous.error}
+        </Notice>
+      )}
+      {previous.loading && <Loading />}
+      {!previous.error &&
+        !previous.loading &&
+        previous.data &&
+        previous.data.item.id === input.id &&
+        previous.data.item.version === input.expectedVersion &&
+        !!previous.data.item.data.offer && (
+          <>
+            <h3>
+              Oferta objęta operacją · wersja rekordu{" "}
+              {previous.data.item.version}
+            </h3>
+            <OfferSnapshot value={previous.data.item.data.offer} />
+          </>
+        )}
       {terms.success && pricing && (
         <section className="sales-offer-snapshot">
           <h3>{String(input.title ?? "Kalkulacja oferty")}</h3>

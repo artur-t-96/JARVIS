@@ -30,6 +30,7 @@ test("sales API isolates contacts, pricing, history, owner choices and offers by
     for (const path of [
       `/api/sales/${a.offer.id}/workflow`,
       `/api/workspace/sales/${a.offer.id}`,
+      `/api/sales/${a.offer.id}/versions/1`,
     ]) {
       assert.equal((await app.inject({ url: path })).statusCode, 401);
       assert.equal(
@@ -129,6 +130,31 @@ test("sales API isolates contacts, pricing, history, owner choices and offers by
     );
     await f.salesSend(a.offer.id);
     await f.salesAccept(a.offer.id);
+    const original = await app.inject({
+      url: `/api/sales/${a.offer.id}/versions/1`,
+      headers: headers("reviewer"),
+    });
+    assert.equal(original.statusCode, 200);
+    assert.equal(original.json().item.status, "draft");
+    assert.deepEqual(original.json().item.data.offer, a.offer.data.offer);
+    assert.equal(
+      (
+        await app.inject({
+          url: `/api/sales/${a.offer.id}/versions/999`,
+          headers: headers(),
+        })
+      ).statusCode,
+      404,
+    );
+    assert.equal(
+      (
+        await app.inject({
+          url: `/api/sales/${a.offer.id}/versions/0`,
+          headers: headers(),
+        })
+      ).statusCode,
+      400,
+    );
     const accepted = prepareDocument(
       f.workspace,
       f.actor(),

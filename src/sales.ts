@@ -102,6 +102,29 @@ function event(
 /** Local sales writes share Workspace's transaction, immutable versions and effect ledger. */
 export class Sales {
   constructor(private readonly db: DatabaseSync) {}
+  version(tenant: string, id: string, version: number): Entity {
+    this.read(tenant, id);
+    const row = this.db
+      .prepare(
+        "SELECT snapshot_json,snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+      )
+      .get(tenant, id, version);
+    if (!row)
+      fail("Nie ma takiej wersji rekordu sprzedaży.", "ENTITY_NOT_FOUND", 404);
+    const snapshot = JSON.parse(String(row.snapshot_json)) as Entity;
+    if (
+      snapshot.id !== id ||
+      snapshot.module !== "sales" ||
+      snapshot.version !== version ||
+      hash(snapshot) !== row.snapshot_hash ||
+      !this.snapshotValid(snapshot)
+    )
+      fail(
+        "Wersja sprzedaży nie ma zgodnego dowodu.",
+        "SALES_STATE_INCONSISTENT",
+      );
+    return snapshot;
+  }
   read(tenant: string, id: string): Entity {
     const row = this.db
       .prepare(

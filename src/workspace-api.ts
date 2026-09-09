@@ -355,6 +355,15 @@ export function registerWorkspaceApi(
       ),
     };
   });
+  app.get("/api/sales/:id/versions/:version", async (req) => {
+    const { id, version } = z
+      .object({
+        id: z.string().uuid(),
+        version: z.coerce.number().int().positive(),
+      })
+      .parse(req.params);
+    return { item: workspace.salesVersion(principal(req), id, version) };
+  });
   app.get("/api/licenses/owners", async (req) => {
     const actor = principal(req);
     if (

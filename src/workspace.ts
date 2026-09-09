@@ -2310,6 +2310,10 @@ export class WorkspaceStore {
     this.scope(principal, "sales");
     return this.salesStore.list(principal.tenantId, page);
   }
+  salesVersion(principal: Principal, id: string, version: number) {
+    this.get(principal, "sales", id);
+    return this.salesStore.version(principal.tenantId, id, version);
+  }
   salesView(principal: Principal, id: string, limit = 30, offset = 0) {
     this.get(principal, "sales", id);
     const ctx: ToolContext = {
