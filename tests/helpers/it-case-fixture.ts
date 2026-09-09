@@ -10,6 +10,10 @@ import { LocalLaboratory } from "../../src/laboratory.js";
 import { type JsonObject, type ToolDefinition } from "../../src/contracts.js";
 import { custodyFixture, custodyNow } from "./custody-fixture.js";
 
+// Native certificate generation plus the bounded 3s HTTPS probe must fit
+// inside this fixture's lease, including on a shared hosted runner.
+export const itCaseLeaseMs = 5000;
+
 export async function itCaseFixture(
   directory: string,
   options: {
@@ -28,6 +32,7 @@ export async function itCaseFixture(
   const f = custodyFixture(directory, {
     domainClock: clock,
     clock: options.engineClock ?? clock,
+    leaseMs: itCaseLeaseMs,
     wrap: options.wrap,
     extraTools: (workspace) => {
       workspace.setLaboratory(laboratory);
@@ -57,10 +62,8 @@ export async function itCaseFixture(
     );
     f.engine.start(f.actor("manager", tenant), run.id);
     for (let i = 0; i < 3; i++) await f.engine.tick();
-    assert.equal(
-      f.engine.getRun(f.actor("manager", tenant), run.id).status,
-      "completed",
-    );
+    const observedRun = f.engine.getRun(f.actor("manager", tenant), run.id);
+    assert.equal(observedRun.status, "completed", JSON.stringify(observedRun));
     return f.workspace.laboratoryOverview(f.actor("manager", tenant), target)
       .observed!;
   };

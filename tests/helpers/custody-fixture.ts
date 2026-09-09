@@ -18,6 +18,7 @@ export function custodyFixture(
     wrap?: (tool: ToolDefinition) => ToolDefinition;
     clock?: () => number;
     domainClock?: () => number;
+    leaseMs?: number;
     extraTools?: (workspace: WorkspaceStore) => ToolDefinition[];
   } = {},
 ) {
@@ -77,7 +78,7 @@ export function custodyFixture(
     tools,
     principals,
     policies: config.policies,
-    leaseMs: 500,
+    leaseMs: options.leaseMs ?? 500,
     clock: options.clock ?? (() => custodyNow),
   });
   const actor = (id = "manager", tenantId = "synthetic-a") => {
