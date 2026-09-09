@@ -10,6 +10,7 @@ export function DocumentReadiness({ item }: { item: Entity }) {
       contract: string;
       readyForReview: boolean;
       approvalCurrent: boolean;
+      reportCurrent: boolean | null;
       blockers: string[];
       references: {
         module: string;
@@ -20,8 +21,12 @@ export function DocumentReadiness({ item }: { item: Entity }) {
         current: boolean;
       }[];
     };
-  }>(`/api/documents/${item.id}/readiness`, item.version);
-  const r = state.data?.readiness;
+  }>(
+    `/api/documents/${item.id}/readiness`,
+    item.version,
+    item.data.operationalReport ? 5000 : 0,
+  );
+  const r = state.error ? null : state.data?.readiness;
   return (
     <section className="card" aria-label="Kontrola dokumentu">
       <div className="card-heading">
@@ -55,7 +60,13 @@ export function DocumentReadiness({ item }: { item: Entity }) {
               ))}
             </ul>
           )}
-          {r.references.length > 0 ? (
+          {r.reportCurrent !== null && r.reportCurrent !== undefined ? (
+            <p className="muted">
+              {r.reportCurrent
+                ? "Sprawdzono cały zakres raportu, wersje źródeł i profil firmy."
+                : "Zapisana migawka pozostaje w historii. Odśwież raport, aby przygotować bieżący zakres do odbioru."}
+            </p>
+          ) : r.references.length > 0 ? (
             <ul>
               {r.references.map((s, i) => (
                 <li key={i}>
@@ -76,8 +87,9 @@ export function DocumentReadiness({ item }: { item: Entity }) {
             </p>
           )}
           <p className="small muted">
-            Rewizja zachowuje poprzednią treść i decyzje. Odświeżenie źródeł nie
-            zmienia automatycznie tekstu dokumentu.
+            {item.data.operationalReport
+              ? "Odświeżenie generuje treść nowej rewizji i wymaga ponownego odbioru. Poprzednia treść i decyzje pozostają w historii."
+              : "Rewizja zachowuje poprzednią treść i decyzje. Odświeżenie źródeł nie zmienia automatycznie tekstu dokumentu."}
           </p>
         </>
       )}

@@ -1,5 +1,9 @@
 import { stocktakeActions, stocktakeCreateSchema } from "./stocktake-models.js";
 import { assetImportCommandSchema } from "./asset-import-csv.js";
+import {
+  createReportSchema,
+  refreshReportSchema,
+} from "./operational-reports.js";
 import { licenseContractActions } from "./license-models.js";
 import { z } from "zod";
 import { deliveryActions, equipmentType } from "./purchase-delivery-models.js";
@@ -862,6 +866,8 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     close: z.object({ ...base, reason: text }).strict(),
   },
   documents: {
+    createReport: createReportSchema,
+    refreshReport: refreshReportSchema,
     attachFile: z
       .object({
         ...base,
@@ -1106,6 +1112,8 @@ const actionLabels: Record<string, string> = {
   endEmployment: "Potwierdź zakończenie współpracy",
   cancelStart: "Anuluj rozpoczęcie współpracy",
   revise: "Utwórz nową rewizję",
+  createReport: "Przygotuj raport operacyjny",
+  refreshReport: "Odśwież raport w nowej rewizji",
   attachFile: "Dodaj plik do nowej rewizji",
   detachFile: "Usuń plik z nowej rewizji",
   addTask: "Dodaj zadanie człowieka",

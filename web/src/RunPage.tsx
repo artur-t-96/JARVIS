@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { AssetImportOperation } from "./AssetImports";
+import { ReportOperation } from "./OperationalReports";
 import { post } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
@@ -268,6 +269,11 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                   </div>
                   {step.toolId === "ops.assets.importBatch" ? (
                     <AssetImportOperation runId={run.id} step={step} />
+                  ) : [
+                      "ops.documents.createReport",
+                      "ops.documents.refreshReport",
+                    ].includes(step.toolId) ? (
+                    <ReportOperation runId={run.id} step={step} />
                   ) : fileOperation(step.toolId) ? (
                     <FileOperation
                       input={step.input}

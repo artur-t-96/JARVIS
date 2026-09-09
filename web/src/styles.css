@@ -3628,3 +3628,52 @@ tbody tr:hover {
 .delivery-receipt > .text-button {
   margin-right: 1rem;
 }
+/* Generated reports reuse the document workflow; long provenance stays expandable. */
+.operational-report {
+  margin-top: 1.2rem;
+  min-width: 0;
+}
+.operational-report h3 {
+  margin: 0 0 0.5rem;
+}
+.report-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1.5rem;
+  padding: 0.9rem 0;
+}
+.report-row {
+  border-top: 1px solid var(--border, #dfe5ec);
+  padding: 1rem 0;
+}
+.report-row > summary {
+  cursor: pointer;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.report-row > summary .badge {
+  margin-left: 0.7rem;
+}
+.report-row .data-grid {
+  margin-top: 1rem;
+}
+.report-row code {
+  display: block;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  font-size: 0.7rem;
+}
+.report-row small {
+  display: block;
+}
+.report-warnings {
+  padding-left: 1.3rem;
+  line-height: 1.65;
+}
+.report-pagination {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.8rem;
+  margin: 1rem 0;
+}
