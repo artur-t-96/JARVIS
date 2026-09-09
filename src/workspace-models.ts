@@ -1,3 +1,4 @@
+import { licenseContractActions } from "./license-models.js";
 import { z } from "zod";
 import { deliveryActions, equipmentType } from "./purchase-delivery-models.js";
 import { documentSourceSchema } from "./document-sources.js";
@@ -790,6 +791,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     deactivate: z.object({ ...base, reason: text }).strict(),
   },
   licenses: {
+    ...licenseContractActions,
     assign: z.object({ ...base, ...resourceEpisodeInput, note: text }).strict(),
     revoke: z
       .object({ ...base, ...resourceEpisodeInput, reason: text })
@@ -1131,6 +1133,12 @@ const actionLabels: Record<string, string> = {
   returnRejectedDelivery: "Potwierdź zwrot odrzuconych sztuk",
   registerDeliveredAssets: "Zarejestruj przyjęte wyposażenie",
   deactivate: "Wyłącz dostawcę",
+  proposeTerms: "Zaproponuj warunki licencji",
+  reviseTerms: "Zmień propozycję warunków",
+  decideTerms: "Podejmij decyzję kosztową licencji",
+  confirmTerms: "Potwierdź umowę licencji",
+  cancelTerms: "Anuluj propozycję warunków",
+  assignOwner: "Przekaż odpowiedzialność za licencję",
   assign: "Zapisz przydział stanowiska",
   revoke: "Zakończ przydział stanowiska",
   resize: "Zmień liczbę stanowisk",

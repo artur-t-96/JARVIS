@@ -34,6 +34,8 @@ export const optionLabels: Record<string, string> = {
   good: "Sprawny",
   repair: "Wymaga naprawy",
   supplier: "Dostawca",
+  receipt: "Przyjęcie dostawy",
+  license_terms: "Warunki licencji",
   request: "Zapotrzebowanie",
   quote: "Oferta dostawcy",
   gross: "Brutto",

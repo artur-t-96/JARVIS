@@ -734,7 +734,7 @@ test("v3 migration pins only unambiguous lifecycle cases and preserves unresolve
       db
         .prepare("SELECT max(version) AS n FROM schema_versions_operations")
         .get()!.n,
-      14,
+      15,
     );
   } finally {
     db.close();

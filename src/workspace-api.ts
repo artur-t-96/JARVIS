@@ -55,6 +55,35 @@ export function registerWorkspaceApi(
 ) {
   const moduleParam = (req: FastifyRequest) =>
     z.object({ module: z.string().max(30) }).parse(req.params).module;
+  app.get("/api/licenses/owners", async (req) => {
+    const actor = principal(req);
+    if (
+      !["licenses", "purchases"].every(
+        (s) => actor.scopes?.includes("*") || actor.scopes?.includes(s),
+      )
+    )
+      throw new DomainError(
+        "SCOPE_REQUIRED",
+        "Wymagany dostęp do licencji i zakupów.",
+        403,
+      );
+    return {
+      owners: (principals?.(actor.tenantId) ?? [])
+        .filter(
+          (p) =>
+            p.tenantId === actor.tenantId &&
+            p.roles.includes("operator") &&
+            ["licenses", "purchases"].every(
+              (s) => p.scopes?.includes("*") || p.scopes?.includes(s),
+            ),
+        )
+        .map((p) => ({ id: p.id, label: p.id })),
+    };
+  });
+  app.get("/api/licenses/:id/contracts", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { contracts: workspace.licenseContracts(principal(req), id) };
+  });
   app.get("/api/purchases/:id/workflow", async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { purchasing: workspace.purchasing(principal(req), id) };

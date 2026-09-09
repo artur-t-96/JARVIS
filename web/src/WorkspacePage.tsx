@@ -1,3 +1,4 @@
+import { LicenseContracts, licenseSidebarAction } from "./LicenseContracts";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
@@ -717,13 +718,15 @@ export function WorkspacePage({
           fields: module.fields,
           dataForm: true,
         });
-  const items = (resource.data?.items ?? []).filter(
-    (item) =>
-      (!status || item.status === status) &&
-      `${item.title} ${Object.values(item.data).join(" ")}`
-        .toLocaleLowerCase("pl")
-        .includes(search.toLocaleLowerCase("pl")),
-  );
+  const items = (resource.data?.items ?? [])
+    .filter((item) => item.data.kind !== "license_terms")
+    .filter(
+      (item) =>
+        (!status || item.status === status) &&
+        `${item.title} ${Object.values(item.data).join(" ")}`
+          .toLocaleLowerCase("pl")
+          .includes(search.toLocaleLowerCase("pl")),
+    );
   const states = [
     ...new Set((resource.data?.items ?? []).map((item) => item.status)),
   ];
@@ -780,6 +783,7 @@ export function WorkspacePage({
                   </div>
                 </div>
                 {allowedTool("update") &&
+                  item.data.kind !== "license_terms" &&
                   (module.id !== "purchases" ||
                     item.data.kind === "supplier") &&
                   module.id !== "documents" &&
@@ -831,6 +835,14 @@ export function WorkspacePage({
               {item.module === "cases" && !!item.data.laboratoryContext && (
                 <ItCase item={item} context={context} />
               )}
+              {item.module === "licenses" && (
+                <LicenseContracts
+                  key={item.id}
+                  item={item}
+                  context={context}
+                  revision={revision}
+                />
+              )}
               {item.module === "purchases" && (
                 <>
                   <PurchaseWorkflow
@@ -871,195 +883,202 @@ export function WorkspacePage({
               {isAccessDefinition(item) && (
                 <AccessDefinitions context={context} item={item} />
               )}
-              <div className="detail-grid">
-                <section className="card">
-                  <div className="card-heading">
-                    <h2>Dane rekordu</h2>
-                    <Icon name={module.id} />
-                  </div>
-                  <dl className="data-grid">
-                    {module.fields
-                      .filter(
-                        (field) =>
-                          (item.module !== "purchases" ||
-                            ["kind", "description", "supplierEmail"].includes(
-                              field.key,
-                            )) &&
-                          (!isAccessDefinition(item) ||
-                            ["kind", "description"].includes(field.key)),
-                      )
-                      .map((field) => (
-                        <div
-                          key={field.key}
-                          className={field.type === "textarea" ? "wide" : ""}
-                        >
-                          <dt>{referenceLabel(field.key, field.label)}</dt>
-                          <dd>
-                            {referenceModule[field.key]
-                              ? refs.label(field.key, item.data[field.key])
-                              : field.type === "date"
-                                ? dateLabel(String(item.data[field.key] ?? ""))
-                                : field.type === "select"
-                                  ? optionLabel(
-                                      String(item.data[field.key] ?? "—"),
-                                    )
-                                  : displayValue(item.data[field.key])}
-                          </dd>
-                        </div>
-                      ))}
-                  </dl>
-                  <div className="record-id">
-                    <span>ID rekordu</span>
-                    <code>{item.id}</code>
-                    <button
-                      className="icon-button"
-                      title="Kopiuj identyfikator"
-                      aria-label="Kopiuj identyfikator"
-                      onClick={() => {
-                        void navigator.clipboard
-                          .writeText(item.id)
-                          .then(() =>
-                            setCopyMessage("Identyfikator skopiowany."),
-                          )
-                          .catch(() =>
-                            setCopyMessage(
-                              "Nie udało się skopiować identyfikatora.",
-                            ),
-                          );
-                      }}
-                    >
-                      <Icon name="copy" size={16} />
-                    </button>
-                  </div>
-                  {copyMessage && (
-                    <p className="small muted" role="status">
-                      {copyMessage}
-                    </p>
-                  )}
-                </section>
-                <aside>
+              {item.data.kind !== "license_terms" && (
+                <div className="detail-grid">
                   <section className="card">
                     <div className="card-heading">
-                      <h2>
-                        {cancelledCase ? "Historia sprawy" : "Kolejny krok"}
-                      </h2>
+                      <h2>Dane rekordu</h2>
+                      <Icon name={module.id} />
                     </div>
-                    <p className="muted">
-                      {cancelledCase
-                        ? "Sprawa jest anulowana. Historia pozostaje dostępna; nowa potrzeba wymaga osobnej sprawy."
-                        : "Wybierz operację. JARVIS przygotuje jej zakres do sprawdzenia."}
-                    </p>
-                    <div className="action-list">
-                      {module.actions
+                    <dl className="data-grid">
+                      {module.fields
                         .filter(
-                          (action) =>
-                            allowedTool(action.id) &&
-                            (module.id !== "purchases" ||
-                              purchasingSidebarAction(item, action.id)) &&
-                            !(
-                              module.id === "people" &&
-                              action.id === "cancelStart"
-                            ) &&
-                            !(
-                              module.id === "cases" &&
-                              item.data.caseType === "onboarding" &&
-                              ["submit", "accept"].includes(action.id)
-                            ) &&
-                            !(
-                              module.id === "documents" &&
-                              ["attachFile", "detachFile"].includes(action.id)
-                            ) &&
-                            (module.id !== "it" ||
-                              (isAccessDefinition(item)
-                                ? action.id === "retireAccessDefinition" &&
-                                  item.status === "active"
-                                : ![
-                                    "reviseApplication",
-                                    "reviseAccessBundle",
-                                    "retireAccessDefinition",
-                                  ].includes(action.id))) &&
-                            (module.id !== "assets" ||
-                              action.id === "assignCustodian" ||
-                              (action.id === "reserve" &&
-                                item.status === "available" &&
-                                item.data.condition === "good") ||
-                              ([
-                                "issue",
-                                "release",
-                                "expireReservation",
-                                "replaceReservation",
-                              ].includes(action.id) &&
-                                item.status === "reserved") ||
-                              (action.id === "return" &&
-                                item.status === "issued") ||
-                              (["move", "sendToService", "retire"].includes(
-                                action.id,
-                              ) &&
-                                ["available", "maintenance"].includes(
-                                  item.status,
-                                )) ||
-                              (action.id === "markRepaired" &&
-                                item.status === "maintenance")) &&
-                            !(
-                              module.id === "assets" &&
-                              action.id.endsWith("ForTask")
-                            ) &&
-                            !(
-                              module.id === "cases" &&
-                              [
-                                "acceptTask",
-                                "declineTask",
-                                "transferTask",
-                                "completeTask",
-                                "cancelTask",
-                                "bindEvidence",
-                                "attestAccessForTask",
-                                "renewAccessForTask",
-                                "revokeAccessForTask",
-                                "bindAccessForTask",
-                                "attestAccess",
-                                "renewAccess",
-                                "revokeAccess",
-                              ].includes(action.id)
-                            ),
+                          (field) =>
+                            (item.module !== "purchases" ||
+                              ["kind", "description", "supplierEmail"].includes(
+                                field.key,
+                              )) &&
+                            item.data.kind !== "license_terms" &&
+                            (!isAccessDefinition(item) ||
+                              ["kind", "description"].includes(field.key)),
                         )
-                        .map((action) => (
-                          <button
-                            className="action-row"
-                            key={action.id}
-                            onClick={() =>
-                              setForm({
-                                title: action.label,
-                                action: action.id,
-                                fields: actionFields(module, action),
-                                entity: item,
-                                dataForm: false,
-                              })
-                            }
+                        .map((field) => (
+                          <div
+                            key={field.key}
+                            className={field.type === "textarea" ? "wide" : ""}
                           >
-                            <span>{action.label}</span>
-                            <Icon name="arrow" size={17} />
-                          </button>
+                            <dt>{referenceLabel(field.key, field.label)}</dt>
+                            <dd>
+                              {referenceModule[field.key]
+                                ? refs.label(field.key, item.data[field.key])
+                                : field.type === "date"
+                                  ? dateLabel(
+                                      String(item.data[field.key] ?? ""),
+                                    )
+                                  : field.type === "select"
+                                    ? optionLabel(
+                                        String(item.data[field.key] ?? "—"),
+                                      )
+                                    : displayValue(item.data[field.key])}
+                            </dd>
+                          </div>
                         ))}
-                      {!module.actions.some((action) =>
-                        allowedTool(action.id),
-                      ) && (
-                        <p className="small muted">
-                          Brak dostępnych operacji dla Twojej roli.
-                        </p>
-                      )}
+                    </dl>
+                    <div className="record-id">
+                      <span>ID rekordu</span>
+                      <code>{item.id}</code>
+                      <button
+                        className="icon-button"
+                        title="Kopiuj identyfikator"
+                        aria-label="Kopiuj identyfikator"
+                        onClick={() => {
+                          void navigator.clipboard
+                            .writeText(item.id)
+                            .then(() =>
+                              setCopyMessage("Identyfikator skopiowany."),
+                            )
+                            .catch(() =>
+                              setCopyMessage(
+                                "Nie udało się skopiować identyfikatora.",
+                              ),
+                            );
+                        }}
+                      >
+                        <Icon name="copy" size={16} />
+                      </button>
                     </div>
+                    {copyMessage && (
+                      <p className="small muted" role="status">
+                        {copyMessage}
+                      </p>
+                    )}
                   </section>
-                  <RecordDownload item={item} />
-                  <div className="small muted detail-note">
-                    <Icon name="shield" size={18} />
-                    <span>
-                      Dane należą do bieżącej organizacji. Każda zmiana
-                      pozostawia ślad w historii wykonania.
-                    </span>
-                  </div>
-                </aside>
-              </div>
+                  <aside>
+                    <section className="card">
+                      <div className="card-heading">
+                        <h2>
+                          {cancelledCase ? "Historia sprawy" : "Kolejny krok"}
+                        </h2>
+                      </div>
+                      <p className="muted">
+                        {cancelledCase
+                          ? "Sprawa jest anulowana. Historia pozostaje dostępna; nowa potrzeba wymaga osobnej sprawy."
+                          : "Wybierz operację. JARVIS przygotuje jej zakres do sprawdzenia."}
+                      </p>
+                      <div className="action-list">
+                        {module.actions
+                          .filter(
+                            (action) =>
+                              allowedTool(action.id) &&
+                              (module.id !== "licenses" ||
+                                licenseSidebarAction(item, action.id)) &&
+                              (module.id !== "purchases" ||
+                                purchasingSidebarAction(item, action.id)) &&
+                              !(
+                                module.id === "people" &&
+                                action.id === "cancelStart"
+                              ) &&
+                              !(
+                                module.id === "cases" &&
+                                item.data.caseType === "onboarding" &&
+                                ["submit", "accept"].includes(action.id)
+                              ) &&
+                              !(
+                                module.id === "documents" &&
+                                ["attachFile", "detachFile"].includes(action.id)
+                              ) &&
+                              (module.id !== "it" ||
+                                (isAccessDefinition(item)
+                                  ? action.id === "retireAccessDefinition" &&
+                                    item.status === "active"
+                                  : ![
+                                      "reviseApplication",
+                                      "reviseAccessBundle",
+                                      "retireAccessDefinition",
+                                    ].includes(action.id))) &&
+                              (module.id !== "assets" ||
+                                action.id === "assignCustodian" ||
+                                (action.id === "reserve" &&
+                                  item.status === "available" &&
+                                  item.data.condition === "good") ||
+                                ([
+                                  "issue",
+                                  "release",
+                                  "expireReservation",
+                                  "replaceReservation",
+                                ].includes(action.id) &&
+                                  item.status === "reserved") ||
+                                (action.id === "return" &&
+                                  item.status === "issued") ||
+                                (["move", "sendToService", "retire"].includes(
+                                  action.id,
+                                ) &&
+                                  ["available", "maintenance"].includes(
+                                    item.status,
+                                  )) ||
+                                (action.id === "markRepaired" &&
+                                  item.status === "maintenance")) &&
+                              !(
+                                module.id === "assets" &&
+                                action.id.endsWith("ForTask")
+                              ) &&
+                              !(
+                                module.id === "cases" &&
+                                [
+                                  "acceptTask",
+                                  "declineTask",
+                                  "transferTask",
+                                  "completeTask",
+                                  "cancelTask",
+                                  "bindEvidence",
+                                  "attestAccessForTask",
+                                  "renewAccessForTask",
+                                  "revokeAccessForTask",
+                                  "bindAccessForTask",
+                                  "attestAccess",
+                                  "renewAccess",
+                                  "revokeAccess",
+                                ].includes(action.id)
+                              ),
+                          )
+                          .map((action) => (
+                            <button
+                              className="action-row"
+                              key={action.id}
+                              onClick={() =>
+                                setForm({
+                                  title: action.label,
+                                  action: action.id,
+                                  fields: actionFields(module, action),
+                                  entity: item,
+                                  dataForm: false,
+                                })
+                              }
+                            >
+                              <span>{action.label}</span>
+                              <Icon name="arrow" size={17} />
+                            </button>
+                          ))}
+                        {!module.actions.some((action) =>
+                          allowedTool(action.id),
+                        ) && (
+                          <p className="small muted">
+                            Brak dostępnych operacji dla Twojej roli.
+                          </p>
+                        )}
+                      </div>
+                    </section>
+                    <RecordDownload item={item} />
+                    <div className="small muted detail-note">
+                      <Icon name="shield" size={18} />
+                      <span>
+                        Dane należą do bieżącej organizacji. Każda zmiana
+                        pozostawia ślad w historii wykonania.
+                      </span>
+                    </div>
+                  </aside>
+                </div>
+              )}
               {item.module === "cases" && (
                 <HumanTasks
                   context={context}
