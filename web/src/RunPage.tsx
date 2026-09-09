@@ -227,7 +227,11 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
             <p className="request-text">
               {run.steps.length === 1 &&
               (fileOperation(run.steps[0]!.toolId) ||
-                run.steps[0]!.toolId === "ops.assets.importBatch")
+                [
+                  "ops.assets.importBatch",
+                  "ops.documents.createReport",
+                  "ops.documents.refreshReport",
+                ].includes(run.steps[0]!.toolId))
                 ? run.title
                 : run.request}
             </p>
