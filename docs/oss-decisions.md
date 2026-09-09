@@ -76,4 +76,6 @@ PDF osadza Noto Sans Regular/Bold na OFL-1.1. Źródłowy commit `ffebf8c1ee449e
 
 ## Warunek uznania integracji za wykonaną
 
+P05b4 używa [csv-parse 7.0.2](https://csv.js.org/parse/), MIT, do ograniczonego odczytu CSV UTF-8. Biblioteka obsługuje cytowanie, BOM, separatory i numery fizycznych wierszy; identyfikatory pozostają tekstem. Własny kod JARVIS odpowiada za jawne mapowanie, konflikty, zgodę, transakcję i dowód pochodzenia. Wersję przypina `package-lock.json`; źródła pozostają lokalne i nie trafiają do modelu. [Projekt importu](p05b4-design.md).
+
 Wersjonowane konfiguracje i panele, manifest binariów, własne procesy, realna telemetria, dowód trwałości po restarcie, próba awarii odbiornika, kontrola listenerów/eksportu i pomiar zasobów. Samo dodanie zależności npm, linku do Grafany lub zrzutu przykładowego dashboardu nie wystarcza.

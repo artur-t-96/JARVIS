@@ -1,4 +1,5 @@
 import { stocktakeActions, stocktakeCreateSchema } from "./stocktake-models.js";
+import { assetImportCommandSchema } from "./asset-import-csv.js";
 import { licenseContractActions } from "./license-models.js";
 import { z } from "zod";
 import { deliveryActions, equipmentType } from "./purchase-delivery-models.js";
@@ -678,6 +679,7 @@ export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
     cancel: z.object({ ...base, reason: text }).strict(),
   },
   assets: {
+    importBatch: assetImportCommandSchema,
     reserve: z
       .object({ ...base, ...custodyEpisodeInput, purpose: text, until: date })
       .strict(),

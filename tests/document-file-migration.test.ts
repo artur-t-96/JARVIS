@@ -46,7 +46,7 @@ test("File migration chain preserves frozen v9 records and unrelated schemas and
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      15,
+      16,
     );
     assert.throws(
       () =>

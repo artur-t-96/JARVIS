@@ -36,6 +36,7 @@
     "@opentelemetry/sdk-node": "^0.222.0",
     "@opentelemetry/sdk-trace-base": "^2.11.0",
     "@peculiar/x509": "2.1.0",
+    "csv-parse": "7.0.2",
     "docx": "9.7.1",
     "fastify": "^5.6.0",
     "jszip": "3.10.1",

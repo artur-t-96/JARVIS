@@ -7,7 +7,12 @@ import {
   type ToolDefinition,
   type JsonObject,
 } from "./contracts.js";
-import { Engine } from "./engine.js";
+import { Engine, hash } from "./engine.js";
+import {
+  assetImportPrepareSchema,
+  assetImportPreviewSchema,
+  MAX_ASSET_CSV_BYTES,
+} from "./asset-import-csv.js";
 import { WorkspaceStore } from "./workspace.js";
 import { Conversations } from "./assistant.js";
 import { InitiativeStore } from "./initiative.js";
@@ -55,6 +60,98 @@ export function registerWorkspaceApi(
 ) {
   const moduleParam = (req: FastifyRequest) =>
     z.object({ module: z.string().max(30) }).parse(req.params).module;
+  const importBodyLimit = Math.ceil(MAX_ASSET_CSV_BYTES / 3) * 4 + 16_384;
+  app.post(
+    "/api/asset-imports/preview",
+    { bodyLimit: importBodyLimit },
+    async (req) => ({
+      preview: workspace.assetImportPreview(
+        principal(req),
+        assetImportPreviewSchema.parse(req.body),
+      ),
+    }),
+  );
+  app.post(
+    "/api/asset-imports/prepare",
+    { bodyLimit: importBodyLimit },
+    async (req, reply) => {
+      const actor = principal(req),
+        body = assetImportPrepareSchema.parse(req.body);
+      const request = `Import CSV ${hash(body)}`;
+      const previous = engine.replayRun(actor, request, body.uploadId);
+      if (previous) return reply.code(201).send({ run: previous });
+      const input = workspace.prepareAssetImport(actor, body);
+      return reply.code(201).send({
+        run: engine.createRun(
+          actor,
+          request,
+          {
+            title: `Import sprzętu: ${input.sourceName}`.slice(0, 160),
+            summary: `Zapisz ${input.selectedRows.length} wybranych pozycji ze źródła „${input.filename}”, stan na ${input.observedOn}. Sprawdź zakres i pominięcia. Import tworzy lokalną ewidencję; wydanie sprzętu wymaga osobnego protokołu.`,
+            steps: [
+              {
+                id: "import",
+                title: `Dodaj ${input.selectedRows.length} urządzeń z zatwierdzonego pliku`,
+                toolId: "ops.assets.importBatch",
+                input,
+              },
+            ],
+          },
+          body.uploadId,
+        ),
+      });
+    },
+  );
+  app.get("/api/asset-imports", async (req) => {
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+      })
+      .strict()
+      .parse(req.query);
+    return workspace.assetImports(principal(req), page);
+  });
+  app.get("/api/runs/:id/asset-import/:stepId", async (req) => {
+    const { id, stepId } = z
+        .object({ id: z.string().uuid(), stepId: z.string().min(1).max(100) })
+        .parse(req.params),
+      actor = principal(req),
+      run = engine.getRun(actor, id);
+    const step = run.steps.find(
+      (s) => s.id === stepId && s.toolId === "ops.assets.importBatch",
+    );
+    if (!step)
+      throw new DomainError(
+        "ASSET_IMPORT_NOT_FOUND",
+        "To wykonanie nie zawiera wskazanego importu.",
+        404,
+      );
+    return {
+      proposal: workspace.assetImportProposal(
+        actor,
+        run.requestedBy,
+        step.input,
+      ),
+    };
+  });
+  app.get("/api/asset-imports/:id", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { report: workspace.assetImportReport(principal(req), id) };
+  });
+  app.get("/api/asset-imports/:id/source", async (req, reply) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params),
+      file = workspace.assetImportSource(principal(req), id);
+    return reply
+      .header("Content-Type", "text/csv; charset=utf-8")
+      .header(
+        "Content-Disposition",
+        `attachment; filename="asset-import-${id}.csv"; filename*=UTF-8''${encodeURIComponent(file.reference.source.filename).replace(/'/g, "%27")}`,
+      )
+      .header("Cache-Control", "no-store")
+      .header("X-Content-Type-Options", "nosniff")
+      .send(file.body);
+  });
   app.get("/api/inventory/context", async (req) => {
     const page = z
       .object({

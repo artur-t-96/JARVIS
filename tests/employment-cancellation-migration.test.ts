@@ -79,7 +79,7 @@ test("v11 preserves historical employment and access foreign keys and permits a 
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      15,
+      16,
     );
     assert.throws(
       () => db.exec("UPDATE ops_employment SET status='cancelled'"),

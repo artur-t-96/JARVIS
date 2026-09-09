@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AssetImportOperation } from "./AssetImports";
 import { post } from "./api";
 import { errorMessage, navigate, useResource } from "./hooks";
 import { dateLabel, type Context, type Run } from "./types";
@@ -263,7 +264,9 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
                       ? "Dokładny zakres operacji do zatwierdzenia"
                       : "Argumenty operacji"}
                   </div>
-                  {fileOperation(step.toolId) ? (
+                  {step.toolId === "ops.assets.importBatch" ? (
+                    <AssetImportOperation runId={run.id} step={step} />
+                  ) : fileOperation(step.toolId) ? (
                     <FileOperation
                       input={step.input}
                       attach={step.toolId === "ops.documents.attachFile"}
