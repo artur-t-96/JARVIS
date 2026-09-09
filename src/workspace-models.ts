@@ -1,3 +1,4 @@
+import { stocktakeActions, stocktakeCreateSchema } from "./stocktake-models.js";
 import { licenseContractActions } from "./license-models.js";
 import { z } from "zod";
 import { deliveryActions, equipmentType } from "./purchase-delivery-models.js";
@@ -287,6 +288,7 @@ export const createDataSchemas = {
       model: short.optional(),
     })
     .strict(),
+  inventory: stocktakeCreateSchema,
   purchases: purchaseCreateSchema,
   licenses: z
     .object({
@@ -384,6 +386,7 @@ const returnAttestation = {
   humanConfirmed: yes,
 };
 export const actionSchemas: Record<ModuleId, Record<string, z.ZodType>> = {
+  inventory: stocktakeActions,
   people: {
     startEmployment: z
       .object({
@@ -950,6 +953,11 @@ const f = (
   ...(options ? { options } : {}),
 });
 const fields: Record<ModuleId, WorkspaceField[]> = {
+  inventory: [
+    f("ownerPrincipalId", "Właściciel", "text", true),
+    f("dueDate", "Termin", "date", true),
+    f("note", "Cel spisu", "textarea", true),
+  ],
   people: [
     f("email", "E-mail", "text", false),
     f("personCategory", "Rodzaj współpracy", "select", true, [
@@ -1078,6 +1086,12 @@ const fields: Record<ModuleId, WorkspaceField[]> = {
   ],
 };
 const actionLabels: Record<string, string> = {
+  reviseStocktake: "Zmień zakres spisu",
+  recordObservation: "Zapisz obserwację sprzętu",
+  resolveDiscrepancy: "Wyjaśnij rozbieżność",
+  assignStocktakeOwner: "Przekaż odpowiedzialność za spis",
+  acceptStocktake: "Odbierz spis sprzętu",
+  cancelStocktake: "Anuluj spis",
   attestAccess: "Poświadcz dostęp",
   renewAccess: "Odnów poświadczenie dostępu",
   revokeAccess: "Poświadcz cofnięcie dostępu",
@@ -1297,6 +1311,10 @@ function actionFields(schema: z.ZodType): WorkspaceField[] {
     );
 }
 const labels: Record<ModuleId, [string, string]> = {
+  inventory: [
+    "Spisy sprzętu",
+    "Stan ewidencji, obserwacje człowieka i wyjaśnione rozbieżności.",
+  ],
   people: [
     "Ludzie i współpraca",
     "Osoby oraz rozłączne okresy zatrudnienia wewnętrznego lub kontraktorskiego.",

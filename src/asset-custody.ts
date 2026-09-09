@@ -1,3 +1,5 @@
+import { companyDay } from "./company-calendar.js";
+import { Stocktakes } from "./stocktakes.js";
 import { createHash, randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { DomainError, type JsonObject, type ToolContext } from "./contracts.js";
@@ -87,17 +89,7 @@ export function migrateAssetCustody(db: DatabaseSync) {
     CREATE INDEX ops_asset_event_history ON ops_asset_events(tenant_id,asset_id,recorded_at,id);
   `);
 }
-export function companyDay(now: string | number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(now));
-  return ["year", "month", "day"]
-    .map((kind) => parts.find((part) => part.type === kind)!.value)
-    .join("-");
-}
+export { companyDay } from "./company-calendar.js";
 export function migrateCustodyMultipleAssets(db: DatabaseSync) {
   db.exec(`CREATE TABLE ops_asset_events_v7(
     tenant_id TEXT NOT NULL,id TEXT NOT NULL,asset_id TEXT NOT NULL,allocation_id TEXT NOT NULL,
@@ -509,6 +501,7 @@ export class AssetCustody {
     profileVersion: number | null,
     pinnedExpiry?: string,
   ): CustodyEvent {
+    new Stocktakes(this.db).assertAvailable(ctx.tenantId, asset.id);
     if (asset.status !== "available")
       fail("INVALID_TRANSITION", "Urządzenie nie jest dostępne do rezerwacji.");
     const until = String(input.until),
@@ -587,6 +580,7 @@ export class AssetCustody {
       occurredOn = today,
       note: string;
     if (kind === "issue") {
+      new Stocktakes(this.db).assertAvailable(ctx.tenantId, asset.id);
       if (asset.status !== "reserved" || a.status !== "reserved")
         fail("INVALID_TRANSITION", "Wydanie wymaga bieżącej rezerwacji.");
       if (
@@ -785,6 +779,9 @@ export function readIssuedAllocationProof(
     location: data.location ?? null,
     eventHash: issue.snapshotHash,
   };
+  const holds = new Stocktakes(db).holds(tenant, a.assetId);
+  // Preserve old proof hashes when no new unresolved observation exists.
+  if (holds.length) identity.inventoryBlocked = true;
   return {
     title: String(asset.title),
     version: Number(asset.version),

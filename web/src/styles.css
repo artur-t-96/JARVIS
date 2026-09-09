@@ -1159,6 +1159,33 @@ tbody tr:hover {
   min-height: 0;
   flex-direction: column;
 }
+.stocktake-form .sheet-body > * + * {
+  margin-top: 20px;
+}
+.stocktake-lines {
+  display: grid;
+  gap: 20px;
+  margin-top: 24px;
+}
+.stocktake-comparison {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 22px;
+  margin: 18px 0;
+}
+.stocktake-comparison p,
+.stocktake-history-entry p {
+  overflow-wrap: anywhere;
+}
+.stocktake-history-entry {
+  border-bottom: 1px solid var(--line);
+  padding: 18px 0;
+}
+@media (max-width: 760px) {
+  .stocktake-comparison {
+    grid-template-columns: 1fr;
+  }
+}
 .sheet-body {
   overflow-y: auto;
   flex: 1;

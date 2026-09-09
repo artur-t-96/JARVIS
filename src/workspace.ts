@@ -1,4 +1,9 @@
 import {
+  Stocktakes,
+  stocktakeAuthority,
+  type StocktakeServices,
+} from "./stocktakes.js";
+import {
   LicenseContracts,
   licenseAuthority,
   migrateLicenseContracts,
@@ -214,6 +219,7 @@ const arr = (value: Json | undefined): JsonObject[] =>
 const asJson = (value: unknown): JsonObject =>
   JSON.parse(JSON.stringify(value)) as JsonObject;
 const editableSchemas: Record<ModuleId, z.ZodType> = {
+  inventory: z.object({}).strict(),
   people: createDataSchemas.people
     .pick({ email: true, department: true, jobTitle: true })
     .partial(),
@@ -252,6 +258,7 @@ export class WorkspaceStore {
   private readonly documentSources: DocumentSources;
   private readonly deliveryStore: PurchaseDeliveries;
   private readonly licenseStore: LicenseContracts;
+  private readonly stocktakeStore: Stocktakes;
   private laboratory?: LocalLaboratory;
   constructor(
     dbPath: string,
@@ -459,6 +466,7 @@ export class WorkspaceStore {
     this.registerStore = new AssetRegister(this.db);
     this.deliveryStore = new PurchaseDeliveries(this.db);
     this.licenseStore = new LicenseContracts(this.db);
+    this.stocktakeStore = new Stocktakes(this.db);
     this.custodyStore = new AssetCustody(this.db);
     this.accessStore = new AccessRegister(this.db);
     this.readinessStore = new CaseReadinessStore(
@@ -1165,6 +1173,7 @@ export class WorkspaceStore {
     };
   }
   private scope(principal: Principal, module: string) {
+    if (module === "inventory") this.scope(principal, "assets");
     if (
       !principal.id ||
       !principal.tenantId ||
@@ -1237,6 +1246,8 @@ export class WorkspaceStore {
     return this.projectEntity(principal.tenantId, entity);
   }
   private projectEntity(tenant: string, entity: Entity): Entity {
+    if (entity.module === "inventory")
+      return this.stocktakeStore.read(tenant, entity.id);
     // Project migrated rows without rewriting historical entity snapshots.
     if (entity.module === "cases")
       this.caseState({ ctx: { tenantId: tenant } }, entity);
@@ -1363,13 +1374,17 @@ export class WorkspaceStore {
       );
     if (entity.module === "licenses")
       return this.licenseStore.consistent(tenant, entity);
+    if (entity.module === "inventory")
+      return this.stocktakeStore.verifySnapshot(tenant, entity);
     return true;
   }
   summary(principal: Principal) {
     const modules = this.catalog()
       .filter(
         (m) =>
-          principal.scopes?.includes("*") || principal.scopes?.includes(m.id),
+          principal.scopes?.includes("*") ||
+          (principal.scopes?.includes(m.id) &&
+            (m.id !== "inventory" || principal.scopes?.includes("assets"))),
       )
       .map((m) => {
         this.scope(principal, m.id as ModuleId);
@@ -1411,6 +1426,7 @@ export class WorkspaceStore {
     if (depth > 25)
       fail("REFERENCE_DEPTH", "Zbyt głębokie powiązania źródłowe.");
     const scopes: string[] = [];
+    if (module === "inventory") scopes.push("assets");
     if (module === "licenses" && data.kind === "license_terms")
       scopes.push("purchases");
     if (module === "purchases" && tenant) {
@@ -1896,12 +1912,130 @@ export class WorkspaceStore {
       id,
     );
   }
+  private stocktakeServices(cmd: Command): StocktakeServices {
+    return {
+      ctx: cmd.ctx,
+      now: cmd.now,
+      timezone: cmd.profile?.timezone ?? "UTC",
+      profileVersion: cmd.profile?.version ?? 0,
+      principal: (id) => this.livePrincipal(cmd.ctx.tenantId, id),
+      asset: (id) => {
+        const e = this.read(cmd.ctx.tenantId, "assets", id);
+        const v = this.db
+          .prepare(
+            "SELECT snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? AND version=?",
+          )
+          .get(cmd.ctx.tenantId, e.id, e.version);
+        if (
+          !v ||
+          v.snapshot_hash !== digest(e) ||
+          !this.relationalStateMatches(cmd.ctx.tenantId, e)
+        )
+          fail(
+            "ASSET_STATE_INCONSISTENT",
+            "Ewidencja urządzenia nie odpowiada zapisanej historii.",
+          );
+        return e;
+      },
+      save: (e) => this.save(cmd, e),
+      insert: (title, data, status) =>
+        this.saveNew(cmd, this.insert(cmd, "inventory", title, data, status)),
+    };
+  }
+  private stocktakeReadServices(principal: Principal) {
+    this.scope(principal, "inventory");
+    this.scope(principal, "assets");
+    return this.stocktakeServices({
+      ctx: {
+        tenantId: principal.tenantId,
+        actorId: principal.id,
+        runId: "read-only",
+        stepId: "read-only",
+        operationKey: "read-only",
+        signal: new AbortController().signal,
+      },
+      actor: principal.id,
+      now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+      toolId: "read-only",
+      changes: [],
+      profile: this.currentProfile(principal.tenantId),
+    });
+  }
+  stocktakeContext(
+    principal: Principal,
+    page = { limit: 50, offset: 0, search: "" },
+  ) {
+    const s = this.stocktakeReadServices(principal);
+    const query = `%${page.search.replace(/[\\%_]/g, "\\$&")}%`;
+    const where =
+      "tenant_id=? AND module='assets' AND status!='retired' AND (title LIKE ? ESCAPE '\\' OR json_extract(data_json,'$.serial') LIKE ? ESCAPE '\\')";
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM ops_entities WHERE ${where} ORDER BY title,id LIMIT ? OFFSET ?`,
+      )
+      .all(principal.tenantId, query, query, page.limit, page.offset);
+    return {
+      profileVersion: s.profileVersion,
+      timezone: s.timezone,
+      today: companyDay(s.now, s.timezone),
+      assets: rows
+        .map((row) => this.fromRow(row))
+        .map((e) => ({
+          id: e.id,
+          version: e.version,
+          title: e.title,
+          serial: e.data.serial,
+          location: e.data.location,
+          condition: e.data.condition,
+          status: e.status,
+        })),
+      occupancy: this.stocktakeStore.occupancy(principal.tenantId),
+      total: Number(
+        this.db
+          .prepare(`SELECT count(*) n FROM ops_entities WHERE ${where}`)
+          .get(principal.tenantId, query, query)!.n,
+      ),
+      limit: page.limit,
+      offset: page.offset,
+    };
+  }
+  stocktakeList(
+    principal: Principal,
+    page: { limit: number; offset: number; status?: string },
+  ) {
+    this.stocktakeReadServices(principal);
+    return this.stocktakeStore.list(principal.tenantId, page);
+  }
+  stocktakeReport(principal: Principal, id: string) {
+    const s = this.stocktakeReadServices(principal),
+      e = this.stocktakeStore.read(principal.tenantId, id);
+    return { record: e, ...this.stocktakeStore.report(s, e) };
+  }
+  stocktakeHistory(
+    principal: Principal,
+    id: string,
+    limit: number,
+    offset: number,
+  ) {
+    this.stocktakeReadServices(principal);
+    return this.stocktakeStore.history(principal.tenantId, id, limit, offset);
+  }
+  assetInventoryHolds(principal: Principal, id: string) {
+    this.get(principal, "assets", id);
+    return this.stocktakeStore.holds(principal.tenantId, id);
+  }
   private create(
     cmd: Command,
     module: ModuleId,
     title: string,
     data: JsonObject,
   ): Entity {
+    if (module === "inventory")
+      return this.stocktakeStore.create(
+        this.stocktakeServices(cmd),
+        title,
+        data,
+      );
     if (module === "purchases")
       return createPurchase(this.purchasingServices(cmd), title, data);
     let status = "draft";
@@ -3110,6 +3244,13 @@ export class WorkspaceStore {
     action: string,
     input: CommandInput,
   ): Entity {
+    if (e.module === "inventory")
+      return this.stocktakeStore.change(
+        this.stocktakeServices(cmd),
+        e,
+        action,
+        asJson(input),
+      );
     const d = e.data;
     if (e.module === "people") {
       this.human(cmd, input);
@@ -4769,24 +4910,52 @@ export class WorkspaceStore {
               "Brak zapisanego wyniku dokumentu.",
             );
         };
-        const requiredScopes = cancelStart
-          ? cancellationScopes
-          : taskCustody || taskAccess
-            ? ["it"]
-            : module === "people" && action !== "create" && action !== "update"
-              ? ["cases"]
-              : module === "recruitment" && action === "hire"
-                ? ["people", "cases"]
-                : module === "sales" && action === "handoff"
+        const requireStocktakeAuthority = (ctx: ToolContext) => {
+          if (module !== "inventory") return;
+          stocktakeAuthority(
+            this.stocktakeServices({
+              ctx,
+              actor: ctx.actorId ?? "",
+              now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+              toolId,
+              changes: [],
+              profile: this.currentProfile(ctx.tenantId),
+            }),
+          );
+        };
+        const requireStocktakeReceipt = (
+          ctx: ToolContext,
+          row: Row | undefined,
+        ) => {
+          if (module === "inventory" && row)
+            this.stocktakeStore.requireCommitted(
+              ctx.tenantId,
+              JSON.parse(String(row.changes_json)),
+            );
+        };
+        const requiredScopes =
+          module === "inventory"
+            ? ["assets"]
+            : cancelStart
+              ? cancellationScopes
+              : taskCustody || taskAccess
+                ? ["it"]
+                : module === "people" &&
+                    action !== "create" &&
+                    action !== "update"
                   ? ["cases"]
-                  : (module === "assets" &&
-                        ["reserve", "issue", "replaceReservation"].includes(
-                          action,
-                        )) ||
-                      (module === "licenses" &&
-                        ["assign", "revoke"].includes(action))
-                    ? ["people"]
-                    : [];
+                  : module === "recruitment" && action === "hire"
+                    ? ["people", "cases"]
+                    : module === "sales" && action === "handoff"
+                      ? ["cases"]
+                      : (module === "assets" &&
+                            ["reserve", "issue", "replaceReservation"].includes(
+                              action,
+                            )) ||
+                          (module === "licenses" &&
+                            ["assign", "revoke"].includes(action))
+                        ? ["people"]
+                        : [];
         const definition = catalog.find((m) => m.id === module)!;
         const actionLabel =
           action === "create"
@@ -4798,35 +4967,49 @@ export class WorkspaceStore {
         return {
           id: toolId,
           version:
-            module === "purchases"
-              ? "6"
-              : module === "licenses"
-                ? "5"
-                : cancelStart
-                  ? "1"
-                  : lifecycle
+            module === "inventory"
+              ? "1"
+              : module === "assets" &&
+                  [
+                    "reserve",
+                    "replaceReservation",
+                    "issue",
+                    "issueForTask",
+                    "bindAssetForTask",
+                  ].includes(action)
+                ? "8"
+                : module === "purchases"
+                  ? "6"
+                  : module === "licenses"
                     ? "5"
-                    : module === "documents"
-                      ? "10"
-                      : taskAccess
-                        ? "1"
-                        : accessMutation ||
-                            (module === "it" &&
-                              [
-                                "reviseAccessBundle",
-                                "reviseApplication",
-                                "retireAccessDefinition",
-                              ].includes(action))
-                          ? "8"
-                          : module === "assets"
-                            ? ["create", "replaceReservation"].includes(action)
-                              ? "7"
-                              : "6"
-                            : module === "cases" && action === "bindEvidence"
-                              ? "9"
-                              : module === "cases" && action === "create"
-                                ? "6"
-                                : "4",
+                    : cancelStart
+                      ? "1"
+                      : lifecycle
+                        ? "5"
+                        : module === "documents"
+                          ? "10"
+                          : taskAccess
+                            ? "1"
+                            : accessMutation ||
+                                (module === "it" &&
+                                  [
+                                    "reviseAccessBundle",
+                                    "reviseApplication",
+                                    "retireAccessDefinition",
+                                  ].includes(action))
+                              ? "8"
+                              : module === "assets"
+                                ? ["create", "replaceReservation"].includes(
+                                    action,
+                                  )
+                                  ? "7"
+                                  : "6"
+                                : module === "cases" &&
+                                    action === "bindEvidence"
+                                  ? "10"
+                                  : module === "cases" && action === "create"
+                                    ? "6"
+                                    : "4",
           ...(taskAccess
             ? {
                 canAccess: (
@@ -4985,12 +5168,14 @@ export class WorkspaceStore {
             requireDocumentAuthority(ctx, input);
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
+            requireStocktakeAuthority(ctx);
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
             try {
               const existing = this.ledger(ctx, toolId, input);
               requirePurchaseReceipt(ctx, existing);
               requireLicenseReceipt(ctx, existing);
+              requireStocktakeReceipt(ctx, existing);
               requireCommittedDocument(ctx, existing);
               // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
@@ -5126,6 +5311,11 @@ export class WorkspaceStore {
                     fail(
                       "REVISION_REQUIRED",
                       "Zmień zakres przez właściwą rewizję lub operację domenową.",
+                    );
+                  if (module === "inventory")
+                    fail(
+                      "REVISION_REQUIRED",
+                      "Spis zmieniają wyłącznie właściwe operacje domenowe.",
                     );
                   if (module === "licenses" && e.data.kind === "license_terms")
                     fail(
@@ -5356,8 +5546,10 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
+            requireStocktakeAuthority(ctx);
             requirePurchaseReceipt(ctx, row);
             requireLicenseReceipt(ctx, row);
+            requireStocktakeReceipt(ctx, row);
             if (cancelStart) {
               this.cancelStartAuthority(ctx, asJson(parsed.data));
               if (row && !this.cancellationCommitted(ctx, asJson(parsed.data)))
@@ -5395,8 +5587,10 @@ export class WorkspaceStore {
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             requirePurchaseAuthority(ctx, asJson(parsed.data));
             requireLicenseAuthority(ctx, asJson(parsed.data));
+            requireStocktakeAuthority(ctx);
             requirePurchaseReceipt(ctx, row);
             requireLicenseReceipt(ctx, row);
+            requireStocktakeReceipt(ctx, row);
             if (cancelStart)
               this.cancelStartAuthority(ctx, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));

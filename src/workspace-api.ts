@@ -55,6 +55,68 @@ export function registerWorkspaceApi(
 ) {
   const moduleParam = (req: FastifyRequest) =>
     z.object({ module: z.string().max(30) }).parse(req.params).module;
+  app.get("/api/inventory/context", async (req) => {
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(200).default(50),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+        search: z.string().max(160).default(""),
+      })
+      .strict()
+      .parse(req.query);
+    const actor = principal(req),
+      context = workspace.stocktakeContext(actor, page);
+    return {
+      ...context,
+      owners: (principals?.(actor.tenantId) ?? [])
+        .filter(
+          (p) =>
+            p.tenantId === actor.tenantId &&
+            p.roles.includes("operator") &&
+            ["inventory", "assets"].every(
+              (s) => p.scopes?.includes("*") || p.scopes?.includes(s),
+            ),
+        )
+        .map((p) => ({ id: p.id, label: p.id })),
+    };
+  });
+  app.get("/api/inventory", async (req) => {
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(30),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+        status: z.enum(["open", "accepted", "cancelled"]).optional(),
+      })
+      .strict()
+      .parse(req.query);
+    return workspace.stocktakeList(principal(req), page);
+  });
+  app.get("/api/inventory/:id/report", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { report: workspace.stocktakeReport(principal(req), id) };
+  });
+  app.get("/api/inventory/:id/history", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(50).default(10),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+      })
+      .strict()
+      .parse(req.query);
+    return {
+      history: workspace.stocktakeHistory(
+        principal(req),
+        id,
+        page.limit,
+        page.offset,
+      ),
+    };
+  });
+  app.get("/api/assets/:id/inventory", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    return { holds: workspace.assetInventoryHolds(principal(req), id) };
+  });
   app.get("/api/licenses/owners", async (req) => {
     const actor = principal(req);
     if (
@@ -293,7 +355,10 @@ export function registerWorkspaceApi(
       catalog: workspace
         .catalog()
         .filter(
-          (m) => actor.scopes?.includes("*") || actor.scopes?.includes(m.id),
+          (m) =>
+            actor.scopes?.includes("*") ||
+            (actor.scopes?.includes(m.id) &&
+              (m.id !== "inventory" || actor.scopes?.includes("assets"))),
         ),
       summary: workspace.summary(actor),
     };

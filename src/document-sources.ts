@@ -9,6 +9,7 @@ const modules = [
   "people",
   "cases",
   "assets",
+  "inventory",
   "purchases",
   "licenses",
   "sales",

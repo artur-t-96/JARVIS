@@ -1,3 +1,4 @@
+import { AssetInventoryNotice } from "./Stocktakes";
 import { useState } from "react";
 import { download } from "./api";
 import { errorMessage, navigate } from "./hooks";
@@ -176,6 +177,7 @@ export function EntityContent({
   ].filter((key) => typeof item.data[key] === "string");
   return (
     <div className="record-content">
+      {item.module === "assets" && <AssetInventoryNotice id={item.id} />}
       {item.module === "assets" && (
         <AssetRegister
           key={`register-${item.id}`}

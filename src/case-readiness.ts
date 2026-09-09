@@ -660,6 +660,7 @@ export class CaseReadinessStore {
         !value.issueEventId ||
         !value.performedBy ||
         value.currentCondition !== "good" ||
+        value.inventoryBlocked === true ||
         value.caseId !== e.id ||
         (requirement.personId && value.personId !== requirement.personId) ||
         (requirement.employmentEpisodeId &&
@@ -920,7 +921,8 @@ export class CaseReadinessStore {
             !value.issuedOn ||
             !value.issueEventId ||
             !value.performedBy ||
-            value.currentCondition !== "good"
+            value.currentCondition !== "good" ||
+            value.inventoryBlocked === true
           )
             return {
               ...result,

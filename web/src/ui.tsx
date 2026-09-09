@@ -25,6 +25,12 @@ const paths: Record<string, ReactNode> = {
       <path d="M8 21h8m-4-5v5" />
     </>
   ),
+  inventory: (
+    <>
+      <rect x="5" y="4" width="14" height="17" rx="2" />
+      <path d="M9 4V2h6v2M8 10l2 2 5-5M8 16h8" />
+    </>
+  ),
   people: (
     <>
       <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75" />
