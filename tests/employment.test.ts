@@ -21,7 +21,7 @@ import {
   type EmploymentEpisode,
 } from "../src/workspace.js";
 import { InitiativeStore } from "../src/initiative.js";
-import { Engine } from "../src/engine.js";
+import { Engine, hash } from "../src/engine.js";
 import {
   defaultEmploymentPolicy,
   type EmploymentPolicy,
@@ -760,6 +760,31 @@ test("legacy NULL resource ownership blocks parallel start and closing, never ma
     db.prepare(
       "INSERT INTO ops_license_seats(tenant_id,id,license_id,person_id,status,assigned_at,revoked_at,employment_episode_id,case_id) VALUES(?,?,?,?,'assigned',?,NULL,NULL,NULL)",
     ).run(principal.tenantId, randomUUID(), license.id, person.id, now);
+    // This fixture represents a consistent historical record with unknown episode ownership,
+    // not a seat inserted behind the domain snapshot. Keep both historical representations.
+    const historical = {
+      ...license,
+      data: {
+        ...license.data,
+        assignments: db
+          .prepare(
+            "SELECT id,person_id AS personId,employment_episode_id AS employmentEpisodeId,case_id AS caseId,status,assigned_at AS assignedAt,revoked_at AS revokedAt FROM ops_license_seats WHERE tenant_id=? AND license_id=? ORDER BY rowid",
+          )
+          .all(principal.tenantId, license.id),
+      },
+    };
+    db.prepare(
+      "UPDATE ops_entities SET data_json=? WHERE tenant_id=? AND id=?",
+    ).run(JSON.stringify(historical.data), principal.tenantId, license.id);
+    db.prepare(
+      "UPDATE ops_entity_versions SET snapshot_json=?,snapshot_hash=? WHERE tenant_id=? AND entity_id=? AND version=?",
+    ).run(
+      JSON.stringify(historical),
+      hash(historical),
+      principal.tenantId,
+      license.id,
+      license.version,
+    );
     await assert.rejects(
       h.start(person, await h.project("New project")),
       code("LEGACY_EMPLOYMENT_UNRESOLVED"),

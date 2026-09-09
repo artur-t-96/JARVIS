@@ -1315,7 +1315,7 @@ const labels: Record<ModuleId, [string, string]> = {
   ],
   licenses: [
     "Licencje",
-    "Lokalna ewidencja stanowisk i przydziałów. Nie nadaje kont u dostawcy.",
+    "Umowy, koszty, miejsca i przydziały. Odnowienie wymaga decyzji i potwierdzenia.",
   ],
   sales: [
     "Sprzedaż",

@@ -36,9 +36,7 @@ const labels: Record<Action, string> = {
 };
 export function licenseSidebarAction(item: Entity, action: string) {
   if (item.data.kind === "license_terms" || action in labels) return false;
-  return (
-    !["renew", "resize"].includes(action) || !item.data.contractWorkflowVersion
-  );
+  return !["renew", "resize"].includes(action);
 }
 export function licenseMinor(input: string) {
   if (!/^\d{1,10}(?:[.,]\d{1,2})?$/.test(input.trim()))
@@ -234,121 +232,131 @@ export function LicenseForm({
   };
   return (
     <Sheet title={labels[action]} onClose={onClose}>
-      <form onSubmit={(e) => void submit(e)}>
-        <p>
-          Licencja: <strong>{view.pool.title}</strong>. Przydzielono{" "}
-          {view.usedSeats} z {String(view.pool.data.totalSeats)} miejsc.
-        </p>
-        {editing && (
-          <Notice>
-            Kwota obejmuje cały podany okres i wszystkie miejsca. Propozycja
-            zachowa bieżące uprawnienie do czasu osobnej decyzji i potwierdzenia
-            umowy.
-          </Notice>
-        )}
-        {term && !editing && <LicenseTerms record={term} />}
-        <div className="form-grid">
+      <form className="command-form" onSubmit={(e) => void submit(e)}>
+        <div className="sheet-body">
+          <p>
+            Licencja: <strong>{view.pool.title}</strong>. Przydzielono{" "}
+            {view.usedSeats} z {String(view.pool.data.totalSeats)} miejsc.
+          </p>
           {editing && (
-            <>
-              {field(
-                "supplierId",
-                "Dostawca",
-                "select",
-                (suppliers.data?.items ?? [])
-                  .filter(
-                    (e) => e.data.kind === "supplier" && e.status === "active",
-                  )
-                  .map((e) => ({ id: e.id, label: e.title })),
-              )}
-              {field("agreementReference", "Numer umowy / warunków")}
-              {field(
+            <Notice>
+              Kwota obejmuje cały podany okres i wszystkie miejsca. Propozycja
+              zachowa bieżące uprawnienie do czasu osobnej decyzji i
+              potwierdzenia umowy.
+            </Notice>
+          )}
+          {term && !editing && <LicenseTerms record={term} />}
+          <div className="form-grid">
+            {editing && (
+              <>
+                {field(
+                  "supplierId",
+                  "Dostawca",
+                  "select",
+                  (suppliers.data?.items ?? [])
+                    .filter(
+                      (e) =>
+                        e.data.kind === "supplier" && e.status === "active",
+                    )
+                    .map((e) => ({ id: e.id, label: e.title })),
+                )}
+                {field("agreementReference", "Numer umowy / warunków")}
+                {field(
+                  "ownerPrincipalId",
+                  "Właściciel decyzji i odnowienia",
+                  "select",
+                  owners.data?.owners ?? [],
+                )}
+                {field("validFrom", "Początek okresu", "date")}
+                {field("expiresOn", "Koniec okresu", "date")}
+                {field("totalSeats", "Uzgodniona liczba miejsc", "number")}
+                {field("amount", "Koszt całego okresu")}
+                {field(
+                  "currency",
+                  "Waluta",
+                  "select",
+                  ["PLN", "EUR", "USD"].map((s) => ({ id: s, label: s })),
+                )}
+                {field("priceBasis", "Podstawa ceny", "select", [
+                  { id: "gross", label: "Brutto" },
+                  { id: "net", label: "Netto" },
+                ])}
+                {field(
+                  "renewalLeadDays",
+                  "Przypomnienie przed końcem — dni",
+                  "number",
+                )}
+                {field("description", "Zakres i podstawa warunków", "textarea")}
+              </>
+            )}
+            {action === "assignOwner" &&
+              field(
                 "ownerPrincipalId",
-                "Właściciel decyzji i odnowienia",
+                "Nowy właściciel",
                 "select",
                 owners.data?.owners ?? [],
               )}
-              {field("validFrom", "Początek okresu", "date")}
-              {field("expiresOn", "Koniec okresu", "date")}
-              {field("totalSeats", "Uzgodniona liczba miejsc", "number")}
-              {field("amount", "Koszt całego okresu")}
-              {field(
-                "currency",
-                "Waluta",
-                "select",
-                ["PLN", "EUR", "USD"].map((s) => ({ id: s, label: s })),
-              )}
-              {field("priceBasis", "Podstawa ceny", "select", [
-                { id: "gross", label: "Brutto" },
-                { id: "net", label: "Netto" },
-              ])}
-              {field(
-                "renewalLeadDays",
-                "Przypomnienie przed końcem — dni",
-                "number",
-              )}
-              {field("description", "Zakres i podstawa warunków", "textarea")}
-            </>
-          )}
-          {action === "assignOwner" &&
-            field(
-              "ownerPrincipalId",
-              "Nowy właściciel",
-              "select",
-              owners.data?.owners ?? [],
+            {["reviseTerms", "cancelTerms", "assignOwner"].includes(action) &&
+              field("reason", "Uzasadnienie", "textarea")}
+            {action === "decideTerms" && (
+              <>
+                {field("decision", "Decyzja", "select", [
+                  { id: "approved", label: "Zatwierdzam koszt i zakres" },
+                  { id: "rejected", label: "Odrzucam warunki" },
+                ])}
+                {field("note", "Uzasadnienie decyzji", "textarea")}
+              </>
             )}
-          {["reviseTerms", "cancelTerms", "assignOwner"].includes(action) &&
-            field("reason", "Uzasadnienie", "textarea")}
-          {action === "decideTerms" && (
-            <>
-              {field("decision", "Decyzja", "select", [
-                { id: "approved", label: "Zatwierdzam koszt i zakres" },
-                { id: "rejected", label: "Odrzucam warunki" },
-              ])}
-              {field("note", "Uzasadnienie decyzji", "textarea")}
-            </>
+            {action === "confirmTerms" && (
+              <>
+                {field(
+                  "confirmationReference",
+                  "Dokument potwierdzający umowę",
+                )}
+                {field("confirmationLine", "Pozycja dokumentu", "number")}
+                {field("confirmedOn", "Data potwierdzenia", "date")}
+                {field(
+                  "evidenceNote",
+                  "Co sprawdzono w dokumencie",
+                  "textarea",
+                )}
+              </>
+            )}
+          </div>
+          {["decideTerms", "confirmTerms"].includes(action) && (
+            <label className="check-field">
+              <input
+                type="checkbox"
+                required
+                checked={confirmed}
+                onChange={(e) => setConfirmed(e.target.checked)}
+              />
+              <span>
+                {action === "decideTerms"
+                  ? "Podejmuję tę decyzję jako wskazany właściciel."
+                  : "Sprawdziłem dokument i potwierdzam obowiązywanie dokładnie tych warunków."}
+              </span>
+            </label>
+          )}
+          {action === "assignOwner" && (
+            <Notice>
+              Zmiana właściciela unieważni decyzję otwartej propozycji. Autorzy
+              wcześniejszych umów pozostaną w historii.
+            </Notice>
           )}
           {action === "confirmTerms" && (
-            <>
-              {field("confirmationReference", "Dokument potwierdzający umowę")}
-              {field("confirmationLine", "Pozycja dokumentu", "number")}
-              {field("confirmedOn", "Data potwierdzenia", "date")}
-              {field("evidenceNote", "Co sprawdzono w dokumencie", "textarea")}
-            </>
+            <Notice>
+              Ta operacja zapisze lokalne uprawnienie. Nie wykonuje płatności,
+              zakupu ani utworzenia kont w usłudze.
+            </Notice>
+          )}
+          {(error || suppliers.error || owners.error) && (
+            <Notice tone="error">
+              {error || suppliers.error || owners.error}
+            </Notice>
           )}
         </div>
-        {["decideTerms", "confirmTerms"].includes(action) && (
-          <label className="checkbox-field">
-            <input
-              type="checkbox"
-              required
-              checked={confirmed}
-              onChange={(e) => setConfirmed(e.target.checked)}
-            />
-            <span>
-              {action === "decideTerms"
-                ? "Podejmuję tę decyzję jako wskazany właściciel."
-                : "Sprawdziłem dokument i potwierdzam obowiązywanie dokładnie tych warunków."}
-            </span>
-          </label>
-        )}
-        {action === "assignOwner" && (
-          <Notice>
-            Zmiana właściciela unieważni decyzję otwartej propozycji. Autorzy
-            wcześniejszych umów pozostaną w historii.
-          </Notice>
-        )}
-        {action === "confirmTerms" && (
-          <Notice>
-            Ta operacja zapisze lokalne uprawnienie. Nie wykonuje płatności,
-            zakupu ani utworzenia kont w usłudze.
-          </Notice>
-        )}
-        {(error || suppliers.error || owners.error) && (
-          <Notice tone="error">
-            {error || suppliers.error || owners.error}
-          </Notice>
-        )}
-        <div className="form-actions">
+        <div className="sheet-footer">
           <button type="button" className="button secondary" onClick={onClose}>
             Anuluj
           </button>
