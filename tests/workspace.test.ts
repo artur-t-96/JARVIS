@@ -190,11 +190,12 @@ function helper(store: WorkspaceStore, tenantId = "tenant-a") {
   return { tools, invoke, create, action, person, acceptCase };
 }
 
-test("catalog exposes nine typed workflows with strict inputs and rejects spoofed identity", async () => {
+test("catalog exposes typed competency workflows and stocktakes, with strict inputs and no spoofed identity", async () => {
   const store = new WorkspaceStore(":memory:");
   try {
     const h = helper(store);
-    assert.equal(store.catalog().length, 9);
+    assert.equal(store.catalog().length, 10);
+    assert.ok(store.catalog().some((m) => m.id === "inventory"));
     assert.ok(
       store.catalog().every((m) => m.fields.length && m.actions.length),
     );

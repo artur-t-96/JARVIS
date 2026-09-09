@@ -1,3 +1,4 @@
+import { StocktakePage } from "./Stocktakes";
 import { LicenseContracts, licenseSidebarAction } from "./LicenseContracts";
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { post, requestKey } from "./api";
@@ -672,7 +673,19 @@ function CommandForm({
   );
 }
 
-export function WorkspacePage({
+export function WorkspacePage(props: {
+  module: ModuleDefinition;
+  entityId?: string;
+  context: Context;
+  revision: number;
+}) {
+  return props.module.id === "inventory" ? (
+    <StocktakePage {...props} />
+  ) : (
+    <StandardWorkspacePage {...props} />
+  );
+}
+function StandardWorkspacePage({
   module,
   entityId,
   context,
