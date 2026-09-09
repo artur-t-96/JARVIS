@@ -1002,9 +1002,13 @@ export class InitiativeStore {
           );
     if (
       entity.module === "licenses" &&
+      data.kind !== "license_terms" &&
       validDate(data.expiresOn) &&
       !["archived", "inactive", "cancelled"].includes(entity.status) &&
-      dayDistance(today, data.expiresOn) <= profile.licenseReminderDays
+      dayDistance(today, data.expiresOn) <=
+        (typeof data.renewalLeadDays === "number"
+          ? data.renewalLeadDays
+          : profile.licenseReminderDays)
     ) {
       const expired = data.expiresOn < today;
       add(
@@ -1018,7 +1022,12 @@ export class InitiativeStore {
           dueDate: data.expiresOn,
           ownerId: null,
         },
-        { expiresOn: data.expiresOn, expired },
+        {
+          expiresOn: data.expiresOn,
+          expired,
+          ownerPrincipalId: data.ownerPrincipalId ?? null,
+          activeTermsId: data.activeTermsId ?? null,
+        },
       );
     }
     if (

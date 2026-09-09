@@ -1,4 +1,11 @@
 import {
+  LicenseContracts,
+  licenseAuthority,
+  migrateLicenseContracts,
+  type LicenseServices,
+} from "./license-contracts.js";
+import { licenseContractActionNames } from "./license-models.js";
+import {
   TaskAccess,
   accessTaskActions,
   type AccessTaskAction,
@@ -244,6 +251,7 @@ export class WorkspaceStore {
   private readonly fileStore: DocumentFiles;
   private readonly documentSources: DocumentSources;
   private readonly deliveryStore: PurchaseDeliveries;
+  private readonly licenseStore: LicenseContracts;
   private laboratory?: LocalLaboratory;
   constructor(
     dbPath: string,
@@ -436,6 +444,11 @@ export class WorkspaceStore {
           name: "Attested delivery lines and equipment provenance",
           up: migratePurchaseDeliveries,
         },
+        {
+          version: 15,
+          name: "License terms and confirmed contract documents",
+          up: migrateLicenseContracts,
+        },
       ],
     });
     this.fileStore = new DocumentFiles(
@@ -445,6 +458,7 @@ export class WorkspaceStore {
     this.documentSources = new DocumentSources(this.db, this.fileStore);
     this.registerStore = new AssetRegister(this.db);
     this.deliveryStore = new PurchaseDeliveries(this.db);
+    this.licenseStore = new LicenseContracts(this.db);
     this.custodyStore = new AssetCustody(this.db);
     this.accessStore = new AccessRegister(this.db);
     this.readinessStore = new CaseReadinessStore(
@@ -1230,7 +1244,7 @@ export class WorkspaceStore {
       this.syncPerson({ ctx: { tenantId: tenant } }, entity);
     if (entity.module === "assets")
       entity.data.allocations = this.allocations(tenant, entity.id);
-    if (entity.module === "licenses")
+    if (entity.module === "licenses" && entity.data.kind !== "license_terms")
       entity.data.assignments = this.licenseAssignments(tenant, entity.id);
     return entity;
   }
@@ -1348,10 +1362,7 @@ export class WorkspaceStore {
         this.registerStore.verify(tenant, entity)
       );
     if (entity.module === "licenses")
-      return (
-        canonical(entity.data.assignments) ===
-        canonical(this.licenseAssignments(tenant, entity.id))
-      );
+      return this.licenseStore.consistent(tenant, entity);
     return true;
   }
   summary(principal: Principal) {
@@ -1400,6 +1411,8 @@ export class WorkspaceStore {
     if (depth > 25)
       fail("REFERENCE_DEPTH", "Zbyt głębokie powiązania źródłowe.");
     const scopes: string[] = [];
+    if (module === "licenses" && data.kind === "license_terms")
+      scopes.push("purchases");
     if (module === "purchases" && tenant) {
       if (typeof data.requestId === "string") {
         const request = this.read(tenant, "purchases", data.requestId);
@@ -1475,6 +1488,8 @@ export class WorkspaceStore {
         ? ((input.data ?? {}) as JsonObject)
         : this.read(tenant, module, String(input.id)).data;
     scopes.push(...this.entityScopes(module, data, tenant));
+    if (module === "licenses" && licenseContractActionNames.includes(action))
+      scopes.push("purchases");
     if (module === "purchases" && action === "registerDeliveredAssets")
       scopes.push("assets");
     if (module === "people" && action === "cancelStart") {
@@ -1832,6 +1847,54 @@ export class WorkspaceStore {
     this.get(principal, "purchases", id);
     // The evidence contains purchase facts and asset identifiers, never an asset's person/custody record.
     return this.deliveryStore.projection(principal.tenantId, id);
+  }
+  private licenseServices(cmd: Command): LicenseServices {
+    return {
+      ctx: cmd.ctx,
+      now: cmd.now,
+      day: this.companyDate(cmd),
+      principal: (id) => this.livePrincipal(cmd.ctx.tenantId, id),
+      save: (e) => this.save(cmd, e),
+      insert: (title, data, status) =>
+        this.saveNew(cmd, this.insert(cmd, "licenses", title, data, status)),
+    };
+  }
+  licenseTermsHistory(
+    principal: Principal,
+    id: string,
+    page: { limit: number; offset: number },
+  ) {
+    this.get(principal, "licenses", id);
+    this.scope(principal, "purchases");
+    return this.licenseStore.history(
+      principal.tenantId,
+      id,
+      page.limit,
+      page.offset,
+    );
+  }
+  licenseContracts(principal: Principal, id: string) {
+    this.get(principal, "licenses", id);
+    this.scope(principal, "purchases");
+    const ctx: ToolContext = {
+      tenantId: principal.tenantId,
+      actorId: principal.id,
+      operationKey: "read-only",
+      runId: "read-only",
+      stepId: "read-only",
+      signal: new AbortController().signal,
+    };
+    return this.licenseStore.view(
+      this.licenseServices({
+        ctx,
+        actor: principal.id,
+        now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+        toolId: "read-only",
+        changes: [],
+        profile: this.currentProfile(principal.tenantId),
+      }),
+      id,
+    );
   }
   private create(
     cmd: Command,
@@ -3814,6 +3877,26 @@ export class WorkspaceStore {
       }
     }
     if (e.module === "licenses") {
+      if (licenseContractActionNames.includes(action))
+        return this.licenseStore.change(
+          this.licenseServices(cmd),
+          e,
+          action,
+          asJson(input),
+        );
+      if (e.data.kind === "license_terms")
+        fail(
+          "WRONG_RECORD_KIND",
+          "Wybierz pulę miejsc, nie dokument warunków.",
+        );
+      if (
+        ["renew", "resize"].includes(action) &&
+        e.data.contractWorkflowVersion
+      )
+        fail(
+          "LICENSE_TERMS_REQUIRED",
+          "Zmiana limitu lub terminu wymaga nowej propozycji warunków i decyzji kosztowej.",
+        );
       this.state(e, "active");
       const count = () =>
         Number(
@@ -4532,6 +4615,46 @@ export class WorkspaceStore {
               this.scope(principal, area);
           }
         };
+        const requireLicenseAuthority = (
+          ctx: ToolContext,
+          input: JsonObject,
+        ) => {
+          if (
+            module !== "licenses" ||
+            !licenseContractActionNames.includes(action)
+          )
+            return;
+          licenseAuthority(
+            this.licenseServices({
+              ctx,
+              actor: ctx.actorId ?? "",
+              now: new Date(this.options.clock?.() ?? Date.now()).toISOString(),
+              toolId,
+              changes: [],
+              profile: this.currentProfile(ctx.tenantId),
+            }),
+          );
+          for (const id of [ctx.actorId, ctx.approvedBy]) {
+            const p = this.livePrincipal(ctx.tenantId, id)!;
+            for (const area of this.inputScopes(
+              module,
+              action,
+              input,
+              ctx.tenantId,
+            ))
+              this.scope(p, area);
+          }
+        };
+        const requireLicenseReceipt = (
+          ctx: ToolContext,
+          row: Row | undefined,
+        ) => {
+          if (module === "licenses" && row)
+            this.licenseStore.requireCommitted(
+              ctx.tenantId,
+              JSON.parse(String(row.changes_json)),
+            );
+        };
         const requirePurchaseReceipt = (
           ctx: ToolContext,
           row: Row | undefined,
@@ -4677,31 +4800,33 @@ export class WorkspaceStore {
           version:
             module === "purchases"
               ? "6"
-              : cancelStart
-                ? "1"
-                : lifecycle
-                  ? "5"
-                  : module === "documents"
-                    ? "10"
-                    : taskAccess
-                      ? "1"
-                      : accessMutation ||
-                          (module === "it" &&
-                            [
-                              "reviseAccessBundle",
-                              "reviseApplication",
-                              "retireAccessDefinition",
-                            ].includes(action))
-                        ? "8"
-                        : module === "assets"
-                          ? ["create", "replaceReservation"].includes(action)
-                            ? "7"
-                            : "6"
-                          : module === "cases" && action === "bindEvidence"
-                            ? "9"
-                            : module === "cases" && action === "create"
-                              ? "6"
-                              : "4",
+              : module === "licenses"
+                ? "5"
+                : cancelStart
+                  ? "1"
+                  : lifecycle
+                    ? "5"
+                    : module === "documents"
+                      ? "10"
+                      : taskAccess
+                        ? "1"
+                        : accessMutation ||
+                            (module === "it" &&
+                              [
+                                "reviseAccessBundle",
+                                "reviseApplication",
+                                "retireAccessDefinition",
+                              ].includes(action))
+                          ? "8"
+                          : module === "assets"
+                            ? ["create", "replaceReservation"].includes(action)
+                              ? "7"
+                              : "6"
+                            : module === "cases" && action === "bindEvidence"
+                              ? "9"
+                              : module === "cases" && action === "create"
+                                ? "6"
+                                : "4",
           ...(taskAccess
             ? {
                 canAccess: (
@@ -4859,11 +4984,13 @@ export class WorkspaceStore {
             if (cancelStart) this.cancelStartAuthority(ctx, input);
             requireDocumentAuthority(ctx, input);
             requirePurchaseAuthority(ctx, asJson(parsed.data));
+            requireLicenseAuthority(ctx, asJson(parsed.data));
             const p = input as CommandInput;
             this.db.exec("BEGIN IMMEDIATE");
             try {
               const existing = this.ledger(ctx, toolId, input);
               requirePurchaseReceipt(ctx, existing);
+              requireLicenseReceipt(ctx, existing);
               requireCommittedDocument(ctx, existing);
               // A committed asset receipt is reconciled from its pinned event;
               // elapsed expiry or a later profile cannot turn it into another effect.
@@ -4914,6 +5041,14 @@ export class WorkspaceStore {
                 e = this.read(ctx.tenantId, module, String(p.id));
                 if (module === "purchases")
                   e = this.purchasingRead(ctx.tenantId, String(p.id));
+                if (module === "licenses") {
+                  e = this.licenseStore.read(ctx.tenantId, String(p.id));
+                  if (!this.licenseStore.consistent(ctx.tenantId, e))
+                    fail(
+                      "LICENSE_STATE_INCONSISTENT",
+                      "Niespójna historia licencji.",
+                    );
+                }
                 if (e.version !== p.expectedVersion)
                   fail(
                     "VERSION_CONFLICT",
@@ -4991,6 +5126,11 @@ export class WorkspaceStore {
                     fail(
                       "REVISION_REQUIRED",
                       "Zmień zakres przez właściwą rewizję lub operację domenową.",
+                    );
+                  if (module === "licenses" && e.data.kind === "license_terms")
+                    fail(
+                      "REVISION_REQUIRED",
+                      "Warunki zmienia właściwa rewizja.",
                     );
                   if (p.title !== undefined) e.title = p.title;
                   if (p.data) e.data = { ...e.data, ...p.data };
@@ -5215,7 +5355,9 @@ export class WorkspaceStore {
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             requirePurchaseAuthority(ctx, asJson(parsed.data));
+            requireLicenseAuthority(ctx, asJson(parsed.data));
             requirePurchaseReceipt(ctx, row);
+            requireLicenseReceipt(ctx, row);
             if (cancelStart) {
               this.cancelStartAuthority(ctx, asJson(parsed.data));
               if (row && !this.cancellationCommitted(ctx, asJson(parsed.data)))
@@ -5252,7 +5394,9 @@ export class WorkspaceStore {
               fail("INVALID_DOMAIN_INPUT", "Niepoprawne pola polecenia.", 400);
             const row = this.ledger(ctx, toolId, asJson(parsed.data));
             requirePurchaseAuthority(ctx, asJson(parsed.data));
+            requireLicenseAuthority(ctx, asJson(parsed.data));
             requirePurchaseReceipt(ctx, row);
+            requireLicenseReceipt(ctx, row);
             if (cancelStart)
               this.cancelStartAuthority(ctx, asJson(parsed.data));
             requireDocumentAuthority(ctx, asJson(parsed.data));

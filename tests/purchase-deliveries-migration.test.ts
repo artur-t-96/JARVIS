@@ -99,7 +99,7 @@ test("v14 migrates historical receipt counts without invented attestations and r
     assert.equal(
       db.prepare("SELECT max(version) n FROM schema_versions_operations").get()!
         .n,
-      14,
+      15,
     );
     assert.deepEqual(
       [

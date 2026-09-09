@@ -33,7 +33,8 @@ jobs:
       - run: npm ci
       - run: npm run format:check
       - run: npm run typecheck
-      - run: npm test
+      # Keep native TLS/SQLite and SIGKILL children within the hosted runner's CPU budget.
+      - run: node --import tsx --test --test-concurrency=2 tests/*.test.ts
       - run: npm run build
       - name: Standalone recovery demonstration
         run: npm run demo
