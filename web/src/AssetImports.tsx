@@ -510,7 +510,7 @@ function ImportForm({ onClose }: { onClose: () => void }) {
             }
             onClick={() => void prepare()}
           >
-            Przygotuj import {selected.length} pozycji
+            Przygotuj import ({selected.length})
           </button>
         </div>
       </form>
@@ -773,7 +773,7 @@ export function AssetImportOperation({
       </p>
       <Notice tone={p.current ? "info" : "error"}>
         {p.current
-          ? `Do zatwierdzenia: ${p.selectedRows.length} urządzeń. Pominięte: ${p.preview.rows.length - p.selectedRows.length}.`
+          ? `Wybrane urządzenia: ${p.selectedRows.length}. Pominięte pozycje: ${p.preview.rows.length - p.selectedRows.length}.`
           : "Zakres jest nieaktualny lub źródło wygasło. Przygotuj nowy podgląd i plan."}
       </Notice>
       <p>{p.note}</p>

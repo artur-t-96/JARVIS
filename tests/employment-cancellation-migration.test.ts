@@ -115,7 +115,7 @@ test("v11 preserves historical employment and access foreign keys and permits a 
             },
           })),
         }),
-      /v15 is newer than supported v10/,
+      /v16 is newer than supported v10/,
     );
   } finally {
     db.close();

@@ -87,11 +87,11 @@ export function registerWorkspaceApi(
           request,
           {
             title: `Import sprzętu: ${input.sourceName}`.slice(0, 160),
-            summary: `Zapisz ${input.selectedRows.length} wybranych pozycji ze źródła „${input.filename}”, stan na ${input.observedOn}. Sprawdź zakres i pominięcia. Import tworzy lokalną ewidencję; wydanie sprzętu wymaga osobnego protokołu.`,
+            summary: `Liczba wybranych pozycji: ${input.selectedRows.length}. Źródło „${input.filename}”, stan na ${input.observedOn}. Sprawdź zakres i pominięcia. Import tworzy lokalną ewidencję; wydanie sprzętu wymaga osobnego protokołu.`,
             steps: [
               {
                 id: "import",
-                title: `Dodaj ${input.selectedRows.length} urządzeń z zatwierdzonego pliku`,
+                title: `Import urządzeń z zatwierdzonego pliku (${input.selectedRows.length})`,
                 toolId: "ops.assets.importBatch",
                 input,
               },

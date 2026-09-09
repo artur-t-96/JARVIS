@@ -224,7 +224,9 @@ export function RunPage({ id, context }: { id: string; context: Context }) {
           <section className="card run-summary">
             <span className="eyebrow">CEL I PLAN</span>
             <p className="request-text">
-              {run.steps.length === 1 && fileOperation(run.steps[0]!.toolId)
+              {run.steps.length === 1 &&
+              (fileOperation(run.steps[0]!.toolId) ||
+                run.steps[0]!.toolId === "ops.assets.importBatch")
                 ? run.title
                 : run.request}
             </p>
