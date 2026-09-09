@@ -283,7 +283,7 @@ function StocktakeForm({
                       o.assetId === a.id && o.stocktakeId !== report?.record.id,
                   );
                   return (
-                    <label className="check-field" key={a.id}>
+                    <label className="checkbox-field" key={a.id}>
                       <input
                         type="checkbox"
                         checked={!!selected[a.id]}
@@ -398,7 +398,7 @@ function StocktakeForm({
             "resolveDiscrepancy",
             "acceptStocktake",
           ].includes(action) && (
-            <label className="check-field">
+            <label className="checkbox-field">
               <input
                 required
                 type="checkbox"
@@ -624,7 +624,7 @@ function StocktakeHistory({ id, onClose }: { id: string; onClose(): void }) {
           ))
         )}
         <p>
-          Wersje {offset + 1}–
+          Pozycje historii {offset + 1}–
           {Math.min(offset + 5, history.data?.history.total ?? 0)} z{" "}
           {history.data?.history.total ?? "—"}
         </p>
