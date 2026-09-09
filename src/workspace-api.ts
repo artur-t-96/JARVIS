@@ -84,6 +84,17 @@ export function registerWorkspaceApi(
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { contracts: workspace.licenseContracts(principal(req), id) };
   });
+  app.get("/api/licenses/:id/terms-history", async (req) => {
+    const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
+    const page = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(100).default(20),
+        offset: z.coerce.number().int().min(0).max(1_000_000).default(0),
+      })
+      .strict()
+      .parse(req.query);
+    return { history: workspace.licenseTermsHistory(principal(req), id, page) };
+  });
   app.get("/api/purchases/:id/workflow", async (req) => {
     const { id } = z.object({ id: z.string().uuid() }).parse(req.params);
     return { purchasing: workspace.purchasing(principal(req), id) };

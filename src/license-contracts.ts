@@ -477,6 +477,72 @@ export class LicenseContracts {
       ).length,
     };
   }
+  history(tenant: string, id: string, limit = 20, offset = 0) {
+    const current = this.read(tenant, id);
+    if (current.data.kind !== termKind)
+      fail("Wybierz dokument warunków licencji.");
+    const total = Number(
+      this.db
+        .prepare(
+          "SELECT count(*) n FROM ops_entity_versions WHERE tenant_id=? AND entity_id=?",
+        )
+        .get(tenant, id)!.n,
+    );
+    const rows = this.db
+      .prepare(
+        "SELECT version,snapshot_json,snapshot_hash FROM ops_entity_versions WHERE tenant_id=? AND entity_id=? ORDER BY version DESC LIMIT ? OFFSET ?",
+      )
+      .all(tenant, id, limit, offset);
+    const items = rows.map((row) => {
+      const record = JSON.parse(String(row.snapshot_json)) as Entity;
+      const audits = this.db
+        .prepare(
+          "SELECT * FROM ops_audit WHERE tenant_id=? AND entity_id=? AND entity_version=? LIMIT 2",
+        )
+        .all(tenant, id, row.version!);
+      const audit = audits[0];
+      const ledger =
+        audit &&
+        this.db
+          .prepare(
+            "SELECT changes_json FROM ops_commands WHERE tenant_id=? AND operation_key=?",
+          )
+          .get(tenant, audit.operation_key!);
+      if (
+        record.id !== id ||
+        record.version !== row.version ||
+        record.module !== "licenses" ||
+        record.data.kind !== termKind ||
+        hash(record) !== row.snapshot_hash ||
+        !this.snapshotValid(record) ||
+        audits.length !== 1 ||
+        !ledger ||
+        !(
+          JSON.parse(String(ledger.changes_json)) as {
+            id: string;
+            version: number;
+            hash: string;
+          }[]
+        ).some(
+          (c) =>
+            c.id === id &&
+            c.version === record.version &&
+            c.hash === row.snapshot_hash,
+        )
+      )
+        fail(
+          "Historia warunków nie odpowiada zatwierdzonym zapisom.",
+          "LICENSE_STATE_INCONSISTENT",
+        );
+      return {
+        record,
+        actorId: String(audit!.actor_id),
+        runId: String(audit!.run_id),
+        toolId: String(audit!.tool_id),
+      };
+    });
+    return { items, total, limit, offset };
+  }
   requireCommitted(
     tenant: string,
     changes: { id: string; version: number; hash: string }[],

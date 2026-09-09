@@ -387,6 +387,38 @@ test("owner transfer invalidates the pending cost decision and live reviewer rev
       f.confirmInput(p.id),
     );
     f.approve(run);
+    const history = f.workspace.licenseTermsHistory(f.actor(), p.id, {
+      limit: 2,
+      offset: 0,
+    });
+    assert.equal(history.total, 4);
+    assert.deepEqual(
+      history.items.map((i) => i.record.version),
+      [4, 3],
+    );
+    assert.equal(
+      (history.items[0]!.record.data.costDecision as JsonObject).actorId,
+      "it-one",
+    );
+    const previous = f.workspace.licenseTermsHistory(f.actor(), p.id, {
+      limit: 2,
+      offset: 2,
+    });
+    assert.equal(
+      (previous.items[0]!.record.data.costDecision as JsonObject).actorId,
+      "manager",
+    );
+    assert.equal(
+      (previous.items[0]!.record.data.terms as JsonObject).ownerPrincipalId,
+      "manager",
+    );
+    assert.throws(() =>
+      f.workspace.licenseTermsHistory(
+        { ...f.actor(), scopes: ["licenses"] },
+        p.id,
+        { limit: 2, offset: 0 },
+      ),
+    );
     f.actor("reviewer").scopes = ["licenses"];
     for (let i = 0; i < 4; i++) await f.engine.tick();
     assert.notEqual(f.engine.getRun(f.actor(), run.id).status, "completed");

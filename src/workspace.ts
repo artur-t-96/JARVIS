@@ -1859,6 +1859,20 @@ export class WorkspaceStore {
         this.saveNew(cmd, this.insert(cmd, "licenses", title, data, status)),
     };
   }
+  licenseTermsHistory(
+    principal: Principal,
+    id: string,
+    page: { limit: number; offset: number },
+  ) {
+    this.get(principal, "licenses", id);
+    this.scope(principal, "purchases");
+    return this.licenseStore.history(
+      principal.tenantId,
+      id,
+      page.limit,
+      page.offset,
+    );
+  }
   licenseContracts(principal: Principal, id: string) {
     this.get(principal, "licenses", id);
     this.scope(principal, "purchases");

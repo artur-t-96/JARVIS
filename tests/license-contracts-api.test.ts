@@ -33,6 +33,7 @@ test("license API isolates financial terms, owner choices and prepared commands 
       `/api/licenses/${pool.id}/contracts`,
       `/api/licenses/${proposal.id}/contracts`,
       `/api/workspace/licenses/${proposal.id}`,
+      `/api/licenses/${proposal.id}/terms-history`,
     ];
     for (const url of paths) {
       assert.equal((await app.inject({ url })).statusCode, 401);

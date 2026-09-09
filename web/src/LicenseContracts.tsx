@@ -377,7 +377,7 @@ export function LicenseTerms({ record }: { record: Entity }) {
       <p>
         <strong>{String(t.agreementReference)}</strong> ·{" "}
         {dateLabel(String(t.validFrom))} – {dateLabel(String(t.expiresOn))} ·{" "}
-        {String(t.totalSeats)} miejsc
+        liczba miejsc: {String(t.totalSeats)}
       </p>
       <p>
         Koszt całego okresu:{" "}
@@ -395,18 +395,106 @@ export function LicenseTerms({ record }: { record: Entity }) {
         <p>
           Decyzja: {d.decision === "approved" ? "zatwierdzona" : "odrzucona"} ·{" "}
           {String(d.actorId)} · {dateLabel(String(d.at), true)} ·{" "}
-          {String(d.note)}. Zgodę na zapis wydał: {String(d.approvedBy)}.
+          {String(d.note)} · Zgodę na zapis wydał: {String(d.approvedBy)}.
         </p>
       )}
       {!!c.actorId && (
         <p>
           Dokument: {String(c.documentReference)}, pozycja {String(c.line)} ·{" "}
-          {dateLabel(String(c.confirmedOn))} · {String(c.evidenceNote)}.
+          {dateLabel(String(c.confirmedOn))} · {String(c.evidenceNote)} ·
           Poświadczył: {String(c.actorId)}; zgodę na zapis wydał:{" "}
           {String(c.approvedBy)}.
         </p>
       )}
     </div>
+  );
+}
+export function LicenseHistory({
+  id,
+  onClose,
+}: {
+  id: string;
+  onClose(): void;
+}) {
+  const [offset, setOffset] = useState(0);
+  const resource = useResource<{
+    history: {
+      items: {
+        record: Entity;
+        actorId: string;
+        runId: string;
+        toolId: string;
+      }[];
+      total: number;
+      limit: number;
+      offset: number;
+    };
+  }>(`/api/licenses/${id}/terms-history?limit=10&offset=${offset}`);
+  const history = resource.data?.history;
+  return (
+    <Sheet title="Historia zmian warunków" onClose={onClose}>
+      <div className="sheet-body">
+        {resource.loading ? (
+          <Loading />
+        ) : resource.error ? (
+          <Notice tone="error">{resource.error}</Notice>
+        ) : (
+          history && (
+            <>
+              <p>
+                Każda wersja zachowuje ówczesny koszt, właściciela i decyzję.
+              </p>
+              {history.items.map(({ record, actorId, runId, toolId }) => (
+                <article key={record.version} className="delivery-receipt">
+                  <h3>
+                    Wersja {record.version} ·{" "}
+                    {labels[toolId.split(".")[2] as Action] ?? "Zapis warunków"}
+                  </h3>
+                  <Badge status={record.status} />
+                  <p>
+                    Zarejestrował: {actorId} ·{" "}
+                    {dateLabel(record.updatedAt, true)}
+                  </p>
+                  <LicenseTerms record={record} />
+                  {!!record.data.revisionReason && (
+                    <p>Zmiana: {String(record.data.revisionReason)}</p>
+                  )}
+                  {!!record.data.cancellationReason && (
+                    <p>Anulowanie: {String(record.data.cancellationReason)}</p>
+                  )}
+                  <button
+                    className="text-button"
+                    onClick={() => navigate(`runs/${runId}`)}
+                  >
+                    Otwórz wykonanie tej wersji
+                  </button>
+                </article>
+              ))}
+              <p>
+                {offset + 1}–{Math.min(offset + history.limit, history.total)} z{" "}
+                {history.total} wersji
+              </p>
+              <div className="form-actions">
+                <button
+                  className="button secondary"
+                  disabled={offset === 0}
+                  onClick={() => setOffset(Math.max(0, offset - 10))}
+                >
+                  Nowsze wersje
+                </button>
+                <button
+                  className="button secondary"
+                  disabled={offset + history.limit >= history.total}
+                  onClick={() => setOffset(offset + 10)}
+                >
+                  Starsze wersje
+                </button>
+              </div>
+            </>
+          )
+        )}
+      </div>
+    </Sheet>
   );
 }
 export function LicenseContracts({
@@ -428,6 +516,7 @@ export function LicenseContracts({
   const [form, setForm] = useState<{ action: Action; term?: Entity } | null>(
     null,
   );
+  const [historyId, setHistoryId] = useState<string | null>(null);
   if (!canRead)
     return (
       <Notice>
@@ -444,6 +533,9 @@ export function LicenseContracts({
     context.tools.some((t) => t.id === `ops.licenses.${a}`);
   return (
     <section className="card" aria-label="Umowy, koszty i odnowienia licencji">
+      {historyId && (
+        <LicenseHistory id={historyId} onClose={() => setHistoryId(null)} />
+      )}
       {form && (
         <LicenseForm
           {...form}
@@ -511,6 +603,12 @@ export function LicenseContracts({
           </h3>
           <Badge status={record.status} />
           <LicenseTerms record={record} />
+          <button
+            className="text-button"
+            onClick={() => setHistoryId(record.id)}
+          >
+            Historia zmian warunków
+          </button>
           {problem && <Notice>{problem}</Notice>}
           {record.id === view.pool.data.pendingTermsId && (
             <div className="form-actions">
